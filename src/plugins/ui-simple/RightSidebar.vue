@@ -24,7 +24,7 @@ const tabMapping = {
         class="transition-colors"
         :class="playerStore.activeRightTab === tabMapping[tab] ? 'text-black' : 'text-[#a0a0a0] hover:text-[#555]'"
       >
-        {{ tab }}
+        {{ tabMapping[tab] }}
       </button>
     </div>
 
@@ -36,7 +36,7 @@ const tabMapping = {
         <div class="absolute inset-0 opacity-20" style="background-image: radial-gradient(circle, #000 1px, transparent 1px); background-size: 8px 8px;"></div>
       </div>
       
-      <p class="text-[9px] font-bold tracking-[0.2em] text-[#a0a0a0] mb-2 uppercase">Now Playing</p>
+      <p class="text-[9px] font-bold tracking-[0.2em] text-[#a0a0a0] mb-2 uppercase">正在播放</p>
       <h2 class="font-serif italic text-4xl text-black mb-2 truncate">{{ playerStore.currentTrack.title }}</h2>
       <p class="text-[11px] font-semibold tracking-widest text-[#333] mb-1 uppercase truncate">{{ playerStore.currentTrack.artist }}</p>
       <p class="text-[11px] text-[#888] italic truncate">{{ playerStore.currentTrack.album }}</p>
@@ -84,16 +84,16 @@ const tabMapping = {
       <template v-else-if="playerStore.activeRightTab === '文件信息'">
         <div class="space-y-6 text-[11px] tracking-wider uppercase text-[#555]">
           <div>
-            <span class="text-[#a0a0a0] block mb-1 text-[9px] font-bold">Format</span>
-            <span class="text-black">{{ playerStore.currentTrack.format }} (Lossless)</span>
+            <span class="text-[#a0a0a0] block mb-1 text-[9px] font-bold">格式</span>
+            <span class="text-black">{{ playerStore.currentTrack.format }} (无损)</span>
           </div>
           <div>
-            <span class="text-[#a0a0a0] block mb-1 text-[9px] font-bold">Sample Rate</span>
+            <span class="text-[#a0a0a0] block mb-1 text-[9px] font-bold">采样率</span>
             <span class="text-black">44,100 Hz / 16-bit</span>
           </div>
           <div>
-            <span class="text-[#a0a0a0] block mb-1 text-[9px] font-bold">Channels</span>
-            <span class="text-black">Stereo</span>
+            <span class="text-[#a0a0a0] block mb-1 text-[9px] font-bold">声道</span>
+            <span class="text-black">立体声</span>
           </div>
         </div>
       </template>

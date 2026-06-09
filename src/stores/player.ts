@@ -18,6 +18,31 @@ export interface Playlist {
   count: number;
 }
 
+export interface Album {
+  id: number;
+  title: string;
+  artist: string;
+  year: number;
+  coverColor: string;
+}
+
+export interface Artist {
+  id: number;
+  name: string;
+  trackCount: number;
+  avatarColor: string;
+}
+
+export interface MusicSource {
+  id: number;
+  kind: 'local' | 'webdav';
+  name: string;
+  path: string;
+  isEnabled: boolean;
+  lastScanned: string;
+  username?: string;
+}
+
 export const usePlayerStore = defineStore("player", () => {
   // 状态变量 (State)
   const isDarkMode = ref(false);
@@ -30,6 +55,9 @@ export const usePlayerStore = defineStore("player", () => {
   const activeRightTab = ref<"歌词" | "播放队列" | "文件信息">("歌词");
   const isRightPanelOpen = ref(true);
   const currentTrackIndex = ref(2);
+
+  const activeAlbumId = ref<number | null>(null);
+  const activeArtistId = ref<number | null>(null);
 
   // 歌词数据
   const lyrics = ref([
@@ -53,6 +81,37 @@ export const usePlayerStore = defineStore("player", () => {
     { name: "工作专注", count: 24 },
     { name: "放松时刻", count: 36 },
     { name: "90s 精选", count: 57 },
+  ]);
+
+  // 来源数据
+  const sources = ref<MusicSource[]>([
+    { id: 1, kind: 'local', name: "本地无损库", path: "C:\\Users\\hao\\Music\\Lossless", isEnabled: true, lastScanned: "2 hours ago" },
+    { id: 2, kind: 'webdav', name: "群晖 NAS", path: "https://nas.local:5006/music", isEnabled: true, lastScanned: "1 day ago", username: "admin" },
+  ]);
+
+  // 专辑数据
+  const albums = ref<Album[]>([
+    { id: 1, title: "Sleep", artist: "Max Richter", year: 2015, coverColor: "from-blue-600 to-indigo-900" },
+    { id: 2, title: "The Blue Notebooks", artist: "Max Richter", year: 2004, coverColor: "from-purple-600 to-slate-900" },
+    { id: 3, title: "Divenire", artist: "Ludovic Einaudi", year: 2006, coverColor: "from-amber-500 via-orange-600 to-stone-900" },
+    { id: 4, title: "Una Mattina", artist: "Ludovic Einaudi", year: 2004, coverColor: "from-cyan-600 to-emerald-950" },
+    { id: 5, title: "Ma Fleur", artist: "The Cinematic Orchestra", year: 2007, coverColor: "from-teal-500 to-neutral-900" },
+    { id: 6, title: "The Earth Is Not a Cold Dead Place", artist: "Explosions in the Sky", year: 2003, coverColor: "from-red-500 to-zinc-900" },
+    { id: 7, title: "Bon Iver", artist: "Bon Iver", year: 2011, coverColor: "from-lime-600 to-stone-950" },
+    { id: 8, title: "Takk...", artist: "Sigur Rós", year: 2005, coverColor: "from-rose-600 to-zinc-900" },
+  ]);
+
+  // 艺人数据
+  const artists = ref<Artist[]>([
+    { id: 1, name: "Max Richter", trackCount: 24, avatarColor: "from-blue-600 to-indigo-900" },
+    { id: 2, name: "Ludovic Einaudi", trackCount: 18, avatarColor: "from-amber-500 to-stone-900" },
+    { id: 3, name: "The Cinematic Orchestra", trackCount: 12, avatarColor: "from-teal-500 to-neutral-900" },
+    { id: 4, name: "Explosions in the Sky", trackCount: 9, avatarColor: "from-red-500 to-zinc-900" },
+    { id: 5, name: "Alexandre Desplat", trackCount: 31, avatarColor: "from-sky-700 to-zinc-950" },
+    { id: 6, name: "Bon Iver", trackCount: 14, avatarColor: "from-lime-600 to-stone-950" },
+    { id: 7, name: "Sigur Rós", trackCount: 16, avatarColor: "from-rose-600 to-zinc-900" },
+    { id: 8, name: "Hans Zimmer", trackCount: 42, avatarColor: "from-blue-950 to-zinc-955" },
+    { id: 9, name: "Yann Tiersen", trackCount: 20, avatarColor: "from-yellow-600 to-stone-900" },
   ]);
 
   // 歌曲数据列表
@@ -196,6 +255,31 @@ export const usePlayerStore = defineStore("player", () => {
     return tracks.value[currentTrackIndex.value];
   });
 
+  const currentAlbumDetails = computed(() => {
+    if (!activeAlbumId.value) return null;
+    const album = albums.value.find(a => a.id === activeAlbumId.value);
+    if (!album) return null;
+    const albumTracks = tracks.value.filter(t => t.album === album.title);
+    return { ...album, tracks: albumTracks };
+  });
+
+  const currentArtistDetails = computed(() => {
+    if (!activeArtistId.value) return null;
+    const artist = artists.value.find(a => a.id === activeArtistId.value);
+    if (!artist) return null;
+    const artistTracks = tracks.value.filter(t => t.artist === artist.name);
+    const artistAlbums = albums.value.filter(a => a.artist === artist.name);
+    return { ...artist, tracks: artistTracks, albums: artistAlbums };
+  });
+
+  const localSources = computed(() => {
+    return sources.value.filter(s => s.kind === 'local');
+  });
+
+  const webdavSources = computed(() => {
+    return sources.value.filter(s => s.kind === 'webdav');
+  });
+
   // 方法 (Actions)
   function formatTime(seconds: number): string {
     const min = Math.floor(seconds / 60);
@@ -227,6 +311,38 @@ export const usePlayerStore = defineStore("player", () => {
     currentTime.value = 0;
   }
 
+  // 来源管理 actions
+  function addSource(kind: 'local' | 'webdav', name: string, path: string, username?: string) {
+    const newId = sources.value.length > 0 ? Math.max(...sources.value.map(s => s.id)) + 1 : 1;
+    sources.value.push({
+      id: newId,
+      kind,
+      name,
+      path,
+      isEnabled: true,
+      lastScanned: "Just now",
+      username,
+    });
+  }
+
+  function removeSource(id: number) {
+    sources.value = sources.value.filter(s => s.id !== id);
+  }
+
+  function toggleSource(id: number) {
+    const source = sources.value.find(s => s.id === id);
+    if (source) {
+      source.isEnabled = !source.isEnabled;
+    }
+  }
+
+  function scanSource(id: number) {
+    const source = sources.value.find(s => s.id === id);
+    if (source) {
+      source.lastScanned = "Just now";
+    }
+  }
+
   return {
     isDarkMode,
     isPlaying,
@@ -237,14 +353,27 @@ export const usePlayerStore = defineStore("player", () => {
     activeRightTab,
     isRightPanelOpen,
     currentTrackIndex,
+    activeAlbumId,
+    activeArtistId,
     lyrics,
     playlists,
+    sources,
+    localSources,
+    webdavSources,
+    albums,
+    artists,
     tracks,
     currentTrack,
+    currentAlbumDetails,
+    currentArtistDetails,
     formatTime,
     togglePlay,
     playTrack,
     nextTrack,
     prevTrack,
+    addSource,
+    removeSource,
+    toggleSource,
+    scanSource,
   };
 });

@@ -64,7 +64,7 @@ const toggleTheme = () => {
 
       <!-- 收藏 -->
       <div>
-        <h3 class="text-[10px] font-bold tracking-[0.2em] text-[#a0a0a0] mb-5 uppercase">Collection</h3>
+        <h3 class="text-[10px] font-bold tracking-[0.2em] text-[#a0a0a0] mb-5 uppercase">收藏</h3>
         <ul class="space-y-5">
           <li>
             <a href="#" @click.prevent="playerStore.activeLibraryTab = '收藏歌曲'" class="flex items-center gap-4 text-[13px] transition-colors" :class="playerStore.activeLibraryTab === '收藏歌曲' ? 'text-black font-semibold' : 'text-[#777777] font-medium hover:text-black'">
@@ -89,7 +89,7 @@ const toggleTheme = () => {
 
       <!-- 歌单 -->
       <div>
-        <h3 class="text-[10px] font-bold tracking-[0.2em] text-[#a0a0a0] mb-5 uppercase">Playlists</h3>
+        <h3 class="text-[10px] font-bold tracking-[0.2em] text-[#a0a0a0] mb-5 uppercase">歌单</h3>
         <ul class="space-y-5">
           <li v-for="playlist in playerStore.playlists" :key="playlist.name">
             <a href="#" @click.prevent="playerStore.activeLibraryTab = playlist.name" class="flex items-center gap-4 text-[13px] transition-colors group" :class="playerStore.activeLibraryTab === playlist.name ? 'text-black font-semibold' : 'text-[#777777] font-medium hover:text-black'">
@@ -109,7 +109,7 @@ const toggleTheme = () => {
 
       <!-- 来源 -->
       <div>
-        <h3 class="text-[10px] font-bold tracking-[0.2em] text-[#a0a0a0] mb-5 uppercase">Sources</h3>
+        <h3 class="text-[10px] font-bold tracking-[0.2em] text-[#a0a0a0] mb-5 uppercase">来源</h3>
         <ul class="space-y-4">
           <li>
             <a href="#" @click.prevent="playerStore.activeSourceTab = '本地音乐库'" class="flex items-center justify-between text-[13px] transition-colors pr-2" :class="playerStore.activeSourceTab === '本地音乐库' ? 'text-black font-semibold' : 'text-[#777777] font-medium hover:text-black'">
@@ -122,8 +122,12 @@ const toggleTheme = () => {
     </div>
 
     <!-- Bottom Actions -->
-    <div class="mt-8 flex items-center gap-6 text-[#aaaaaa]">
-      <button class="hover:text-black transition-colors">
+    <div class="mt-8 flex items-center gap-6 text-[#aaaaaa] relative z-10">
+      <button 
+        @click="playerStore.activeLibraryTab = '设置'" 
+        class="transition-colors"
+        :class="playerStore.activeLibraryTab === '设置' ? 'text-black' : 'hover:text-black'"
+      >
         <Settings class="w-[18px] h-[18px] stroke-[1.5]" />
       </button>
       <button @click="toggleTheme" class="hover:text-black transition-colors" title="切换 UI 主题">

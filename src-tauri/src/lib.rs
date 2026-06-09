@@ -18,12 +18,10 @@ struct InitStatus {
 fn get_initialization_status() -> InitStatus {
     // 验证 SQLite 本地数据库能否正常工作
     let db_ok = rusqlite::Connection::open_in_memory().is_ok();
-    
+
     // 验证音频设备和播放模块 (rodio) 是否就绪
     let (audio_ok, device_name) = match rodio::OutputStream::try_default() {
-        Ok((_stream, _handle)) => {
-            (true, Some("系统默认音频输出设备".to_string()))
-        }
+        Ok((_stream, _handle)) => (true, Some("系统默认音频输出设备".to_string())),
         Err(_) => (false, None),
     };
 
@@ -39,9 +37,9 @@ fn get_initialization_status() -> InitStatus {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![greet, get_initialization_status])
         .run(tauri::generate_context!())
         .expect("运行 tauri 应用程序时出错");
 }
-

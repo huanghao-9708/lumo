@@ -26,5 +26,6 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 lofty = "0.21"
 symphonia = { version = "0.5.4", features = ["all"] }
 rodio = "0.19"
+tauri-plugin-dialog = "2"
 
 
