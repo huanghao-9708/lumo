@@ -1,28 +1,16 @@
 <script setup lang="ts">
-import { Minus, Square, X } from 'lucide-vue-next';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 import { usePlayerStore } from '../../stores/player';
 
 const playerStore = usePlayerStore();
 const tabs = ['歌词', '播放队列', '文件信息'] as const;
-
-const appWindow = getCurrentWindow();
-
-const minimize = () => appWindow.minimize();
-const toggleMaximize = () => appWindow.toggleMaximize();
-const close = () => appWindow.close();
 </script>
 
 <template>
   <aside class="w-[320px] flex flex-col h-full bg-[#fafafa] border-l border-gray-100 shrink-0 relative">
     <div data-tauri-drag-region class="absolute top-0 left-0 w-full h-10 z-0"></div>
 
-    <!-- Window Controls -->
-    <div class="h-10 flex items-center justify-end px-4 gap-3 text-gray-500 relative z-10">
-      <button @click="minimize" class="hover:text-gray-900 transition-smooth"><Minus class="w-4 h-4" /></button>
-      <button @click="toggleMaximize" class="hover:text-gray-900 transition-smooth"><Square class="w-3.5 h-3.5" /></button>
-      <button @click="close" class="hover:text-red-500 transition-smooth"><X class="w-4 h-4" /></button>
-    </div>
+    <!-- Window Controls Spacer -->
+    <div class="h-10 relative z-10"></div>
 
     <!-- Tabs -->
     <div class="px-8 mt-2 flex items-center gap-6 border-b border-gray-200/60 pb-3">

@@ -15,7 +15,7 @@ const playerStore = usePlayerStore();
         <h1 class="text-2xl font-bold text-gray-800">{{ playerStore.activeLibraryTab }}</h1>
         <span class="text-sm text-gray-400">{{ playerStore.tracks.length }} 首歌曲</span>
       </div>
-      <div class="relative group z-10">
+      <div class="relative group z-10 transition-all duration-300" :class="!playerStore.isRightPanelOpen ? 'mr-56' : ''">
         <Search class="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2 group-focus-within:text-brand-orange transition-smooth" />
         <input 
           type="text" 

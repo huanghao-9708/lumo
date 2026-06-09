@@ -16,7 +16,7 @@ const playerStore = usePlayerStore();
         <h1 class="font-serif italic text-5xl tracking-wide text-black">{{ playerStore.activeLibraryTab }}</h1>
       </div>
 
-      <div class="flex items-center gap-8 mb-2">
+      <div class="flex items-center gap-8 mb-2 transition-all duration-300" :class="!playerStore.isRightPanelOpen ? 'mr-56' : ''">
         <div class="relative group">
           <Search class="w-4 h-4 text-[#888] absolute left-0 top-1/2 -translate-y-1/2" />
           <input 
