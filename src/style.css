@@ -2,16 +2,55 @@
 
 @theme {
   --font-sans: "Outfit", "Inter", "PingFang SC", "Microsoft YaHei", sans-serif;
-  --color-brand-emerald: #10b981;
-  --color-brand-cyan: #06b6d4;
-  --color-brand-purple: #8b5cf6;
+  --font-serif: "Playfair Display", "Noto Serif SC", "Source Han Serif SC", serif;
+  --color-brand-orange: #f58220;
+  --color-brand-orange-light: #f7a055;
+  --color-brand-orange-bg: #fff3e0;
 }
 
 body {
   font-family: var(--font-sans);
-  background: radial-gradient(circle at top left, #18181b, #09090b);
-  color: #f4f4f5;
+  background-color: #ffffff;
+  color: #333333;
   margin: 0;
   min-height: 100vh;
   overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Custom Scrollbar for a cleaner look */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #e5e7eb;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #d1d5db;
+}
+
+/* Base utility classes for smooth interactions */
+.transition-smooth {
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.hover-scale {
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.hover-scale:hover {
+  transform: scale(1.02);
+}
+
+[data-tauri-drag-region] {
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+button, input, a {
+  -webkit-app-region: no-drag;
 }

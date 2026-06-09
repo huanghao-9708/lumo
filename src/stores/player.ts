@@ -1,4 +1,5 @@
-import { reactive } from "vue";
+import { defineStore } from "pinia";
+import { ref, computed } from "vue";
 
 export interface Track {
   id: number;
@@ -8,7 +9,7 @@ export interface Track {
   duration: string;
   durationSec: number;
   format: string;
-  coverColor: string; // 用渐变色模拟漂亮的封面
+  coverColor: string;
   isFavorite: boolean;
 }
 
@@ -17,30 +18,25 @@ export interface Playlist {
   count: number;
 }
 
-export const store = reactive({
-  // 双主题模式切换 (默认浅色模式 Light)
-  isDarkMode: false,
-
-  // 播放器播放状态
-  isPlaying: false,
-  currentTime: 102, // 对应 01:42
-  volume: 75,
+export const usePlayerStore = defineStore("player", () => {
+  // 状态变量 (State)
+  const isDarkMode = ref(false);
+  const isPlaying = ref(false);
+  const currentTime = ref(102); // 默认 01:42
+  const volume = ref(75);
   
-  // 选项卡状态
-  activeLibraryTab: "全部歌曲",
-  activeSourceTab: "本地音乐库",
-  activeRightTab: "歌词" as "歌词" | "播放队列" | "文件信息",
-  isRightPanelOpen: true,
-  
-  // 当前播放歌曲索引 (Experience 索引为 2)
-  currentTrackIndex: 2,
+  const activeLibraryTab = ref("全部歌曲");
+  const activeSourceTab = ref("本地音乐库");
+  const activeRightTab = ref<"歌词" | "播放队列" | "文件信息">("歌词");
+  const isRightPanelOpen = ref(true);
+  const currentTrackIndex = ref(2);
 
   // 歌词数据
-  lyrics: [
+  const lyrics = ref([
     { text: "We are going on a journey", time: 0 },
     { text: "A journey to experience", time: 15 },
     { text: "We are going on a journey", time: 30 },
-    { text: "A journey to experience", time: 45, isActive: true }, // 当前句高亮
+    { text: "A journey to experience", time: 45, isActive: true }, // 当前播放的高亮行
     { text: "We are going on a journey", time: 60 },
     { text: "A journey to experience", time: 75 },
     { text: "We are going on a journey", time: 90 },
@@ -49,18 +45,18 @@ export const store = reactive({
     { text: "Let the music take you higher", time: 135 },
     { text: "Close your eyes", time: 150 },
     { text: "Let the music take you higher", time: 165 },
-  ],
+  ]);
 
   // 歌单数据
-  playlists: [
+  const playlists = ref<Playlist[]>([
     { name: "日常音乐", count: 58 },
     { name: "工作专注", count: 24 },
     { name: "放松时刻", count: 36 },
     { name: "90s 精选", count: 57 },
-  ] as Playlist[],
+  ]);
 
-  // 歌曲数据列表 (高精度匹配模板图)
-  tracks: [
+  // 歌曲数据列表
+  const tracks = ref<Track[]>([
     {
       id: 1,
       title: "Intro",
@@ -168,7 +164,7 @@ export const store = reactive({
       duration: "04:35",
       durationSec: 275,
       format: "FLAC",
-      coverColor: "from-blue-950 via-slate-800 to-zinc-950",
+      coverColor: "from-blue-950 via-slate-800 to-zinc-955",
       isFavorite: false,
     },
     {
@@ -193,42 +189,62 @@ export const store = reactive({
       coverColor: "from-emerald-700 to-zinc-950",
       isFavorite: false,
     },
-  ] as Track[],
+  ]);
 
-  // 获取当前正在播放歌曲的辅助属性
-  get currentTrack(): Track {
-    return this.tracks[this.currentTrackIndex];
-  },
+  // 计算属性 (Getters)
+  const currentTrack = computed(() => {
+    return tracks.value[currentTrackIndex.value];
+  });
 
-  // 格式化时间函数 (秒转 mm:ss)
-  formatTime(seconds: number): string {
+  // 方法 (Actions)
+  function formatTime(seconds: number): string {
     const min = Math.floor(seconds / 60);
     const sec = Math.floor(seconds % 60);
     return `${min.toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")}`;
-  },
+  }
 
-  // 播放控制
-  togglePlay() {
-    this.isPlaying = !this.isPlaying;
-  },
+  function togglePlay() {
+    isPlaying.value = !isPlaying.value;
+  }
 
-  playTrack(id: number) {
-    const idx = this.tracks.findIndex((t) => t.id === id);
+  function playTrack(id: number) {
+    const idx = tracks.value.findIndex((t) => t.id === id);
     if (idx !== -1) {
-      this.currentTrackIndex = idx;
-      this.isPlaying = true;
-      this.currentTime = 0;
+      currentTrackIndex.value = idx;
+      isPlaying.value = true;
+      currentTime.value = 0;
     }
-  },
+  }
 
-  nextTrack() {
-    this.currentTrackIndex = (this.currentTrackIndex + 1) % this.tracks.length;
-    this.currentTime = 0;
-  },
+  function nextTrack() {
+    currentTrackIndex.value = (currentTrackIndex.value + 1) % tracks.value.length;
+    currentTime.value = 0;
+  }
 
-  prevTrack() {
-    this.currentTrackIndex =
-      (this.currentTrackIndex - 1 + this.tracks.length) % this.tracks.length;
-    this.currentTime = 0;
-  },
+  function prevTrack() {
+    currentTrackIndex.value =
+      (currentTrackIndex.value - 1 + tracks.value.length) % tracks.value.length;
+    currentTime.value = 0;
+  }
+
+  return {
+    isDarkMode,
+    isPlaying,
+    currentTime,
+    volume,
+    activeLibraryTab,
+    activeSourceTab,
+    activeRightTab,
+    isRightPanelOpen,
+    currentTrackIndex,
+    lyrics,
+    playlists,
+    tracks,
+    currentTrack,
+    formatTime,
+    togglePlay,
+    playTrack,
+    nextTrack,
+    prevTrack,
+  };
 });
