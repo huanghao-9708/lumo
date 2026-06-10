@@ -1,45 +1,108 @@
-// 了解更多关于 Tauri 命令的信息，请访问 https://tauri.app/develop/calling-rust/
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("你好，{}！您已成功从 Rust 接收到问候！", name)
-}
+pub mod models;
+pub mod db;
+pub mod services;
+pub mod commands;
 
-#[derive(serde::Serialize)]
-struct InitStatus {
-    app_name: String,
-    version: String,
-    database_ok: bool,
-    audio_device_ok: bool,
-    audio_device_name: Option<String>,
-}
-
-// 获取项目 Phase 0 初始化及依赖库检查状态
-#[tauri::command]
-fn get_initialization_status() -> InitStatus {
-    // 验证 SQLite 本地数据库能否正常工作
-    let db_ok = rusqlite::Connection::open_in_memory().is_ok();
-
-    // 验证音频设备和播放模块 (rodio) 是否就绪
-    let (audio_ok, device_name) = match rodio::OutputStream::try_default() {
-        Ok((_stream, _handle)) => (true, Some("系统默认音频输出设备".to_string())),
-        Err(_) => (false, None),
-    };
-
-    InitStatus {
-        app_name: "Lumo (轻音)".to_string(),
-        version: "v1.0 (Phase 0 - 技术验证)".to_string(),
-        database_ok: db_ok,
-        audio_device_ok: audio_ok,
-        audio_device_name: device_name,
-    }
-}
+use db::{init_db, DbState};
+use services::playback::PlaybackManager;
+use crate::commands::{
+    PlaybackState, source_add_local, source_scan, source_list, source_remove, library_get_tracks, library_get_albums, library_get_artists,
+    playback_play, playback_pause, playback_resume, playback_stop,
+    playback_set_volume, playback_get_pos, playback_seek,
+    library_toggle_favorite, library_create_playlist, library_get_playlists,
+    library_add_to_playlist, library_get_playlist_tracks, library_record_play,
+    library_get_recently_played, library_get_favorite_tracks
+};
+use tracing_subscriber;
+use std::sync::Mutex;
+use std::path::PathBuf;
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    tracing_subscriber::fmt::init();
+
     tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            let app_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
+            std::fs::create_dir_all(&app_dir).unwrap();
+            let db_path = app_dir.join("lumo.sqlite");
+            
+            let conn = init_db(db_path).expect("Failed to initialize database");
+            app.manage(DbState {
+                db: Mutex::new(conn),
+            });
+
+            let playback_manager = PlaybackManager::new().expect("Failed to init playback");
+            app.manage(PlaybackState {
+                manager: Mutex::new(playback_manager),
+            });
+
+            Ok(())
+        })
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet, get_initialization_status])
+        .plugin(tauri_plugin_dialog::init())
+        .register_uri_scheme_protocol("lumo", |ctx, request| {
+            let app = ctx.app_handle();
+            let uri = request.uri().to_string();
+            let path = uri.strip_prefix("lumo://artwork/").unwrap_or("").trim_end_matches('/');
+            let artwork_id = path.parse::<i64>().unwrap_or(0);
+            
+            if artwork_id > 0 {
+                use tauri::Manager;
+                if let Some(db_state) = app.try_state::<crate::db::DbState>() {
+                    if let Ok(conn) = db_state.db.lock() {
+                        if let Ok((cache_path, mime)) = conn.query_row(
+                            "SELECT cache_path, mime_type FROM artwork WHERE id = ?1",
+                            rusqlite::params![artwork_id],
+                            |row| {
+                                let p: String = row.get(0)?;
+                                let m: Option<String> = row.get(1)?;
+                                Ok((p, m))
+                            },
+                        ) {
+                            if let Ok(data) = std::fs::read(&cache_path) {
+                                let mime_type = mime.unwrap_or_else(|| "image/jpeg".to_string());
+                                return tauri::http::Response::builder()
+                                    .header("Content-Type", mime_type)
+                                    .header("Access-Control-Allow-Origin", "*")
+                                    .body(data)
+                                    .unwrap();
+                            }
+                        }
+                    }
+                }
+            }
+            
+            tauri::http::Response::builder()
+                .status(404)
+                .body(Vec::new())
+                .unwrap()
+        })
+        .invoke_handler(tauri::generate_handler![
+            source_add_local,
+            source_scan,
+            source_list,
+            source_remove,
+            library_get_tracks,
+            library_get_albums,
+            library_get_artists,
+            playback_play,
+            playback_pause,
+            playback_resume,
+            playback_stop,
+            playback_set_volume,
+            playback_get_pos,
+            playback_seek,
+            library_toggle_favorite,
+            library_create_playlist,
+            library_get_playlists,
+            library_add_to_playlist,
+            library_get_playlist_tracks,
+            library_record_play,
+            library_get_recently_played,
+            library_get_favorite_tracks
+        ])
         .run(tauri::generate_context!())
-        .expect("运行 tauri 应用程序时出错");
+        .expect("error while running tauri application");
 }

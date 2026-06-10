@@ -51,6 +51,6 @@ body {
   user-select: none;
 }
 
-button, input, a {
+button, input, a, .cursor-pointer, [style*="cursor: pointer"] {
   -webkit-app-region: no-drag;
 }

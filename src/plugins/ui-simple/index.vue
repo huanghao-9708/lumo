@@ -11,7 +11,7 @@ const playerStore = usePlayerStore();
 <template>
   <div class="h-screen w-screen flex flex-col bg-[#fdfcf9] overflow-hidden text-[#1a1a1a] font-sans antialiased selection:bg-[#333]/10 selection:text-black">
     <!-- Main Workspace -->
-    <div class="flex-1 flex overflow-hidden">
+    <div class="flex-1 flex overflow-hidden min-h-0">
       <Sidebar />
       <MainContent />
       <RightSidebar v-if="playerStore.isRightPanelOpen" />

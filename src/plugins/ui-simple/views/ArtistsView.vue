@@ -1,15 +1,29 @@
 <script setup lang="ts">
 import { usePlayerStore } from '../../../stores/player';
+import { onMounted } from 'vue';
 const playerStore = usePlayerStore();
 
 const goToArtist = (artistId: number) => {
   playerStore.activeArtistId = artistId;
   playerStore.activeLibraryTab = '艺人详情';
 };
+
+const handleScroll = (e: Event) => {
+  const target = e.target as HTMLElement;
+  if (target.scrollHeight - target.scrollTop <= target.clientHeight + 200) {
+    playerStore.fetchArtists();
+  }
+};
+
+onMounted(() => {
+  if (playerStore.artists.length === 0) {
+    playerStore.fetchArtists(true);
+  }
+});
 </script>
 
 <template>
-  <div class="flex-1 overflow-y-auto custom-scrollbar relative z-10 pr-2">
+  <div class="flex-1 overflow-y-auto custom-scrollbar relative z-10 pr-2" @scroll="handleScroll">
     <div class="flex flex-col pb-10">
       <div 
         v-for="(artist, index) in playerStore.artists" 
@@ -30,7 +44,7 @@ const goToArtist = (artistId: number) => {
           <h3 class="font-serif italic text-3xl text-black group-hover:translate-x-2 transition-transform duration-300">{{ artist.name }}</h3>
         </div>
         <div class="text-[10px] font-bold tracking-[0.2em] text-[#888] uppercase">
-          {{ artist.trackCount }} 首歌曲
+          {{ artist.track_count }} 首歌曲
         </div>
       </div>
     </div>

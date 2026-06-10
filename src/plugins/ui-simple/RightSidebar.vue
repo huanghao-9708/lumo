@@ -31,15 +31,15 @@ const tabMapping = {
     <!-- Track Info -->
     <div class="mb-8 relative z-10 flex flex-col">
       <!-- Album Art Square -->
-      <div class="w-full aspect-square bg-[#eae8e1] mb-6 overflow-hidden relative border border-[#dcdad1]/50 shadow-sm transition-colors duration-700" :class="playerStore.currentTrack.coverColor">
+      <div class="w-full aspect-square bg-[#eae8e1] mb-6 overflow-hidden relative border border-[#dcdad1]/50 shadow-sm transition-colors duration-700" :class="playerStore.currentTrack?.coverColor">
         <!-- dot pattern overlay -->
         <div class="absolute inset-0 opacity-20" style="background-image: radial-gradient(circle, #000 1px, transparent 1px); background-size: 8px 8px;"></div>
       </div>
       
       <p class="text-[9px] font-bold tracking-[0.2em] text-[#a0a0a0] mb-2 uppercase">正在播放</p>
-      <h2 class="font-serif italic text-4xl text-black mb-2 truncate">{{ playerStore.currentTrack.title }}</h2>
-      <p class="text-[11px] font-semibold tracking-widest text-[#333] mb-1 uppercase truncate">{{ playerStore.currentTrack.artist }}</p>
-      <p class="text-[11px] text-[#888] italic truncate">{{ playerStore.currentTrack.album }}</p>
+      <h2 class="font-serif italic text-4xl text-black mb-2 truncate">{{ playerStore.currentTrack?.title || 'No Track' }}</h2>
+      <p class="text-[11px] font-semibold tracking-widest text-[#333] mb-1 uppercase truncate">{{ playerStore.currentTrack?.artist || '-' }}</p>
+      <p class="text-[11px] text-[#888] italic truncate">{{ playerStore.currentTrack?.album || '-' }}</p>
       
       <div class="w-8 h-px bg-[#dcdad1] mt-6"></div>
     </div>
@@ -72,7 +72,7 @@ const tabMapping = {
             @click="playerStore.playTrack(track.id)"
             class="group cursor-pointer"
           >
-            <p class="text-[13px] transition-colors truncate" :class="playerStore.currentTrack.id === track.id ? 'font-serif italic font-bold text-black text-[15px]' : 'text-[#777] group-hover:text-black'">
+            <p class="text-[13px] transition-colors truncate" :class="playerStore.currentTrack?.id === track.id ? 'font-serif italic font-bold text-black text-[15px]' : 'text-[#777] group-hover:text-black'">
               {{ track.title }}
             </p>
             <p class="text-[10px] text-[#a0a0a0] uppercase tracking-wider mt-1 truncate">{{ track.artist }}</p>
@@ -85,7 +85,7 @@ const tabMapping = {
         <div class="space-y-6 text-[11px] tracking-wider uppercase text-[#555]">
           <div>
             <span class="text-[#a0a0a0] block mb-1 text-[9px] font-bold">格式</span>
-            <span class="text-black">{{ playerStore.currentTrack.format }} (无损)</span>
+            <span class="text-black">{{ playerStore.currentTrack?.format || '-' }} (无损)</span>
           </div>
           <div>
             <span class="text-[#a0a0a0] block mb-1 text-[9px] font-bold">采样率</span>
@@ -100,19 +100,3 @@ const tabMapping = {
     </div>
   </aside>
 </template>
-
-<style scoped>
-.custom-scrollbar::-webkit-scrollbar {
-  width: 4px;
-}
-.custom-scrollbar::-webkit-scrollbar-track {
-  background: transparent;
-}
-.custom-scrollbar::-webkit-scrollbar-thumb {
-  background-color: transparent;
-  border-radius: 0px;
-}
-.custom-scrollbar:hover::-webkit-scrollbar-thumb {
-  background-color: #dcdad1;
-}
-</style>

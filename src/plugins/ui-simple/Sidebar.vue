@@ -12,8 +12,10 @@ import {
   SunMoon,
   ChevronDown,
 } from 'lucide-vue-next';
+import { onMounted } from 'vue';
 import { usePlayerStore } from '../../stores/player';
 import { useUiStore } from '../../stores/ui';
+import { invoke } from '@tauri-apps/api/core';
 
 const playerStore = usePlayerStore();
 const uiStore = useUiStore();
@@ -25,6 +27,23 @@ const toggleTheme = () => {
     uiStore.setActivePlugin('ui-simple');
   }
 };
+
+const createPlaylist = async () => {
+  const name = prompt("请输入新歌单名称：");
+  if (name && name.trim()) {
+    try {
+      await invoke('library_create_playlist', { name: name.trim() });
+      playerStore.fetchPlaylists();
+    } catch (e) {
+      console.error(e);
+      alert("创建失败");
+    }
+  }
+};
+
+onMounted(() => {
+  playerStore.fetchPlaylists();
+});
 </script>
 
 <template>
@@ -99,7 +118,7 @@ const toggleTheme = () => {
             </a>
           </li>
           <li class="pt-2">
-            <button class="flex items-center gap-4 text-[13px] font-medium text-[#777777] hover:text-black transition-colors w-full">
+            <button @click="createPlaylist" class="flex items-center gap-4 text-[13px] font-medium text-[#777777] hover:text-black transition-colors w-full">
               <Plus class="w-4 h-4 stroke-[1.5]" />
               <span class="tracking-widest">新建歌单</span>
             </button>

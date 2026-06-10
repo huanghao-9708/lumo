@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, watch } from 'vue';
 import { Search, Filter, List, LayoutGrid } from 'lucide-vue-next';
 import { usePlayerStore } from '../../stores/player';
 
@@ -11,6 +11,16 @@ import AlbumDetailView from './views/AlbumDetailView.vue';
 import ArtistDetailView from './views/ArtistDetailView.vue';
 
 const playerStore = usePlayerStore();
+
+let searchTimeout: ReturnType<typeof setTimeout> | null = null;
+watch(() => playerStore.searchQuery, () => {
+  if (searchTimeout) clearTimeout(searchTimeout);
+  searchTimeout = setTimeout(() => {
+    playerStore.fetchTracks(true);
+    playerStore.fetchAlbums(true);
+    playerStore.fetchArtists(true);
+  }, 300);
+});
 
 // 根据 activeLibraryTab 决定当前渲染哪个组件
 const currentView = computed(() => {
@@ -55,6 +65,7 @@ const isDetailView = computed(() => {
             <Search class="w-4 h-4 text-[#888] absolute left-0 top-1/2 -translate-y-1/2" />
             <input 
               type="text" 
+              v-model="playerStore.searchQuery"
               placeholder="SEARCH..." 
               class="pl-8 pr-4 py-2 w-[240px] bg-transparent border-b border-[#dcdad1] focus:border-black text-xs tracking-widest focus:outline-none transition-colors placeholder-[#a0a0a0] uppercase"
             />

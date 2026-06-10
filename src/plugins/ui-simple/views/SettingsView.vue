@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, onMounted } from 'vue';
 import { RefreshCw, Trash2, Power, PowerOff, Plus, X, ChevronDown, ChevronRight, HardDrive, Globe, Folder } from 'lucide-vue-next';
 import { usePlayerStore } from '../../../stores/player';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -50,6 +50,10 @@ const confirmAddSource = () => {
     closeModal();
   }
 };
+
+onMounted(() => {
+  playerStore.fetchSources();
+});
 </script>
 
 <template>
@@ -272,10 +276,3 @@ const confirmAddSource = () => {
     </div>
   </Teleport>
 </template>
-
-<style scoped>
-.custom-scrollbar::-webkit-scrollbar { width: 4px; }
-.custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-.custom-scrollbar::-webkit-scrollbar-thumb { background-color: transparent; border-radius: 10px; }
-.custom-scrollbar:hover::-webkit-scrollbar-thumb { background-color: #dcdad1; }
-</style>
