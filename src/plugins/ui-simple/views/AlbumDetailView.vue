@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Heart, AudioLines, MoveLeft } from 'lucide-vue-next';
+import { Heart, AudioLines, MoveLeft, Play } from 'lucide-vue-next';
 import { usePlayerStore } from '../../../stores/player';
 import { getArtworkUrl } from '../../../utils';
 
@@ -26,8 +26,8 @@ const goBack = () => {
       </div>
 
       <!-- 专辑信息头 -->
-      <div class="flex items-end gap-10 mb-12 shrink-0">
-        <div class="w-48 h-48 relative overflow-hidden bg-[#e8e6df] shadow-sm shrink-0">
+      <div class="flex flex-col md:flex-row md:items-end gap-12 mb-16 shrink-0 relative">
+        <div class="w-56 h-56 relative bg-[#f5f4f0] shadow-sm shrink-0 group">
           <img 
             v-if="playerStore.currentAlbumDetails.cover_artwork_id"
             :src="getArtworkUrl(playerStore.currentAlbumDetails.cover_artwork_id)"
@@ -35,19 +35,28 @@ const goBack = () => {
           />
           <div 
             v-else
-            class="absolute inset-0 bg-gradient-to-br opacity-80"
-            :class="playerStore.currentAlbumDetails.coverColor"
+            class="absolute inset-0 bg-[#e8e6df]"
           ></div>
+          
+          <!-- 悬浮播放按钮 -->
+          <div class="absolute right-4 bottom-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+            <button 
+              @click="playerStore.playTrack(playerStore.currentAlbumDetails.tracks[0]?.id)"
+              class="w-12 h-12 bg-black text-white rounded-full flex items-center justify-center hover:scale-105 transition-transform shadow-md"
+            >
+              <Play class="w-5 h-5 ml-1 fill-current" />
+            </button>
+          </div>
         </div>
         <div class="flex flex-col pb-2">
-          <h2 class="text-[10px] font-bold tracking-[0.2em] text-[#888888] mb-4 uppercase">专辑</h2>
-          <h1 class="font-serif italic text-5xl tracking-wide text-black mb-4">{{ playerStore.currentAlbumDetails.title }}</h1>
-          <p class="text-sm font-medium text-[#555] tracking-widest uppercase">
-            <span class="text-black font-bold">{{ playerStore.currentAlbumDetails.artist }}</span> 
-            <span class="mx-3 text-[#dcdad1]">|</span> 
+          <h2 class="text-[10px] font-bold tracking-[0.3em] text-[#a0a0a0] mb-6 uppercase">Album</h2>
+          <h1 class="font-serif italic text-6xl tracking-wide text-black mb-6 leading-tight">{{ playerStore.currentAlbumDetails.title }}</h1>
+          <p class="text-[12px] font-medium text-[#555] tracking-[0.1em] uppercase">
+            <span class="text-black font-bold tracking-widest">{{ playerStore.currentAlbumDetails.artist }}</span> 
+            <span class="mx-4 text-[#dcdad1]">/</span> 
             {{ playerStore.currentAlbumDetails.year }} 
-            <span class="mx-3 text-[#dcdad1]">|</span> 
-            {{ playerStore.currentAlbumDetails.tracks.length }} 首歌曲
+            <span class="mx-4 text-[#dcdad1]">/</span> 
+            {{ playerStore.currentAlbumDetails.tracks.length }} Tracks
           </p>
         </div>
       </div>
@@ -58,14 +67,15 @@ const goBack = () => {
           v-for="(song, index) in playerStore.currentAlbumDetails.tracks" 
           :key="song.id"
           @click="playerStore.playTrack(song.id)"
-          class="flex items-center text-[13px] py-4 border-b border-[#f0eee6]/50 group transition-colors cursor-pointer hover:bg-black/5"
+          class="flex items-center text-[13px] py-4 border-b border-[#f0eee6]/60 group transition-colors duration-200 cursor-pointer hover:bg-[#faf9f5]"
         >
-          <div class="w-16 text-center text-[#888]">
-            <template v-if="playerStore.currentTrack.id === song.id && playerStore.isPlaying">
+          <div class="w-16 text-center text-[#a0a0a0] font-medium relative">
+            <template v-if="playerStore.currentTrack?.id === song.id && playerStore.isPlaying">
               <AudioLines class="w-4 h-4 mx-auto stroke-[1.5] text-black animate-pulse" />
             </template>
             <template v-else>
-              {{ String(index + 1).padStart(2, '0') }}
+              <span class="group-hover:opacity-0 transition-opacity duration-200">{{ String(index + 1).padStart(2, '0') }}</span>
+              <Play class="w-3.5 h-3.5 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 text-black fill-current" />
             </template>
           </div>
           <div class="flex-[3] pl-2 flex items-center gap-4">
@@ -78,7 +88,7 @@ const goBack = () => {
             />
             <span 
               class="truncate" 
-              :class="playerStore.currentTrack.id === song.id ? 'font-serif italic font-semibold text-[16px] text-black' : 'text-[#333] font-medium'"
+              :class="playerStore.currentTrack?.id === song.id ? 'font-serif italic font-semibold text-[16px] text-black' : 'text-[#333] font-medium'"
             >{{ song.title }}</span>
           </div>
           <div class="w-20 text-right pr-4 text-[#888]">{{ song.duration }}</div>

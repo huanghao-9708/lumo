@@ -194,3 +194,12 @@ pub struct PlaylistDTO {
     /// 歌单内的歌曲总数
     pub track_count: i64,
 }
+
+/// 传输给前端的艺人统计数据对象
+#[derive(Debug, serde::Serialize)]
+pub struct ArtistStatsDTO {
+    /// 该艺人参与的歌曲总数
+    pub track_count: i64,
+    /// 该艺人参与的专辑总数
+    pub album_count: i64,
+}

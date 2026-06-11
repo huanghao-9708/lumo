@@ -1,4 +1,4 @@
-use crate::models::{TrackDTO, AlbumDTO, ArtistDTO, PlaylistDTO};
+use crate::models::{TrackDTO, AlbumDTO, ArtistDTO, PlaylistDTO, ArtistStatsDTO};
 use crate::services::metadata::AudioMetadata;
 use rusqlite::{Connection, params, OptionalExtension};
 use sha2::{Sha256, Digest};
@@ -502,7 +502,7 @@ impl LibraryService {
     }
 
     /// 获取指定艺人参与的所有专辑
-    pub fn get_artist_albums(conn: &Connection, artist_id: i64) -> rusqlite::Result<Vec<AlbumDTO>> {
+    pub fn get_artist_albums(conn: &Connection, artist_id: i64, limit: u32, offset: u32) -> rusqlite::Result<Vec<AlbumDTO>> {
         let mut stmt = conn.prepare("
             SELECT DISTINCT
                 al.id, al.title, ar.name AS artist_name, al.cover_artwork_id,
@@ -514,8 +514,9 @@ impl LibraryService {
             WHERE al.album_artist_id = ?1 OR ta.artist_id = ?1
             GROUP BY al.id
             ORDER BY al.release_year DESC, al.title ASC
+            LIMIT ?2 OFFSET ?3
         ")?;
-        let rows = stmt.query_map([artist_id, artist_id], |row| {
+        let rows = stmt.query_map(rusqlite::params![artist_id, limit, offset], |row| {
             Ok(AlbumDTO {
                 id: row.get(0)?,
                 title: row.get(1)?,
@@ -529,8 +530,8 @@ impl LibraryService {
         Ok(result)
     }
 
-    /// 获取指定艺人名下的热门歌曲（限20首）
-    pub fn get_artist_tracks(conn: &Connection, artist_id: i64) -> rusqlite::Result<Vec<TrackDTO>> {
+    /// 获取指定艺人名下的歌曲分页
+    pub fn get_artist_tracks(conn: &Connection, artist_id: i64, limit: u32, offset: u32) -> rusqlite::Result<Vec<TrackDTO>> {
         let mut stmt = conn.prepare("
             SELECT 
                 t.id, t.title, 
@@ -543,12 +544,35 @@ impl LibraryService {
             LEFT JOIN favorite_tracks ft ON t.id = ft.track_id
             WHERE ta.artist_id = ?1
             ORDER BY t.play_count DESC, t.title ASC
-            LIMIT 20
+            LIMIT ?2 OFFSET ?3
         ")?;
-        let rows = stmt.query_map([artist_id], Self::map_track_row)?;
+        let rows = stmt.query_map(rusqlite::params![artist_id, limit, offset], Self::map_track_row)?;
         let mut result = Vec::new();
         for r in rows { result.push(r?); }
         Ok(result)
+    }
+
+    /// 获取指定艺人的总体统计（歌曲数，专辑数）
+    pub fn get_artist_stats(conn: &Connection, artist_id: i64) -> rusqlite::Result<ArtistStatsDTO> {
+        let track_count: i64 = conn.query_row(
+            "SELECT COUNT(t.id) FROM tracks t JOIN track_artists ta ON ta.track_id = t.id WHERE ta.artist_id = ?1",
+            [artist_id],
+            |row| row.get(0)
+        ).unwrap_or(0);
+
+        let album_count: i64 = conn.query_row(
+            "SELECT COUNT(DISTINCT al.id) FROM albums al 
+             LEFT JOIN tracks t ON t.album_id = al.id
+             LEFT JOIN track_artists ta ON ta.track_id = t.id
+             WHERE al.album_artist_id = ?1 OR ta.artist_id = ?1",
+            [artist_id],
+            |row| row.get(0)
+        ).unwrap_or(0);
+
+        Ok(ArtistStatsDTO {
+            track_count,
+            album_count
+        })
     }
 
     /// 提供统一的闭包将 SQLite 查询出的一行转化为前端期望的 DTO 模型

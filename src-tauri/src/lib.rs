@@ -7,7 +7,7 @@ use db::{init_db, DbState};
 use services::playback::PlaybackManager;
 use crate::commands::{
     PlaybackState, source_add_local, source_scan, source_list, source_remove, library_get_tracks, library_get_albums, library_get_artists,
-    library_get_album_tracks, library_get_artist_albums, library_get_artist_tracks,
+    library_get_album_tracks, library_get_artist_albums, library_get_artist_tracks, library_get_artist_stats,
     playback_play, playback_pause, playback_resume, playback_stop,
     playback_set_volume, playback_get_pos, playback_seek,
     library_toggle_favorite, library_create_playlist, library_get_playlists,
@@ -93,6 +93,7 @@ pub fn run() {
             library_get_album_tracks,
             library_get_artist_albums,
             library_get_artist_tracks,
+            library_get_artist_stats,
             playback_play,
             playback_pause,
             playback_resume,

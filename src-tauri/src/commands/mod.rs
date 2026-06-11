@@ -3,7 +3,7 @@ use crate::db::DbState;
 use crate::services::playback::PlaybackManager;
 use crate::services::scanner::scan_local_directory;
 use crate::services::library::LibraryService;
-use crate::models::{TrackDTO, AlbumDTO, ArtistDTO, PlaylistDTO};
+use crate::models::{TrackDTO, AlbumDTO, ArtistDTO, PlaylistDTO, ArtistStatsDTO};
 use std::path::PathBuf;
 use rusqlite::params;
 use std::sync::Mutex;
@@ -124,15 +124,21 @@ pub fn library_get_album_tracks(db_state: State<'_, DbState>, album_id: i64) -> 
 }
 
 #[tauri::command]
-pub fn library_get_artist_albums(db_state: State<'_, DbState>, artist_id: i64) -> Result<Vec<AlbumDTO>, String> {
+pub fn library_get_artist_albums(db_state: State<'_, DbState>, artist_id: i64, limit: u32, offset: u32) -> Result<Vec<AlbumDTO>, String> {
     let conn = db_state.db.lock().map_err(|e| e.to_string())?;
-    LibraryService::get_artist_albums(&conn, artist_id).map_err(|e| e.to_string())
+    LibraryService::get_artist_albums(&conn, artist_id, limit, offset).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn library_get_artist_tracks(db_state: State<'_, DbState>, artist_id: i64) -> Result<Vec<TrackDTO>, String> {
+pub fn library_get_artist_tracks(db_state: State<'_, DbState>, artist_id: i64, limit: u32, offset: u32) -> Result<Vec<TrackDTO>, String> {
     let conn = db_state.db.lock().map_err(|e| e.to_string())?;
-    LibraryService::get_artist_tracks(&conn, artist_id).map_err(|e| e.to_string())
+    LibraryService::get_artist_tracks(&conn, artist_id, limit, offset).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn library_get_artist_stats(db_state: State<'_, DbState>, artist_id: i64) -> Result<ArtistStatsDTO, String> {
+    let conn = db_state.db.lock().map_err(|e| e.to_string())?;
+    LibraryService::get_artist_stats(&conn, artist_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

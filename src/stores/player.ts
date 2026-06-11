@@ -90,6 +90,43 @@ export const usePlayerStore = defineStore("player", () => {
   const activeAlbumId = ref<number | null>(null);
   const activeArtistId = ref<number | null>(null);
 
+  // 页面导航历史栈
+  interface HistoryState {
+    tab: string;
+    albumId: number | null;
+    artistId: number | null;
+  }
+  const historyStack = ref<HistoryState[]>([]);
+  const isGoingBack = ref(false);
+
+  // 监听导航状态变化以记录历史
+  watch([activeLibraryTab, activeAlbumId, activeArtistId], (newVals, oldVals) => {
+    if (isGoingBack.value) {
+      isGoingBack.value = false;
+      return;
+    }
+    const [oldTab, oldAlbumId, oldArtistId] = oldVals;
+    if (oldTab) {
+      historyStack.value.push({
+        tab: oldTab as string,
+        albumId: oldAlbumId as number | null,
+        artistId: oldArtistId as number | null
+      });
+    }
+  });
+
+  const canGoBack = computed(() => historyStack.value.length > 0);
+
+  function goBack() {
+    if (historyStack.value.length > 0) {
+      isGoingBack.value = true;
+      const state = historyStack.value.pop()!;
+      activeLibraryTab.value = state.tab;
+      activeAlbumId.value = state.albumId;
+      activeArtistId.value = state.artistId;
+    }
+  }
+
   // 歌词数据
   const lyrics = ref([
     { text: "We are going on a journey", time: 0 },
@@ -397,27 +434,53 @@ export const usePlayerStore = defineStore("player", () => {
     }
   });
 
-  watch(activeArtistId, async (newId) => {
-    if (newId) {
-      const artist = artists.value.find(a => a.id === newId);
-      if (artist) {
-        try {
-          const [tracksResult, albumsResult] = await Promise.all([
-             invoke<any[]>('library_get_artist_tracks', { artistId: newId }),
-             invoke<any[]>('library_get_artist_albums', { artistId: newId })
-          ]);
-          const tracksData = tracksResult.map(t => ({
-             ...t,
-             artist: t.artist_name || '未知艺人',
-             album: t.album_title || '未知专辑',
-             duration: formatTime(t.duration_ms / 1000),
-             durationSec: Math.floor(t.duration_ms / 1000),
-             format: t.format ? t.format.toUpperCase() : 'UNKNOWN',
-             coverColor: getDeterministicColor(t.album_title || t.title || 'Unknown'),
-             isFavorite: t.is_favorite || false,
-             primary_file_id: t.media_file_id
-           }));
-           const artistAlbums = albumsResult.map(a => ({
+  const fetchArtistTracks = async (artistId: number, isLoadMore = false) => {
+    if (!currentArtistDetailsData.value) return;
+    if (isLoadMore && (!currentArtistDetailsData.value.hasMoreTracks || currentArtistDetailsData.value.isLoadingTracks)) return;
+
+    currentArtistDetailsData.value.isLoadingTracks = true;
+    try {
+      const limit = 30;
+      const offset = currentArtistDetailsData.value.tracksOffset;
+      const tracksResult: any[] = await invoke('library_get_artist_tracks', { artistId, limit, offset });
+      
+      const tracksData = tracksResult.map(t => ({
+            ...t,
+            artist: t.artist_name || '未知艺人',
+            album: t.album_title || '未知专辑',
+            duration: formatTime(t.duration_ms / 1000),
+            durationSec: Math.floor(t.duration_ms / 1000),
+            format: t.format ? t.format.toUpperCase() : 'UNKNOWN',
+            coverColor: getDeterministicColor(t.album_title || t.title || 'Unknown'),
+            isFavorite: t.is_favorite || false,
+            primary_file_id: t.media_file_id
+      }));
+
+      if (isLoadMore) {
+        currentArtistDetailsData.value.tracks.push(...tracksData);
+      } else {
+        currentArtistDetailsData.value.tracks = tracksData;
+      }
+      currentArtistDetailsData.value.tracksOffset += tracksData.length;
+      currentArtistDetailsData.value.hasMoreTracks = tracksData.length === limit;
+    } catch(e) {
+      console.error(e);
+    } finally {
+      currentArtistDetailsData.value.isLoadingTracks = false;
+    }
+  };
+
+  const fetchArtistAlbums = async (artistId: number, isLoadMore = false) => {
+    if (!currentArtistDetailsData.value) return;
+    if (isLoadMore && (!currentArtistDetailsData.value.hasMoreAlbums || currentArtistDetailsData.value.isLoadingAlbums)) return;
+
+    currentArtistDetailsData.value.isLoadingAlbums = true;
+    try {
+      const limit = 20;
+      const offset = currentArtistDetailsData.value.albumsOffset;
+      const albumsResult: any[] = await invoke('library_get_artist_albums', { artistId, limit, offset });
+      
+      const artistAlbums = albumsResult.map(a => ({
               id: a.id,
               title: a.title,
               artist: a.artist_name || '未知艺人',
@@ -426,12 +489,48 @@ export const usePlayerStore = defineStore("player", () => {
               cover_artwork_id: a.cover_artwork_id,
               artist_name: a.artist_name,
               track_count: a.track_count
-           }));
-           currentArtistDetailsData.value = { ...artist, tracks: tracksData, albums: artistAlbums };
-        } catch(e) {
-           console.error(e);
-        }
+      }));
+
+      if (isLoadMore) {
+        currentArtistDetailsData.value.albums.push(...artistAlbums);
+      } else {
+        currentArtistDetailsData.value.albums = artistAlbums;
       }
+      currentArtistDetailsData.value.albumsOffset += artistAlbums.length;
+      currentArtistDetailsData.value.hasMoreAlbums = artistAlbums.length === limit;
+    } catch(e) {
+      console.error(e);
+    } finally {
+      currentArtistDetailsData.value.isLoadingAlbums = false;
+    }
+  };
+
+  watch(activeArtistId, async (newId) => {
+    if (newId) {
+      const artist = artists.value.find(a => a.id === newId) || { id: newId, name: '未知艺人', avatarColor: getDeterministicColor('未知艺人') };
+      
+      currentArtistDetailsData.value = { 
+        ...artist, 
+        stats: { track_count: 0, album_count: 0 },
+        tracks: [], 
+        albums: [],
+        tracksOffset: 0,
+        albumsOffset: 0,
+        hasMoreTracks: true,
+        hasMoreAlbums: true,
+        isLoadingTracks: false,
+        isLoadingAlbums: false
+      };
+
+      try {
+        const stats: any = await invoke('library_get_artist_stats', { artistId: newId });
+        currentArtistDetailsData.value.stats = stats;
+      } catch(e) {
+        console.error(e);
+      }
+
+      await fetchArtistTracks(newId, false);
+      await fetchArtistAlbums(newId, false);
     } else {
       currentArtistDetailsData.value = null;
     }
@@ -639,6 +738,8 @@ export const usePlayerStore = defineStore("player", () => {
     fetchTracks,
     fetchAlbums,
     fetchArtists,
+    fetchArtistTracks,
+    fetchArtistAlbums,
     fetchPlaylists,
     fetchPlaylistTracks,
     fetchRecentlyPlayed,
@@ -647,6 +748,8 @@ export const usePlayerStore = defineStore("player", () => {
     fetchSources,
     toggleFavorite,
     searchQuery,
+    canGoBack,
+    goBack,
     currentTrack,
     currentAlbumDetails,
     currentArtistDetails,

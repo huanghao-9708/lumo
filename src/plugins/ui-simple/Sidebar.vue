@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import {
+  ArrowLeft,
   Music,
   Disc,
   Mic,
@@ -50,9 +51,18 @@ onMounted(() => {
   <aside class="w-[240px] flex flex-col h-full bg-transparent border-r border-[#e8e6df] py-8 pl-8 pr-4 select-none shrink-0 relative">
     <div data-tauri-drag-region class="absolute top-0 left-0 w-full h-16 z-0"></div>
     
-    <!-- Logo -->
-    <div class="mb-12 relative z-10 pointer-events-none">
-      <h1 class="font-serif font-bold text-3xl tracking-widest text-black">LUMO-V</h1>
+    <!-- Logo & Back Button -->
+    <div class="mb-12 relative z-10 flex items-center justify-between">
+      <h1 class="font-serif font-bold text-3xl tracking-widest text-black pointer-events-none">LUMO-V</h1>
+      <button 
+        @click="playerStore.goBack()"
+        :disabled="!playerStore.canGoBack"
+        class="w-7 h-7 rounded-md transition-all flex items-center justify-center -mr-2"
+        :class="playerStore.canGoBack ? 'hover:bg-[#eae8e1] text-black cursor-pointer' : 'text-[#dcdad1] cursor-not-allowed'"
+        title="返回"
+      >
+        <ArrowLeft class="w-4 h-4 stroke-[2]" />
+      </button>
     </div>
 
     <!-- Navigation -->
