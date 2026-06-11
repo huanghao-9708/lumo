@@ -171,6 +171,8 @@ export const usePlayerStore = defineStore("player", () => {
       
       const newTracks = result.map((t: any) => ({
         ...t,
+        artist: t.artist_name || '未知艺人',
+        album: t.album_title || '未知专辑',
         duration: formatTime(t.duration_ms / 1000),
         durationSec: Math.floor(t.duration_ms / 1000),
         format: t.format ? t.format.toUpperCase() : 'UNKNOWN',
@@ -236,6 +238,8 @@ export const usePlayerStore = defineStore("player", () => {
       const result: any[] = await invoke('library_get_playlist_tracks', { playlistId });
       tracks.value = result.map((t: any) => ({
         ...t,
+        artist: t.artist_name || '未知艺人',
+        album: t.album_title || '未知专辑',
         duration: formatTime(t.duration_ms / 1000),
         durationSec: Math.floor(t.duration_ms / 1000),
         format: t.format ? t.format.toUpperCase() : 'UNKNOWN',
@@ -255,6 +259,8 @@ export const usePlayerStore = defineStore("player", () => {
       const result: any[] = await invoke('library_get_recently_played', { limit: 50 });
       tracks.value = result.map((t: any) => ({
         ...t,
+        artist: t.artist_name || '未知艺人',
+        album: t.album_title || '未知专辑',
         duration: formatTime(t.duration_ms / 1000),
         durationSec: Math.floor(t.duration_ms / 1000),
         format: t.format ? t.format.toUpperCase() : 'UNKNOWN',
@@ -273,6 +279,8 @@ export const usePlayerStore = defineStore("player", () => {
       const result: any[] = await invoke('library_get_favorite_tracks');
       tracks.value = result.map((t: any) => ({
         ...t,
+        artist: t.artist_name || '未知艺人',
+        album: t.album_title || '未知专辑',
         duration: formatTime(t.duration_ms / 1000),
         durationSec: Math.floor(t.duration_ms / 1000),
         format: t.format ? t.format.toUpperCase() : 'UNKNOWN',
