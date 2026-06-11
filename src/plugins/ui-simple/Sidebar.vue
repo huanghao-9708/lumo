@@ -16,7 +16,6 @@ import {
 import { onMounted } from 'vue';
 import { usePlayerStore } from '../../stores/player';
 import { useUiStore } from '../../stores/ui';
-import { invoke } from '@tauri-apps/api/core';
 
 const playerStore = usePlayerStore();
 const uiStore = useUiStore();
@@ -29,17 +28,13 @@ const toggleTheme = () => {
   }
 };
 
-const createPlaylist = async () => {
-  const name = prompt("请输入新歌单名称：");
-  if (name && name.trim()) {
-    try {
-      await invoke('library_create_playlist', { name: name.trim() });
-      playerStore.fetchPlaylists();
-    } catch (e) {
-      console.error(e);
-      alert("创建失败");
-    }
-  }
+const createPlaylist = () => {
+  playerStore.isCreatePlaylistModalOpen = true;
+};
+
+const openPlaylist = (id: number) => {
+  playerStore.activePlaylistId = id;
+  playerStore.activeLibraryTab = '歌单详情';
 };
 
 onMounted(() => {
@@ -120,10 +115,10 @@ onMounted(() => {
       <div>
         <h3 class="text-[10px] font-bold tracking-[0.2em] text-[#a0a0a0] mb-5 uppercase">歌单</h3>
         <ul class="space-y-5">
-          <li v-for="playlist in playerStore.playlists" :key="playlist.name">
-            <a href="#" @click.prevent="playerStore.activeLibraryTab = playlist.name" class="flex items-center gap-4 text-[13px] transition-colors group" :class="playerStore.activeLibraryTab === playlist.name ? 'text-black font-semibold' : 'text-[#777777] font-medium hover:text-black'">
+          <li v-for="playlist in playerStore.playlists" :key="playlist.id">
+            <a href="#" @click.prevent="openPlaylist(playlist.id)" class="flex items-center gap-4 text-[13px] transition-colors group" :class="playerStore.activeLibraryTab === '歌单详情' && playerStore.activePlaylistId === playlist.id ? 'text-black font-semibold' : 'text-[#777777] font-medium hover:text-black'">
               <ListMusic class="w-4 h-4 stroke-[1.5]" />
-              <span class="tracking-widest flex-1">{{ playlist.name }}</span>
+              <span class="tracking-widest flex-1 truncate">{{ playlist.name }}</span>
               <span class="text-[10px] text-[#cccccc] group-hover:text-[#888888]">{{ playlist.count }}</span>
             </a>
           </li>

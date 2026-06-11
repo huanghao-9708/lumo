@@ -1,0 +1,128 @@
+<script setup lang="ts">
+import { Heart, AudioLines, MoveLeft, Play } from 'lucide-vue-next';
+import { usePlayerStore } from '../../../stores/player';
+
+const playerStore = usePlayerStore();
+
+const goBack = () => {
+  playerStore.activePlaylistId = null;
+  playerStore.activeLibraryTab = '全部歌曲';
+};
+
+const playAll = () => {
+  if (playerStore.currentPlaylistDetails?.tracks && playerStore.currentPlaylistDetails.tracks.length > 0) {
+    playerStore.playQueue(playerStore.currentPlaylistDetails.tracks, 0);
+  }
+};
+</script>
+
+<template>
+  <div class="flex-1 flex flex-col min-h-0 relative z-10">
+    <div v-if="playerStore.currentPlaylistDetails" class="flex-1 flex flex-col h-full overflow-hidden">
+      <!-- 顶部返回 -->
+      <div class="mb-8 shrink-0">
+        <button 
+          @click="goBack" 
+          class="flex items-center gap-2 text-[10px] font-bold tracking-[0.2em] text-[#a0a0a0] hover:text-black transition-colors uppercase group"
+        >
+          <MoveLeft class="w-4 h-4 stroke-[1.5] group-hover:-translate-x-1 transition-transform" />
+          返回
+        </button>
+      </div>
+
+      <!-- 歌单头 (巨型 Typography) -->
+      <div class="flex flex-col mb-16 shrink-0 relative">
+        <h2 class="text-[10px] font-bold tracking-[0.3em] text-[#a0a0a0] mb-8 uppercase z-10">Playlist</h2>
+        
+        <div class="relative z-10">
+          <h1 class="font-serif italic text-[80px] leading-[0.85] tracking-tight text-black mb-6 break-words mix-blend-multiply">
+            {{ playerStore.currentPlaylistDetails.name }}
+          </h1>
+          <p v-if="playerStore.currentPlaylistDetails.description" class="max-w-md text-[#555] text-sm leading-relaxed mt-4">
+            {{ playerStore.currentPlaylistDetails.description }}
+          </p>
+        </div>
+
+        <div class="flex items-center gap-6 mt-8 z-10 border-t border-black pt-6 max-w-md">
+          <div class="text-[12px] font-medium tracking-[0.1em] text-[#555] uppercase">
+            <span class="text-black font-bold tracking-widest">{{ playerStore.currentPlaylistDetails.count }}</span> Tracks 
+          </div>
+          
+          <button 
+            v-if="playerStore.currentPlaylistDetails.tracks.length > 0"
+            @click="playAll" 
+            class="flex items-center gap-2 bg-black text-white px-5 py-2.5 hover:bg-black/80 transition-all ml-auto group rounded-sm shadow-md"
+          >
+            <Play class="w-3.5 h-3.5 fill-current" />
+            <span class="text-[10px] font-bold tracking-[0.2em] uppercase">Play All</span>
+          </button>
+        </div>
+
+        <!-- 装饰性背景文字，错位放大 -->
+        <div class="absolute -top-10 -right-10 pointer-events-none select-none overflow-hidden w-full h-full flex justify-end opacity-[0.03]">
+          <h1 class="font-serif italic text-[200px] leading-none whitespace-nowrap">
+            {{ playerStore.currentPlaylistDetails.name }}
+          </h1>
+        </div>
+      </div>
+
+      <!-- 滚动区域 -->
+      <div class="flex-1 overflow-y-auto custom-scrollbar pr-4 pb-10">
+        <section v-if="playerStore.currentPlaylistDetails.tracks.length > 0">
+          <div class="flex flex-col">
+            <div 
+              v-for="(song, index) in playerStore.currentPlaylistDetails.tracks" 
+              :key="song.id"
+              @dblclick="playerStore.playQueue(playerStore.currentPlaylistDetails.tracks, index)"
+              class="flex items-center text-[13px] py-4 border-b border-[#f0eee6]/60 group transition-colors duration-200 cursor-pointer hover:bg-[#faf9f5]"
+            >
+              <div class="w-12 text-left text-[#a0a0a0] font-medium relative">
+                <template v-if="playerStore.currentTrack?.id === song.id && playerStore.isPlaying">
+                  <AudioLines class="w-4 h-4 stroke-[1.5] text-black animate-pulse" />
+                </template>
+                <template v-else>
+                  <span class="group-hover:opacity-0 transition-opacity duration-200">{{ String(index + 1).padStart(2, '0') }}</span>
+                  <Play class="w-3.5 h-3.5 absolute top-1/2 left-0 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 text-black fill-current" />
+                </template>
+              </div>
+              <div class="flex-[3] flex items-center gap-4">
+                <Heart 
+                  class="w-3.5 h-3.5 transition-colors stroke-[1.5]" 
+                  :class="[
+                    song.isFavorite ? 'text-black fill-current' : 'text-[#ccc] opacity-0 group-hover:opacity-100 hover:text-black'
+                  ]"
+                  @click.stop="song.isFavorite = !song.isFavorite"
+                />
+                <span 
+                  class="truncate" 
+                  :class="playerStore.currentTrack?.id === song.id ? 'font-serif italic font-semibold text-[16px] text-black' : 'text-[#333] font-medium'"
+                >{{ song.title }}</span>
+              </div>
+              <div class="flex-[2] truncate pr-4 text-[#777] italic">{{ song.artist }}</div>
+              <div class="flex-[2] truncate pr-4 text-[#777]">{{ song.album }}</div>
+              <div class="w-16 text-right pr-4 text-[#888]">{{ song.duration }}</div>
+            </div>
+          </div>
+        </section>
+        
+        <div v-else-if="!playerStore.currentPlaylistDetails.isLoadingTracks" class="text-center text-[#888] py-20 text-xs tracking-widest uppercase">
+          该歌单目前为空，快去添加歌曲吧
+        </div>
+        
+        <div v-if="playerStore.currentPlaylistDetails.isLoadingTracks" class="text-center text-[#888] py-8 text-xs tracking-widest uppercase">
+          Loading...
+        </div>
+      </div>
+    </div>
+    <div v-else class="flex-1 flex items-center justify-center text-[#888]">
+      加载中或未找到歌单信息
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.custom-scrollbar::-webkit-scrollbar { width: 4px; }
+.custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+.custom-scrollbar::-webkit-scrollbar-thumb { background-color: transparent; border-radius: 10px; }
+.custom-scrollbar:hover::-webkit-scrollbar-thumb { background-color: #dcdad1; }
+</style>

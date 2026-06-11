@@ -3,6 +3,7 @@ import Sidebar from './Sidebar.vue';
 import MainContent from './MainContent.vue';
 import RightSidebar from './RightSidebar.vue';
 import PlayerBar from './PlayerBar.vue';
+import CreatePlaylistModal from './components/CreatePlaylistModal.vue';
 import { usePlayerStore } from '../../stores/player';
 
 const playerStore = usePlayerStore();
@@ -19,5 +20,8 @@ const playerStore = usePlayerStore();
     
     <!-- Bottom Player -->
     <PlayerBar />
+
+    <!-- Modals -->
+    <CreatePlaylistModal />
   </div>
 </template>

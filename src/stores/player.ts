@@ -89,28 +89,31 @@ export const usePlayerStore = defineStore("player", () => {
 
   const activeAlbumId = ref<number | null>(null);
   const activeArtistId = ref<number | null>(null);
+  const activePlaylistId = ref<number | null>(null);
 
   // 页面导航历史栈
   interface HistoryState {
     tab: string;
     albumId: number | null;
     artistId: number | null;
+    playlistId: number | null;
   }
   const historyStack = ref<HistoryState[]>([]);
   const isGoingBack = ref(false);
 
   // 监听导航状态变化以记录历史
-  watch([activeLibraryTab, activeAlbumId, activeArtistId], (newVals, oldVals) => {
+  watch([activeLibraryTab, activeAlbumId, activeArtistId, activePlaylistId], (_newVals, oldVals) => {
     if (isGoingBack.value) {
       isGoingBack.value = false;
       return;
     }
-    const [oldTab, oldAlbumId, oldArtistId] = oldVals;
+    const [oldTab, oldAlbumId, oldArtistId, oldPlaylistId] = oldVals;
     if (oldTab) {
       historyStack.value.push({
         tab: oldTab as string,
         albumId: oldAlbumId as number | null,
-        artistId: oldArtistId as number | null
+        artistId: oldArtistId as number | null,
+        playlistId: oldPlaylistId as number | null
       });
     }
   });
@@ -124,6 +127,7 @@ export const usePlayerStore = defineStore("player", () => {
       activeLibraryTab.value = state.tab;
       activeAlbumId.value = state.albumId;
       activeArtistId.value = state.artistId;
+      activePlaylistId.value = state.playlistId;
     }
   }
 
@@ -214,6 +218,7 @@ export const usePlayerStore = defineStore("player", () => {
       playlists.value = result.map(p => ({
         id: p.id,
         name: p.name,
+        description: p.description,
         count: p.track_count
       }));
     } catch (e) {
@@ -406,6 +411,48 @@ export const usePlayerStore = defineStore("player", () => {
 
   const currentAlbumDetailsData = ref<any>(null);
   const currentArtistDetailsData = ref<any>(null);
+  const currentPlaylistDetailsData = ref<any>(null);
+  const isCreatePlaylistModalOpen = ref(false);
+
+  const createPlaylist = async (name: string, description: string) => {
+    try {
+      const id = await invoke('library_create_playlist', { name, description });
+      await fetchPlaylists();
+      return id;
+    } catch(e) {
+      console.error("Failed to create playlist:", e);
+      throw e;
+    }
+  };
+
+  watch(activePlaylistId, async (newId) => {
+    if (newId) {
+      const playlist = playlists.value.find(p => p.id === newId) || { id: newId, name: '未知歌单', count: 0, description: '' };
+      currentPlaylistDetailsData.value = { ...playlist, tracks: [], isLoadingTracks: true };
+      
+      try {
+        const result: any[] = await invoke('library_get_playlist_tracks', { playlistId: newId });
+        const tracksData = result.map(t => ({
+           ...t,
+           artist: t.artist_name || '未知艺人',
+           album: t.album_title || '未知专辑',
+           duration: formatTime(t.duration_ms / 1000),
+           durationSec: Math.floor(t.duration_ms / 1000),
+           format: t.format ? t.format.toUpperCase() : 'UNKNOWN',
+           coverColor: getDeterministicColor(t.album_title || t.title || 'Unknown'),
+           isFavorite: t.is_favorite || false,
+           primary_file_id: t.media_file_id
+         }));
+         currentPlaylistDetailsData.value.tracks = tracksData;
+      } catch(e) {
+         console.error(e);
+      } finally {
+        currentPlaylistDetailsData.value.isLoadingTracks = false;
+      }
+    } else {
+      currentPlaylistDetailsData.value = null;
+    }
+  });
 
   watch(activeAlbumId, async (newId) => {
     if (newId) {
@@ -538,6 +585,7 @@ export const usePlayerStore = defineStore("player", () => {
 
   const currentAlbumDetails = computed(() => currentAlbumDetailsData.value);
   const currentArtistDetails = computed(() => currentArtistDetailsData.value);
+  const currentPlaylistDetails = computed(() => currentPlaylistDetailsData.value);
 
   const localSources = computed(() => {
     return sources.value.filter(s => s.kind === 'local');
@@ -726,6 +774,9 @@ export const usePlayerStore = defineStore("player", () => {
     playlists,
     activeAlbumId,
     activeArtistId,
+    activePlaylistId,
+    isCreatePlaylistModalOpen,
+    createPlaylist,
     lyrics,
     sources,
     localSources,
@@ -753,6 +804,7 @@ export const usePlayerStore = defineStore("player", () => {
     currentTrack,
     currentAlbumDetails,
     currentArtistDetails,
+    currentPlaylistDetails,
     formatTime,
     togglePlay,
     playQueue,

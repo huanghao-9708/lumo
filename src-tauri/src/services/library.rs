@@ -344,10 +344,10 @@ impl LibraryService {
     }
 
     /// 创建一个新的空歌单
-    pub fn create_playlist(conn: &Connection, name: &str) -> rusqlite::Result<i64> {
+    pub fn create_playlist(conn: &Connection, name: &str, description: Option<&str>) -> rusqlite::Result<i64> {
         conn.execute(
-            "INSERT INTO playlists (name) VALUES (?1)",
-            params![name],
+            "INSERT INTO playlists (name, description) VALUES (?1, ?2)",
+            params![name, description],
         )?;
         Ok(conn.last_insert_rowid())
     }
@@ -358,6 +358,7 @@ impl LibraryService {
             SELECT 
                 p.id, 
                 p.name,
+                p.description,
                 COUNT(pi.id) as track_count
             FROM playlists p
             LEFT JOIN playlist_items pi ON p.id = pi.playlist_id
@@ -369,7 +370,8 @@ impl LibraryService {
             Ok(PlaylistDTO {
                 id: row.get(0)?,
                 name: row.get(1)?,
-                track_count: row.get(2)?,
+                description: row.get(2)?,
+                track_count: row.get(3)?,
             })
         })?;
         

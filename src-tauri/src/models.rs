@@ -191,6 +191,8 @@ pub struct PlaylistDTO {
     pub id: i64,
     /// 歌单名称
     pub name: String,
+    /// 歌单简介
+    pub description: Option<String>,
     /// 歌单内的歌曲总数
     pub track_count: i64,
 }

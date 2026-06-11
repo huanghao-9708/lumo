@@ -204,9 +204,9 @@ pub fn library_toggle_favorite(db_state: State<'_, DbState>, track_id: i64, is_f
 }
 
 #[tauri::command]
-pub fn library_create_playlist(db_state: State<'_, DbState>, name: String) -> Result<i64, String> {
+pub fn library_create_playlist(db_state: State<'_, DbState>, name: String, description: Option<String>) -> Result<i64, String> {
     let conn = db_state.db.lock().map_err(|e| e.to_string())?;
-    LibraryService::create_playlist(&conn, &name).map_err(|e| e.to_string())
+    LibraryService::create_playlist(&conn, &name, description.as_deref()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

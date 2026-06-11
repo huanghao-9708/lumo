@@ -9,6 +9,7 @@ import ArtistsView from './views/ArtistsView.vue';
 import SettingsView from './views/SettingsView.vue';
 import AlbumDetailView from './views/AlbumDetailView.vue';
 import ArtistDetailView from './views/ArtistDetailView.vue';
+import PlaylistDetailView from './views/PlaylistDetailView.vue';
 
 const playerStore = usePlayerStore();
 
@@ -30,6 +31,7 @@ const currentView = computed(() => {
   if (tab === '设置') return SettingsView;
   if (tab === '专辑详情') return AlbumDetailView;
   if (tab === '艺人详情') return ArtistDetailView;
+  if (tab === '歌单详情') return PlaylistDetailView;
   // 全部歌曲、收藏歌曲、最近播放、播放队列、歌单...默认都走 TracksView
   return TracksView;
 });
@@ -41,7 +43,7 @@ const mainTitle = computed(() => {
 });
 
 const isDetailView = computed(() => {
-  return ['专辑详情', '艺人详情'].includes(playerStore.activeLibraryTab);
+  return ['专辑详情', '艺人详情', '歌单详情'].includes(playerStore.activeLibraryTab);
 });
 </script>
 
