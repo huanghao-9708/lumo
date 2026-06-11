@@ -42,7 +42,7 @@ const sourceItems = [
     
     <!-- Logo -->
     <div class="flex items-center gap-3 mb-8 cursor-pointer pl-1 relative z-10 pointer-events-none">
-      <AudioLines class="text-brand-orange w-7 h-7" />
+      <img src="/lumo_log.ico" class="w-8 h-8 object-contain drop-shadow-sm" />
       <span class="font-bold text-xl tracking-wide text-gray-800">Lumo</span>
     </div>
 

@@ -188,7 +188,8 @@ impl LibraryService {
                 m.duration_ms, 
                 m.file_ext, 
                 m.id AS media_file_id,
-                ft.track_id IS NOT NULL AS is_favorite
+                ft.track_id IS NOT NULL AS is_favorite,
+                al.cover_artwork_id
             FROM tracks t
             LEFT JOIN albums al ON t.album_id = al.id
             JOIN media_files m ON t.id = m.track_id
@@ -410,7 +411,8 @@ impl LibraryService {
                 m.duration_ms, 
                 m.file_ext, 
                 m.id AS media_file_id,
-                ft.track_id IS NOT NULL AS is_favorite
+                ft.track_id IS NOT NULL AS is_favorite,
+                al.cover_artwork_id
             FROM playlist_items pi
             JOIN tracks t ON pi.track_id = t.id
             LEFT JOIN albums al ON t.album_id = al.id
@@ -450,7 +452,7 @@ impl LibraryService {
             SELECT 
                 t.id, t.title, 
                 (SELECT GROUP_CONCAT(a.name, ', ') FROM track_artists ta JOIN artists a ON ta.artist_id = a.id WHERE ta.track_id = t.id ORDER BY ta.position) AS artist_name, 
-                al.title AS album_title, m.duration_ms, m.file_ext, m.id AS media_file_id, ft.track_id IS NOT NULL AS is_favorite
+                al.title AS album_title, m.duration_ms, m.file_ext, m.id AS media_file_id, ft.track_id IS NOT NULL AS is_favorite, al.cover_artwork_id
             FROM tracks t
             LEFT JOIN albums al ON t.album_id = al.id
             JOIN media_files m ON t.id = m.track_id
@@ -470,7 +472,7 @@ impl LibraryService {
             SELECT 
                 t.id, t.title, 
                 (SELECT GROUP_CONCAT(a.name, ', ') FROM track_artists ta JOIN artists a ON ta.artist_id = a.id WHERE ta.track_id = t.id ORDER BY ta.position) AS artist_name, 
-                al.title AS album_title, m.duration_ms, m.file_ext, m.id AS media_file_id, 1 AS is_favorite
+                al.title AS album_title, m.duration_ms, m.file_ext, m.id AS media_file_id, 1 AS is_favorite, al.cover_artwork_id
             FROM favorite_tracks ft
             JOIN tracks t ON ft.track_id = t.id
             LEFT JOIN albums al ON t.album_id = al.id
@@ -489,7 +491,7 @@ impl LibraryService {
             SELECT 
                 t.id, t.title, 
                 (SELECT GROUP_CONCAT(a.name, ', ') FROM track_artists ta2 JOIN artists a ON ta2.artist_id = a.id WHERE ta2.track_id = t.id ORDER BY ta2.position) AS artist_name,
-                al.title AS album_title, m.duration_ms, m.file_ext, m.id AS media_file_id, ft.track_id IS NOT NULL AS is_favorite
+                al.title AS album_title, m.duration_ms, m.file_ext, m.id AS media_file_id, ft.track_id IS NOT NULL AS is_favorite, al.cover_artwork_id
             FROM tracks t
             LEFT JOIN albums al ON t.album_id = al.id
             JOIN media_files m ON t.id = m.track_id
@@ -538,7 +540,7 @@ impl LibraryService {
             SELECT 
                 t.id, t.title, 
                 (SELECT GROUP_CONCAT(a.name, ', ') FROM track_artists ta2 JOIN artists a ON ta2.artist_id = a.id WHERE ta2.track_id = t.id ORDER BY ta2.position) AS artist_name,
-                al.title AS album_title, m.duration_ms, m.file_ext, m.id AS media_file_id, ft.track_id IS NOT NULL AS is_favorite
+                al.title AS album_title, m.duration_ms, m.file_ext, m.id AS media_file_id, ft.track_id IS NOT NULL AS is_favorite, al.cover_artwork_id
             FROM tracks t
             JOIN track_artists ta ON ta.track_id = t.id
             LEFT JOIN albums al ON t.album_id = al.id
@@ -588,6 +590,7 @@ impl LibraryService {
             format: row.get(5)?,
             media_file_id: row.get(6)?,
             is_favorite: row.get(7)?,
+            cover_artwork_id: row.get(8)?,
         })
     }
 }

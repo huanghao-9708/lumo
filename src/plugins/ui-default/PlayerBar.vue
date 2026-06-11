@@ -14,6 +14,7 @@ import {
 } from 'lucide-vue-next';
 import { computed, onMounted, onUnmounted } from 'vue';
 import { usePlayerStore } from '../../stores/player';
+import { getArtworkUrl } from '../../utils';
 
 const playerStore = usePlayerStore();
 
@@ -64,6 +65,11 @@ onUnmounted(() => {
         class="w-14 h-14 rounded-md shadow-sm overflow-hidden shrink-0 relative group cursor-pointer"
         :class="['bg-gradient-to-br', playerStore.currentTrack.coverColor]"
       >
+        <img 
+          v-if="playerStore.currentTrack?.cover_artwork_id"
+          :src="getArtworkUrl(playerStore.currentTrack.cover_artwork_id)"
+          class="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+        />
         <div class="absolute inset-0 bg-black/10 group-hover:bg-black/0 transition-smooth"></div>
       </div>
       <div class="flex flex-col justify-center overflow-hidden">

@@ -156,6 +156,8 @@ pub struct TrackDTO {
     pub media_file_id: i64,
     /// 用户是否已将此歌曲标记为“我喜欢”
     pub is_favorite: bool,
+    /// 封面图片 ID
+    pub cover_artwork_id: Option<i64>,
 }
 
 /// 传输给前端的专辑数据传输对象

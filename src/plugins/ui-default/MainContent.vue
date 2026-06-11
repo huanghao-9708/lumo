@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Search, Filter, List, LayoutGrid, Square, Heart, MoreVertical, AudioLines } from 'lucide-vue-next';
+import { Search, Filter, List, LayoutGrid, Square, Heart, MoreVertical, AudioLines, Play } from 'lucide-vue-next';
 import { usePlayerStore } from '../../stores/player';
 
 const playerStore = usePlayerStore();
@@ -27,7 +27,12 @@ const playerStore = usePlayerStore();
 
     <!-- Toolbar -->
     <div class="px-8 pb-4 flex items-center justify-between shrink-0">
-      <div class="flex-1"></div>
+      <div class="flex-1 flex items-center">
+        <button @click="playerStore.playAll(playerStore.tracks, 0)" class="flex items-center gap-1.5 px-4 py-1.5 rounded-full bg-brand-orange text-white hover:bg-brand-orange-light transition-smooth shadow-sm text-sm font-medium">
+          <Play class="w-4 h-4 fill-current" />
+          播放全部
+        </button>
+      </div>
       <!-- View Options -->
       <div class="flex items-center gap-2">
         <button class="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-smooth">
@@ -64,7 +69,7 @@ const playerStore = usePlayerStore();
       <div 
         v-for="(song, index) in playerStore.tracks" 
         :key="song.id"
-        @click="playerStore.playTrack(song.id)"
+        @dblclick="playerStore.playAll(playerStore.tracks, index)"
         class="flex items-center text-sm py-2 px-4 rounded-xl group transition-smooth cursor-pointer"
         :class="playerStore.currentTrack.id === song.id ? 'bg-orange-50/40 text-brand-orange shadow-[inset_3px_0_0_0_#f58220]' : 'text-gray-600 hover:bg-gray-50 hover:shadow-sm'"
       >

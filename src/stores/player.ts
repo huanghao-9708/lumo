@@ -11,6 +11,7 @@ export interface Track {
   durationSec: number;
   format: string;
   coverColor: string;
+  cover_artwork_id?: number | null;
   isFavorite: boolean;
   primary_file_id?: number | null;
 }
@@ -198,7 +199,7 @@ export const usePlayerStore = defineStore("player", () => {
         duration: formatTime(t.duration_ms / 1000),
         durationSec: Math.floor(t.duration_ms / 1000),
         format: t.format ? t.format.toUpperCase() : 'UNKNOWN',
-        coverColor: getDeterministicColor(t.album_title || t.title || 'Unknown'),
+        coverColor: getDeterministicColor(t.album_title || t.title || 'Unknown'), cover_artwork_id: t.cover_artwork_id,
         isFavorite: t.is_favorite || false,
         primary_file_id: t.media_file_id
       }));
@@ -266,7 +267,7 @@ export const usePlayerStore = defineStore("player", () => {
         duration: formatTime(t.duration_ms / 1000),
         durationSec: Math.floor(t.duration_ms / 1000),
         format: t.format ? t.format.toUpperCase() : 'UNKNOWN',
-        coverColor: getDeterministicColor(t.album_title || t.title || 'Unknown'),
+        coverColor: getDeterministicColor(t.album_title || t.title || 'Unknown'), cover_artwork_id: t.cover_artwork_id,
         isFavorite: t.is_favorite || false,
         primary_file_id: t.media_file_id
       }));
@@ -287,7 +288,7 @@ export const usePlayerStore = defineStore("player", () => {
         duration: formatTime(t.duration_ms / 1000),
         durationSec: Math.floor(t.duration_ms / 1000),
         format: t.format ? t.format.toUpperCase() : 'UNKNOWN',
-        coverColor: getDeterministicColor(t.album_title || t.title || 'Unknown'),
+        coverColor: getDeterministicColor(t.album_title || t.title || 'Unknown'), cover_artwork_id: t.cover_artwork_id,
         isFavorite: t.is_favorite || false,
         primary_file_id: t.media_file_id
       }));
@@ -307,7 +308,7 @@ export const usePlayerStore = defineStore("player", () => {
         duration: formatTime(t.duration_ms / 1000),
         durationSec: Math.floor(t.duration_ms / 1000),
         format: t.format ? t.format.toUpperCase() : 'UNKNOWN',
-        coverColor: getDeterministicColor(t.album_title || t.title || 'Unknown'),
+        coverColor: getDeterministicColor(t.album_title || t.title || 'Unknown'), cover_artwork_id: t.cover_artwork_id,
         isFavorite: t.is_favorite || false,
         primary_file_id: t.media_file_id
       }));
@@ -324,6 +325,12 @@ export const usePlayerStore = defineStore("player", () => {
 
   async function playTrack(index: number) {
     await playQueue(tracks.value, index);
+  }
+
+  async function playAll(tracksToPlay: Track[], startIndex: number = 0) {
+    if (tracksToPlay && tracksToPlay.length > 0) {
+      await playQueue(tracksToPlay, startIndex);
+    }
   }
 
   const albumsLimit = 50;
@@ -439,7 +446,7 @@ export const usePlayerStore = defineStore("player", () => {
            duration: formatTime(t.duration_ms / 1000),
            durationSec: Math.floor(t.duration_ms / 1000),
            format: t.format ? t.format.toUpperCase() : 'UNKNOWN',
-           coverColor: getDeterministicColor(t.album_title || t.title || 'Unknown'),
+           coverColor: getDeterministicColor(t.album_title || t.title || 'Unknown'), cover_artwork_id: t.cover_artwork_id,
            isFavorite: t.is_favorite || false,
            primary_file_id: t.media_file_id
          }));
@@ -467,7 +474,7 @@ export const usePlayerStore = defineStore("player", () => {
              duration: formatTime(t.duration_ms / 1000),
              durationSec: Math.floor(t.duration_ms / 1000),
              format: t.format ? t.format.toUpperCase() : 'UNKNOWN',
-             coverColor: getDeterministicColor(t.album_title || t.title || 'Unknown'),
+             coverColor: getDeterministicColor(t.album_title || t.title || 'Unknown'), cover_artwork_id: t.cover_artwork_id,
              isFavorite: t.is_favorite || false,
              primary_file_id: t.media_file_id
            }));
@@ -498,7 +505,7 @@ export const usePlayerStore = defineStore("player", () => {
             duration: formatTime(t.duration_ms / 1000),
             durationSec: Math.floor(t.duration_ms / 1000),
             format: t.format ? t.format.toUpperCase() : 'UNKNOWN',
-            coverColor: getDeterministicColor(t.album_title || t.title || 'Unknown'),
+            coverColor: getDeterministicColor(t.album_title || t.title || 'Unknown'), cover_artwork_id: t.cover_artwork_id,
             isFavorite: t.is_favorite || false,
             primary_file_id: t.media_file_id
       }));
@@ -786,6 +793,7 @@ export const usePlayerStore = defineStore("player", () => {
     tracks,
     currentTime,
     playTrack,
+    playAll,
     fetchTracks,
     fetchAlbums,
     fetchArtists,

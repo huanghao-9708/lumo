@@ -48,7 +48,10 @@ onMounted(() => {
     
     <!-- Logo & Back Button -->
     <div class="mb-12 relative z-10 flex items-center justify-between">
-      <h1 class="font-serif font-bold text-3xl tracking-widest text-black pointer-events-none">LUMO-V</h1>
+      <div class="flex items-center gap-2">
+        <img src="/lumo_log.ico" class="w-8 h-8 object-contain drop-shadow-sm" />
+        <h1 class="font-serif font-bold text-3xl tracking-widest text-black pointer-events-none">LUMO</h1>
+      </div>
       <button 
         @click="playerStore.goBack()"
         :disabled="!playerStore.canGoBack"
