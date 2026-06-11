@@ -54,7 +54,7 @@ pub fn init_db(db_path: PathBuf) -> Result<Connection> {
         CREATE TABLE IF NOT EXISTS artists (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
-            normalized_name TEXT NOT NULL, -- 用于去重的小写或归一化名字
+            normalized_name TEXT NOT NULL UNIQUE, -- 用于去重的小写或归一化名字
             sort_name TEXT,
             kind TEXT DEFAULT 'unknown' CHECK (kind IN ('unknown', 'person', 'group', 'various')),
             mbid TEXT, -- MusicBrainz ID

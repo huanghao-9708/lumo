@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { ref, computed } from "vue";
+import { ref, computed, watch } from "vue";
 import { invoke } from '@tauri-apps/api/core';
 
 export interface Track {
@@ -113,29 +113,10 @@ export const usePlayerStore = defineStore("player", () => {
   const sources = ref<MusicSource[]>([]);
 
   // 专辑数据
-  const albums = ref<Album[]>([
-    { id: 1, title: "Sleep", artist: "Max Richter", year: 2015, coverColor: "from-blue-600 to-indigo-900" },
-    { id: 2, title: "The Blue Notebooks", artist: "Max Richter", year: 2004, coverColor: "from-purple-600 to-slate-900" },
-    { id: 3, title: "Divenire", artist: "Ludovic Einaudi", year: 2006, coverColor: "from-amber-500 via-orange-600 to-stone-900" },
-    { id: 4, title: "Una Mattina", artist: "Ludovic Einaudi", year: 2004, coverColor: "from-cyan-600 to-emerald-950" },
-    { id: 5, title: "Ma Fleur", artist: "The Cinematic Orchestra", year: 2007, coverColor: "from-teal-500 to-neutral-900" },
-    { id: 6, title: "The Earth Is Not a Cold Dead Place", artist: "Explosions in the Sky", year: 2003, coverColor: "from-red-500 to-zinc-900" },
-    { id: 7, title: "Bon Iver", artist: "Bon Iver", year: 2011, coverColor: "from-lime-600 to-stone-950" },
-    { id: 8, title: "Takk...", artist: "Sigur Rós", year: 2005, coverColor: "from-rose-600 to-zinc-900" },
-  ]);
+  const albums = ref<Album[]>([]);
 
   // 艺人数据
-  const artists = ref<Artist[]>([
-    { id: 1, name: "Max Richter", trackCount: 24, avatarColor: "from-blue-600 to-indigo-900" },
-    { id: 2, name: "Ludovic Einaudi", trackCount: 18, avatarColor: "from-amber-500 to-stone-900" },
-    { id: 3, name: "The Cinematic Orchestra", trackCount: 12, avatarColor: "from-teal-500 to-neutral-900" },
-    { id: 4, name: "Explosions in the Sky", trackCount: 9, avatarColor: "from-red-500 to-zinc-900" },
-    { id: 5, name: "Alexandre Desplat", trackCount: 31, avatarColor: "from-sky-700 to-zinc-950" },
-    { id: 6, name: "Bon Iver", trackCount: 14, avatarColor: "from-lime-600 to-stone-950" },
-    { id: 7, name: "Sigur Rós", trackCount: 16, avatarColor: "from-rose-600 to-zinc-900" },
-    { id: 8, name: "Hans Zimmer", trackCount: 42, avatarColor: "from-blue-950 to-zinc-955" },
-    { id: 9, name: "Yann Tiersen", trackCount: 20, avatarColor: "from-yellow-600 to-stone-900" },
-  ]);
+  const artists = ref<Artist[]>([]);
 
   // 歌曲数据列表
   const tracks = ref<Track[]>([]);
@@ -303,29 +284,161 @@ export const usePlayerStore = defineStore("player", () => {
     await playQueue(tracks.value, index);
   }
 
-  async function fetchAlbums(reset: boolean = false) { void reset; }
-  async function fetchArtists(reset: boolean = false) { void reset; }
+  const albumsLimit = 50;
+  let albumsOffset = 0;
+  const hasMoreAlbums = ref(true);
+  const isLoadingAlbums = ref(false);
+
+  async function fetchAlbums(reset: boolean = false) {
+    if (reset) {
+      albums.value = [];
+      albumsOffset = 0;
+      hasMoreAlbums.value = true;
+    }
+    if (!hasMoreAlbums.value || isLoadingAlbums.value) return;
+    isLoadingAlbums.value = true;
+    try {
+      const result: any[] = await invoke('library_get_albums', {
+        limit: albumsLimit,
+        offset: albumsOffset,
+        searchKeyword: searchQuery.value || null
+      });
+      if (result.length < albumsLimit) {
+        hasMoreAlbums.value = false;
+      }
+      const newAlbums = result.map((a: any) => ({
+        id: a.id,
+        title: a.title,
+        artist: a.artist_name || '未知艺人',
+        year: a.release_year || new Date().getFullYear(),
+        coverColor: getDeterministicColor(a.title || 'Unknown'),
+        cover_artwork_id: a.cover_artwork_id,
+        artist_name: a.artist_name,
+        track_count: a.track_count
+      }));
+      albums.value.push(...newAlbums);
+      albumsOffset += result.length;
+    } catch (e) {
+      console.error(e);
+    } finally {
+      isLoadingAlbums.value = false;
+    }
+  }
+
+  const artistsLimit = 50;
+  let artistsOffset = 0;
+  const hasMoreArtists = ref(true);
+  const isLoadingArtists = ref(false);
+
+  async function fetchArtists(reset: boolean = false) {
+    if (reset) {
+      artists.value = [];
+      artistsOffset = 0;
+      hasMoreArtists.value = true;
+    }
+    if (!hasMoreArtists.value || isLoadingArtists.value) return;
+    isLoadingArtists.value = true;
+    try {
+      const result: any[] = await invoke('library_get_artists', {
+        limit: artistsLimit,
+        offset: artistsOffset,
+        searchKeyword: searchQuery.value || null
+      });
+      if (result.length < artistsLimit) {
+        hasMoreArtists.value = false;
+      }
+      const newArtists = result.map((a: any) => ({
+        id: a.id,
+        name: a.name,
+        trackCount: a.track_count,
+        avatarColor: getDeterministicColor(a.name || 'Unknown'),
+        track_count: a.track_count
+      }));
+      artists.value.push(...newArtists);
+      artistsOffset += result.length;
+    } catch (e) {
+      console.error(e);
+    } finally {
+      isLoadingArtists.value = false;
+    }
+  }
 
   const currentTrack = computed(() => {
     return queue.value[currentIndex.value] || null;
   });
 
-  const currentAlbumDetails = computed(() => {
-    if (!activeAlbumId.value) return null;
-    const album = albums.value.find(a => a.id === activeAlbumId.value);
-    if (!album) return null;
-    const albumTracks = tracks.value.filter(t => t.album === album.title);
-    return { ...album, tracks: albumTracks };
+  const currentAlbumDetailsData = ref<any>(null);
+  const currentArtistDetailsData = ref<any>(null);
+
+  watch(activeAlbumId, async (newId) => {
+    if (newId) {
+       const album = albums.value.find(a => a.id === newId);
+       if (album) {
+         try {
+           const result: any[] = await invoke('library_get_album_tracks', { albumId: newId });
+           const tracksData = result.map(t => ({
+             ...t,
+             artist: t.artist_name || '未知艺人',
+             album: t.album_title || '未知专辑',
+             duration: formatTime(t.duration_ms / 1000),
+             durationSec: Math.floor(t.duration_ms / 1000),
+             format: t.format ? t.format.toUpperCase() : 'UNKNOWN',
+             coverColor: getDeterministicColor(t.album_title || t.title || 'Unknown'),
+             isFavorite: t.is_favorite || false,
+             primary_file_id: t.media_file_id
+           }));
+           currentAlbumDetailsData.value = { ...album, tracks: tracksData };
+         } catch (e) {
+           console.error(e);
+         }
+       }
+    } else {
+       currentAlbumDetailsData.value = null;
+    }
   });
 
-  const currentArtistDetails = computed(() => {
-    if (!activeArtistId.value) return null;
-    const artist = artists.value.find(a => a.id === activeArtistId.value);
-    if (!artist) return null;
-    const artistTracks = tracks.value.filter(t => t.artist === artist.name);
-    const artistAlbums = albums.value.filter(a => a.artist === artist.name);
-    return { ...artist, tracks: artistTracks, albums: artistAlbums };
+  watch(activeArtistId, async (newId) => {
+    if (newId) {
+      const artist = artists.value.find(a => a.id === newId);
+      if (artist) {
+        try {
+          const [tracksResult, albumsResult] = await Promise.all([
+             invoke<any[]>('library_get_artist_tracks', { artistId: newId }),
+             invoke<any[]>('library_get_artist_albums', { artistId: newId })
+          ]);
+          const tracksData = tracksResult.map(t => ({
+             ...t,
+             artist: t.artist_name || '未知艺人',
+             album: t.album_title || '未知专辑',
+             duration: formatTime(t.duration_ms / 1000),
+             durationSec: Math.floor(t.duration_ms / 1000),
+             format: t.format ? t.format.toUpperCase() : 'UNKNOWN',
+             coverColor: getDeterministicColor(t.album_title || t.title || 'Unknown'),
+             isFavorite: t.is_favorite || false,
+             primary_file_id: t.media_file_id
+           }));
+           const artistAlbums = albumsResult.map(a => ({
+              id: a.id,
+              title: a.title,
+              artist: a.artist_name || '未知艺人',
+              year: a.release_year || new Date().getFullYear(),
+              coverColor: getDeterministicColor(a.title || 'Unknown'),
+              cover_artwork_id: a.cover_artwork_id,
+              artist_name: a.artist_name,
+              track_count: a.track_count
+           }));
+           currentArtistDetailsData.value = { ...artist, tracks: tracksData, albums: artistAlbums };
+        } catch(e) {
+           console.error(e);
+        }
+      }
+    } else {
+      currentArtistDetailsData.value = null;
+    }
   });
+
+  const currentAlbumDetails = computed(() => currentAlbumDetailsData.value);
+  const currentArtistDetails = computed(() => currentArtistDetailsData.value);
 
   const localSources = computed(() => {
     return sources.value.filter(s => s.kind === 'local');

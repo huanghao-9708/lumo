@@ -12,6 +12,7 @@ import {
 } from 'lucide-vue-next';
 import { computed } from 'vue';
 import { usePlayerStore } from '../../stores/player';
+import { getArtworkUrl } from '../../utils';
 
 const playerStore = usePlayerStore();
 
@@ -53,13 +54,11 @@ const formatTimeMs = (ms: number) => {
   <footer class="h-[100px] bg-transparent border-t border-[#e8e6df] flex items-center justify-between px-10 shrink-0 relative z-20">
     <!-- Left: Track Info -->
     <div class="flex items-center gap-6 w-[300px]">
-      <div 
-        class="w-[50px] h-[50px] overflow-hidden shrink-0 relative border border-[#dcdad1]/50 bg-[#eae8e1] transition-colors duration-700"
-      >
+      <div class="w-12 h-12 bg-[#e8e6df] rounded-sm overflow-hidden shadow-sm shrink-0 relative group">
         <img 
           v-if="playerStore.currentTrack?.cover_artwork_id"
-          :src="'lumo://artwork/' + playerStore.currentTrack.cover_artwork_id"
-          class="w-full h-full object-cover"
+          :src="getArtworkUrl(playerStore.currentTrack.cover_artwork_id)"
+          class="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
         />
         <div v-else class="absolute inset-0 opacity-20" style="background-image: radial-gradient(circle, #000 1px, transparent 1px); background-size: 4px 4px;"></div>
       </div>

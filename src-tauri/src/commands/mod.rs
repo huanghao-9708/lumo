@@ -118,6 +118,24 @@ pub fn library_get_artists(db_state: State<'_, DbState>, limit: u32, offset: u32
 }
 
 #[tauri::command]
+pub fn library_get_album_tracks(db_state: State<'_, DbState>, album_id: i64) -> Result<Vec<TrackDTO>, String> {
+    let conn = db_state.db.lock().map_err(|e| e.to_string())?;
+    LibraryService::get_album_tracks(&conn, album_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn library_get_artist_albums(db_state: State<'_, DbState>, artist_id: i64) -> Result<Vec<AlbumDTO>, String> {
+    let conn = db_state.db.lock().map_err(|e| e.to_string())?;
+    LibraryService::get_artist_albums(&conn, artist_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn library_get_artist_tracks(db_state: State<'_, DbState>, artist_id: i64) -> Result<Vec<TrackDTO>, String> {
+    let conn = db_state.db.lock().map_err(|e| e.to_string())?;
+    LibraryService::get_artist_tracks(&conn, artist_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn playback_play(playback_state: State<'_, PlaybackState>, db_state: State<'_, DbState>, media_file_id: i64) -> Result<(), String> {
     let path = {
         let conn = db_state.db.lock().map_err(|e| e.to_string())?;

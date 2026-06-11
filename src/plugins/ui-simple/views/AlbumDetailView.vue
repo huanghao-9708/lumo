@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Heart, AudioLines, MoveLeft } from 'lucide-vue-next';
 import { usePlayerStore } from '../../../stores/player';
+import { getArtworkUrl } from '../../../utils';
 
 const playerStore = usePlayerStore();
 
@@ -27,7 +28,13 @@ const goBack = () => {
       <!-- 专辑信息头 -->
       <div class="flex items-end gap-10 mb-12 shrink-0">
         <div class="w-48 h-48 relative overflow-hidden bg-[#e8e6df] shadow-sm shrink-0">
+          <img 
+            v-if="playerStore.currentAlbumDetails.cover_artwork_id"
+            :src="getArtworkUrl(playerStore.currentAlbumDetails.cover_artwork_id)"
+            class="absolute inset-0 w-full h-full object-cover"
+          />
           <div 
+            v-else
             class="absolute inset-0 bg-gradient-to-br opacity-80"
             :class="playerStore.currentAlbumDetails.coverColor"
           ></div>

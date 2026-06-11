@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Heart, AudioLines, MoveLeft } from 'lucide-vue-next';
 import { usePlayerStore } from '../../../stores/player';
+import { getArtworkUrl } from '../../../utils';
 
 const playerStore = usePlayerStore();
 
@@ -97,7 +98,13 @@ const goToAlbum = (albumId: number) => {
               class="group cursor-pointer flex flex-col"
             >
               <div class="relative aspect-square w-full mb-4 overflow-hidden bg-[#e8e6df] shadow-sm">
+                <img 
+                  v-if="album.cover_artwork_id"
+                  :src="getArtworkUrl(album.cover_artwork_id)"
+                  class="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-700 ease-out"
+                />
                 <div 
+                  v-else
                   class="absolute inset-0 bg-gradient-to-br opacity-80 group-hover:scale-105 transition-transform duration-700 ease-out"
                   :class="album.coverColor"
                 ></div>

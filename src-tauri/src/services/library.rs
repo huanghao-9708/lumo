@@ -19,9 +19,21 @@ impl LibraryService {
         let file_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
-        // 1. 处理艺人关联 (支持通过 `/` 或 `,` 切分多艺人，如 "Artist A / Artist B")
+        // 1. 处理艺人关联 (支持更多分隔符)
         let artist_str = metadata.artist.as_deref().unwrap_or("Unknown Artist");
-        let artist_names: Vec<&str> = artist_str.split(&['/', ','][..]).map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+        let cleaned_str = artist_str
+            .replace(" feat. ", "/")
+            .replace(" ft. ", "/")
+            .replace(" Feat. ", "/")
+            .replace(" Ft. ", "/")
+            .replace(" & ", "/")
+            .replace("&", "/")
+            .replace(";", "/")
+            .replace("；", "/")
+            .replace("、", "/")
+            .replace("，", "/")
+            .replace(",", "/");
+        let artist_names: Vec<&str> = cleaned_str.split('/').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
         let mut artist_ids = Vec::new();
 
         for aname in &artist_names {
@@ -464,6 +476,76 @@ impl LibraryService {
             ORDER BY ft.favorited_at DESC
         ")?;
         let rows = stmt.query_map([], Self::map_track_row)?;
+        let mut result = Vec::new();
+        for r in rows { result.push(r?); }
+        Ok(result)
+    }
+
+    /// 获取指定专辑下的所有歌曲
+    pub fn get_album_tracks(conn: &Connection, album_id: i64) -> rusqlite::Result<Vec<TrackDTO>> {
+        let mut stmt = conn.prepare("
+            SELECT 
+                t.id, t.title, 
+                (SELECT GROUP_CONCAT(a.name, ', ') FROM track_artists ta2 JOIN artists a ON ta2.artist_id = a.id WHERE ta2.track_id = t.id ORDER BY ta2.position) AS artist_name,
+                al.title AS album_title, m.duration_ms, m.file_ext, m.id AS media_file_id, ft.track_id IS NOT NULL AS is_favorite
+            FROM tracks t
+            LEFT JOIN albums al ON t.album_id = al.id
+            JOIN media_files m ON t.id = m.track_id
+            LEFT JOIN favorite_tracks ft ON t.id = ft.track_id
+            WHERE t.album_id = ?1
+            ORDER BY t.disc_no ASC, t.track_no ASC, t.title ASC
+        ")?;
+        let rows = stmt.query_map([album_id], Self::map_track_row)?;
+        let mut result = Vec::new();
+        for r in rows { result.push(r?); }
+        Ok(result)
+    }
+
+    /// 获取指定艺人参与的所有专辑
+    pub fn get_artist_albums(conn: &Connection, artist_id: i64) -> rusqlite::Result<Vec<AlbumDTO>> {
+        let mut stmt = conn.prepare("
+            SELECT DISTINCT
+                al.id, al.title, ar.name AS artist_name, al.cover_artwork_id,
+                (SELECT COUNT(t2.id) FROM tracks t2 WHERE t2.album_id = al.id) as track_count
+            FROM albums al
+            LEFT JOIN artists ar ON al.album_artist_id = ar.id
+            LEFT JOIN tracks t ON t.album_id = al.id
+            LEFT JOIN track_artists ta ON ta.track_id = t.id
+            WHERE al.album_artist_id = ?1 OR ta.artist_id = ?1
+            GROUP BY al.id
+            ORDER BY al.release_year DESC, al.title ASC
+        ")?;
+        let rows = stmt.query_map([artist_id, artist_id], |row| {
+            Ok(AlbumDTO {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                artist_name: row.get(2)?,
+                cover_artwork_id: row.get(3)?,
+                track_count: row.get(4)?,
+            })
+        })?;
+        let mut result = Vec::new();
+        for r in rows { result.push(r?); }
+        Ok(result)
+    }
+
+    /// 获取指定艺人名下的热门歌曲（限20首）
+    pub fn get_artist_tracks(conn: &Connection, artist_id: i64) -> rusqlite::Result<Vec<TrackDTO>> {
+        let mut stmt = conn.prepare("
+            SELECT 
+                t.id, t.title, 
+                (SELECT GROUP_CONCAT(a.name, ', ') FROM track_artists ta2 JOIN artists a ON ta2.artist_id = a.id WHERE ta2.track_id = t.id ORDER BY ta2.position) AS artist_name,
+                al.title AS album_title, m.duration_ms, m.file_ext, m.id AS media_file_id, ft.track_id IS NOT NULL AS is_favorite
+            FROM tracks t
+            JOIN track_artists ta ON ta.track_id = t.id
+            LEFT JOIN albums al ON t.album_id = al.id
+            JOIN media_files m ON t.id = m.track_id
+            LEFT JOIN favorite_tracks ft ON t.id = ft.track_id
+            WHERE ta.artist_id = ?1
+            ORDER BY t.play_count DESC, t.title ASC
+            LIMIT 20
+        ")?;
+        let rows = stmt.query_map([artist_id], Self::map_track_row)?;
         let mut result = Vec::new();
         for r in rows { result.push(r?); }
         Ok(result)

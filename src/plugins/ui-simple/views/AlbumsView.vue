@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { usePlayerStore } from '../../../stores/player';
 import { onMounted } from 'vue';
+import { getArtworkUrl } from '../../../utils';
 const playerStore = usePlayerStore();
 
 const goToAlbum = (albumId: number) => {
@@ -35,12 +36,13 @@ onMounted(() => {
         <div class="relative aspect-square w-full mb-4 overflow-hidden bg-[#e8e6df] shadow-sm">
           <img 
             v-if="album.cover_artwork_id"
-            :src="'lumo://artwork/' + album.cover_artwork_id"
+            :src="getArtworkUrl(album.cover_artwork_id)"
             class="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-700 ease-out"
           />
           <div 
             v-else
-            class="absolute inset-0 bg-gradient-to-br opacity-80 group-hover:scale-105 transition-transform duration-700 ease-out from-gray-400 to-gray-600"
+            class="absolute inset-0 bg-gradient-to-br opacity-80 group-hover:scale-105 transition-transform duration-700 ease-out"
+            :class="album.coverColor"
           ></div>
           <div class="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors duration-300"></div>
         </div>

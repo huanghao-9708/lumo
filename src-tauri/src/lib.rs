@@ -7,6 +7,7 @@ use db::{init_db, DbState};
 use services::playback::PlaybackManager;
 use crate::commands::{
     PlaybackState, source_add_local, source_scan, source_list, source_remove, library_get_tracks, library_get_albums, library_get_artists,
+    library_get_album_tracks, library_get_artist_albums, library_get_artist_tracks,
     playback_play, playback_pause, playback_resume, playback_stop,
     playback_set_volume, playback_get_pos, playback_seek,
     library_toggle_favorite, library_create_playlist, library_get_playlists,
@@ -45,8 +46,10 @@ pub fn run() {
         .register_uri_scheme_protocol("lumo", |ctx, request| {
             let app = ctx.app_handle();
             let uri = request.uri().to_string();
-            let path = uri.strip_prefix("lumo://artwork/").unwrap_or("").trim_end_matches('/');
-            let artwork_id = path.parse::<i64>().unwrap_or(0);
+            // 兼容 Windows WebView2 (`http://lumo.localhost/artwork/1`) 和 标准 (`lumo://artwork/1`)
+            // 去除可能存在的查询参数 (e.g., ?v=123)
+            let uri_without_query = uri.split('?').next().unwrap_or(&uri);
+            let artwork_id = uri_without_query.trim_end_matches('/').split('/').last().unwrap_or("").parse::<i64>().unwrap_or(0);
             
             if artwork_id > 0 {
                 use tauri::Manager;
@@ -87,6 +90,9 @@ pub fn run() {
             library_get_tracks,
             library_get_albums,
             library_get_artists,
+            library_get_album_tracks,
+            library_get_artist_albums,
+            library_get_artist_tracks,
             playback_play,
             playback_pause,
             playback_resume,
