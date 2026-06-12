@@ -727,16 +727,40 @@ impl LibraryService {
 
     /// 递归将一个目录下的所有已索引歌曲添加到歌单
     pub fn add_folder_to_playlist(conn: &rusqlite::Connection, playlist_id: i64, source_id: i64, folder_path: &str) -> rusqlite::Result<()> {
-        // 使用 LIKE 匹配该目录下所有文件
         let pattern = format!("{}%", folder_path);
-        conn.execute(
-            "INSERT INTO playlist_items (playlist_id, track_id)
-             SELECT ?1, track_id 
+        
+        // 1. 获取目标文件夹下所有的 track_id
+        let mut stmt = conn.prepare("
+             SELECT track_id 
              FROM media_files 
-             WHERE source_id = ?2 AND track_id IS NOT NULL AND normalized_path LIKE ?3
-             AND track_id NOT IN (SELECT track_id FROM playlist_items WHERE playlist_id = ?1)",
-            rusqlite::params![playlist_id, source_id, pattern],
-        )?;
+             WHERE source_id = ?1 AND track_id IS NOT NULL AND normalized_path LIKE ?2
+             AND track_id NOT IN (SELECT track_id FROM playlist_items WHERE playlist_id = ?3)
+             ORDER BY normalized_path ASC
+        ")?;
+        
+        let track_ids: Vec<i64> = stmt.query_map(rusqlite::params![source_id, pattern, playlist_id], |row| row.get(0))?
+            .filter_map(Result::ok)
+            .collect();
+            
+        if track_ids.is_empty() {
+            return Ok(());
+        }
+
+        // 2. 依次插入，确保分配 position
+        let max_pos: Option<f64> = conn.query_row(
+            "SELECT MAX(position) FROM playlist_items WHERE playlist_id = ?1",
+            rusqlite::params![playlist_id],
+            |row| row.get(0)
+        ).unwrap_or(None);
+        
+        let mut next_pos = max_pos.unwrap_or(0.0) + 1.0;
+        
+        let mut insert_stmt = conn.prepare("INSERT INTO playlist_items (playlist_id, track_id, position) VALUES (?1, ?2, ?3)")?;
+        for track_id in track_ids {
+            insert_stmt.execute(rusqlite::params![playlist_id, track_id, next_pos])?;
+            next_pos += 1.0;
+        }
+        
         Ok(())
     }
 }
