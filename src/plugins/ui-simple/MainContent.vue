@@ -10,6 +10,7 @@ import SettingsView from './views/SettingsView.vue';
 import AlbumDetailView from './views/AlbumDetailView.vue';
 import ArtistDetailView from './views/ArtistDetailView.vue';
 import PlaylistDetailView from './views/PlaylistDetailView.vue';
+import FoldersView from './views/FoldersView.vue';
 
 const playerStore = usePlayerStore();
 
@@ -29,6 +30,7 @@ const currentView = computed(() => {
   if (tab === '专辑') return AlbumsView;
   if (tab === '艺人') return ArtistsView;
   if (tab === '设置') return SettingsView;
+  if (tab === '文件夹') return FoldersView;
   if (tab === '专辑详情') return AlbumDetailView;
   if (tab === '艺人详情') return ArtistDetailView;
   if (tab === '歌单详情') return PlaylistDetailView;

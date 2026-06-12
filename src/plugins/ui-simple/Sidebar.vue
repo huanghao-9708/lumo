@@ -13,6 +13,7 @@ import {
   SunMoon,
   ChevronDown,
   Trash2,
+  Folder,
 } from 'lucide-vue-next';
 import { onMounted } from 'vue';
 import { usePlayerStore } from '../../stores/player';
@@ -99,6 +100,12 @@ onMounted(() => {
             <a href="#" @click.prevent="playerStore.activeLibraryTab = '艺人'" class="flex items-center gap-4 text-[13px] transition-colors" :class="playerStore.activeLibraryTab === '艺人' ? 'text-black font-semibold' : 'text-[#777777] font-medium hover:text-black'">
               <Mic class="w-4 h-4 stroke-[1.5]" />
               <span class="tracking-widest">艺人</span>
+            </a>
+          </li>
+          <li>
+            <a href="#" @click.prevent="playerStore.activeLibraryTab = '文件夹'" class="flex items-center gap-4 text-[13px] transition-colors" :class="playerStore.activeLibraryTab === '文件夹' ? 'text-black font-semibold' : 'text-[#777777] font-medium hover:text-black'">
+              <Folder class="w-4 h-4 stroke-[1.5]" />
+              <span class="tracking-widest">文件夹</span>
             </a>
           </li>
         </ul>

@@ -669,4 +669,74 @@ impl LibraryService {
         }
         Ok(result)
     }
+
+    /// 获取物理文件夹下的内容并结合数据库查询出对应的歌曲信息
+    pub fn get_folder_contents(conn: &Connection, source_id: i64, folder_path: &std::path::Path) -> rusqlite::Result<Vec<crate::models::FolderEntryDTO>> {
+        let mut entries = Vec::new();
+        
+        if let Ok(read_dir) = std::fs::read_dir(folder_path) {
+            for entry_res in read_dir {
+                if let Ok(entry) = entry_res {
+                    let path = entry.path();
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    let is_dir = path.is_dir();
+                    
+                    if is_dir {
+                        entries.push(crate::models::FolderEntryDTO {
+                            name,
+                            is_dir: true,
+                            path: path.to_string_lossy().to_string(),
+                            track: None,
+                        });
+                    } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                        if matches!(ext.to_lowercase().as_str(), "mp3" | "flac" | "wav" | "m4a" | "aac") {
+                            let path_str = path.to_string_lossy().to_string();
+                            let track = Self::get_track_by_path(conn, source_id, &path_str).ok();
+                            
+                            entries.push(crate::models::FolderEntryDTO {
+                                name,
+                                is_dir: false,
+                                path: path_str,
+                                track,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        
+        entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then(a.name.cmp(&b.name)));
+        Ok(entries)
+    }
+
+    /// 通过绝对物理路径精确定位数据库中保存的一首歌
+    pub fn get_track_by_path(conn: &Connection, source_id: i64, path: &str) -> rusqlite::Result<TrackDTO> {
+        let sql = "
+            SELECT 
+                t.id, t.title, 
+                (SELECT GROUP_CONCAT(a.name, ', ') FROM track_artists ta JOIN artists a ON ta.artist_id = a.id WHERE ta.track_id = t.id ORDER BY ta.position) AS artist_name,
+                al.title AS album_title, m.duration_ms, m.file_ext, m.id AS media_file_id, ft.track_id IS NOT NULL AS is_favorite, al.cover_artwork_id
+            FROM media_files m
+            JOIN tracks t ON m.track_id = t.id
+            LEFT JOIN albums al ON t.album_id = al.id
+            LEFT JOIN favorite_tracks ft ON t.id = ft.track_id
+            WHERE m.source_id = ?1 AND m.normalized_path = ?2
+        ";
+        conn.query_row(sql, rusqlite::params![source_id, path], Self::map_track_row)
+    }
+
+    /// 递归将一个目录下的所有已索引歌曲添加到歌单
+    pub fn add_folder_to_playlist(conn: &rusqlite::Connection, playlist_id: i64, source_id: i64, folder_path: &str) -> rusqlite::Result<()> {
+        // 使用 LIKE 匹配该目录下所有文件
+        let pattern = format!("{}%", folder_path);
+        conn.execute(
+            "INSERT INTO playlist_items (playlist_id, track_id)
+             SELECT ?1, track_id 
+             FROM media_files 
+             WHERE source_id = ?2 AND track_id IS NOT NULL AND normalized_path LIKE ?3
+             AND track_id NOT IN (SELECT track_id FROM playlist_items WHERE playlist_id = ?1)",
+            rusqlite::params![playlist_id, source_id, pattern],
+        )?;
+        Ok(())
+    }
 }

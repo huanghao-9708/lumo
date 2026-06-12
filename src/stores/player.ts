@@ -51,6 +51,13 @@ export interface MusicSource {
   username?: string;
 }
 
+export interface FolderEntry {
+  name: string;
+  is_dir: boolean;
+  path: string;
+  track?: any;
+}
+
 export const usePlayerStore = defineStore("player", () => {
   function getDeterministicColor(str: string): string {
     let hash = 0;
@@ -97,6 +104,70 @@ export const usePlayerStore = defineStore("player", () => {
   const activeAlbumId = ref<number | null>(null);
   const activeArtistId = ref<number | null>(null);
   const activePlaylistId = ref<number | null>(null);
+
+  // 文件夹浏览状态
+  const currentFolderContents = ref<FolderEntry[]>([]);
+  const activeFolderSourceId = ref<number | null>(null);
+  const activeFolderPath = ref<string | null>(null);
+  const folderBreadcrumbs = ref<string[]>([]);
+  const isFetchingFolder = ref(false);
+
+  async function fetchFolderContents(sourceId: number, folderPath?: string) {
+    isFetchingFolder.value = true;
+    try {
+      const res: any[] = await invoke('library_get_folder_contents', { sourceId, folderPath: folderPath || null });
+      currentFolderContents.value = res.map(item => ({
+        ...item,
+        track: item.track ? {
+          ...item.track,
+          artist: item.track.artist_name || '未知艺人',
+          album: item.track.album_title || '未知专辑',
+          duration: formatTime(item.track.duration_ms / 1000),
+          durationSec: Math.floor(item.track.duration_ms / 1000),
+          format: item.track.format ? item.track.format.toUpperCase() : 'UNKNOWN',
+          coverColor: getDeterministicColor(item.track.album_title || item.track.title || 'Unknown'),
+          primary_file_id: item.track.media_file_id
+        } : undefined
+      }));
+      activeFolderSourceId.value = sourceId;
+      activeFolderPath.value = folderPath || null;
+      
+      // 更新面包屑
+      if (!folderPath) {
+        folderBreadcrumbs.value = [];
+      } else {
+        // 如果我们进入一个子目录，且当前面包屑最后一个不是它，则加入面包屑
+        if (folderBreadcrumbs.value[folderBreadcrumbs.value.length - 1] !== folderPath) {
+          const isGoingBack = folderBreadcrumbs.value.includes(folderPath);
+          if (isGoingBack) {
+            const idx = folderBreadcrumbs.value.indexOf(folderPath);
+            folderBreadcrumbs.value = folderBreadcrumbs.value.slice(0, idx + 1);
+          } else {
+            folderBreadcrumbs.value.push(folderPath);
+          }
+        }
+      }
+    } catch (e) {
+      console.error(e);
+      currentFolderContents.value = [];
+    } finally {
+      isFetchingFolder.value = false;
+    }
+  }
+
+  async function addFolderToPlaylist(sourceId: number, folderPath: string, playlistId: number) {
+    try {
+      await invoke('library_add_folder_to_playlist', { sourceId, folderPath, playlistId });
+      // 刷新对应歌单的轨道
+      if (activeLibraryTab.value === playlists.value.find(p => p.id === playlistId)?.name) {
+        fetchPlaylistTracks(playlistId);
+      }
+      return true;
+    } catch (e) {
+      console.error("Failed to add folder to playlist:", e);
+      return false;
+    }
+  }
 
   // 页面导航历史栈
   interface HistoryState {
@@ -1106,6 +1177,13 @@ export const usePlayerStore = defineStore("player", () => {
     addToPlaylist,
     fetchSources,
     toggleFavorite,
+    currentFolderContents,
+    activeFolderSourceId,
+    activeFolderPath,
+    folderBreadcrumbs,
+    isFetchingFolder,
+    fetchFolderContents,
+    addFolderToPlaylist,
     searchQuery,
     canGoBack,
     goBack,

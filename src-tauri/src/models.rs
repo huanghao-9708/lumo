@@ -231,3 +231,15 @@ pub struct TrackFileInfoDTO {
     pub format: Option<String>,
 }
 
+/// 传输给前端的文件夹内容结构
+#[derive(Debug, serde::Serialize)]
+pub struct FolderEntryDTO {
+    /// 文件夹或文件名称
+    pub name: String,
+    /// 是否为文件夹
+    pub is_dir: bool,
+    /// 绝对路径或相对于系统的归一化路径
+    pub path: String,
+    /// 如果是音频文件且被索引，则附带其完整歌曲信息
+    pub track: Option<TrackDTO>,
+}

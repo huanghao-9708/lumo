@@ -348,3 +348,27 @@ pub fn library_clear_cache(app: tauri::AppHandle, db_state: State<'_, DbState>) 
     Ok(())
 }
 
+#[tauri::command]
+pub fn library_get_folder_contents(db_state: State<'_, DbState>, source_id: i64, folder_path: Option<String>) -> Result<Vec<crate::models::FolderEntryDTO>, String> {
+    let conn = db_state.db.lock().map_err(|e| e.to_string())?;
+    
+    // 如果未指定 folder_path，则使用该 source 对应的本地根路径
+    let real_path = if let Some(p) = folder_path {
+        std::path::PathBuf::from(p)
+    } else {
+        let root_uri: String = conn.query_row(
+            "SELECT root_uri FROM sources WHERE id = ?1",
+            rusqlite::params![source_id],
+            |row| row.get(0),
+        ).map_err(|e| e.to_string())?;
+        std::path::PathBuf::from(root_uri)
+    };
+    
+    LibraryService::get_folder_contents(&conn, source_id, &real_path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn library_add_folder_to_playlist(db_state: State<'_, DbState>, source_id: i64, folder_path: String, playlist_id: i64) -> Result<(), String> {
+    let conn = db_state.db.lock().map_err(|e| e.to_string())?;
+    LibraryService::add_folder_to_playlist(&conn, playlist_id, source_id, &folder_path).map_err(|e| e.to_string())
+}
