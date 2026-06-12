@@ -207,3 +207,27 @@ pub struct ArtistStatsDTO {
     /// 该艺人参与的专辑总数
     pub album_count: i64,
 }
+
+/// 传输给前端的物理音频文件详细元数据传输对象
+#[derive(Debug, serde::Serialize)]
+pub struct TrackFileInfoDTO {
+    /// 媒体文件 ID
+    pub id: i64,
+    /// 物理文件路径
+    pub path: String,
+    /// 文件大小（字节）
+    pub file_size: Option<i64>,
+    /// 时长（毫秒）
+    pub duration_ms: Option<i64>,
+    /// 比特率（bps）
+    pub bitrate: Option<i64>,
+    /// 采样率（Hz）
+    pub sample_rate: Option<i64>,
+    /// 位深（如 16, 24）
+    pub bit_depth: Option<i64>,
+    /// 声道数
+    pub channels: Option<i64>,
+    /// 文件格式（如 MP3, FLAC）
+    pub format: Option<String>,
+}
+

@@ -1,11 +1,21 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue';
-import { Heart, AudioLines, Play, Plus } from 'lucide-vue-next';
+import { Heart, AudioLines, Play, Plus, Trash2 } from 'lucide-vue-next';
 import { usePlayerStore } from '../../../stores/player';
 
 const playerStore = usePlayerStore();
 
 const activeMenuTrackId = ref<number | null>(null);
+
+const removeTrack = async (trackId: number) => {
+  if (playerStore.currentPlaylistDetails) {
+    try {
+      await playerStore.removeTrackFromPlaylist(playerStore.currentPlaylistDetails.id, trackId);
+    } catch (e) {
+      alert("移除歌曲失败");
+    }
+  }
+};
 
 const openPlaylistMenu = (trackId: number) => {
   if (activeMenuTrackId.value === trackId) {
@@ -128,7 +138,16 @@ const playAll = () => {
               </div>
               <div class="flex-[2] truncate pr-4 text-[#777] italic">{{ song.artist }}</div>
               <div class="flex-[2] truncate pr-4 text-[#777]">{{ song.album }}</div>
-              <div class="w-16 text-right pr-4 text-[#888]">{{ song.duration }}</div>
+              <div class="w-24 text-right pr-4 flex items-center justify-end gap-3 shrink-0">
+                <span class="text-[#888]">{{ song.duration }}</span>
+                <button 
+                  @click.stop="removeTrack(song.id)"
+                  class="text-[#ccc] hover:text-[#d25050] transition-colors opacity-0 group-hover:opacity-100"
+                  title="从歌单中移除"
+                >
+                  <Trash2 class="w-3.5 h-3.5 stroke-[1.5]" />
+                </button>
+              </div>
             </div>
           </div>
         </section>

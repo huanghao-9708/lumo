@@ -7,6 +7,11 @@ import { AudioLines, Play } from 'lucide-vue-next';
 const playerStore = usePlayerStore();
 const tabs = ['LYRICS', 'QUEUE', 'INFO'] as const;
 
+const isLossless = (format: string) => {
+  const f = format.toLowerCase();
+  return ['flac', 'wav', 'alac', 'ape', 'dsf', 'dff'].includes(f);
+};
+
 const tabMapping = {
   'LYRICS': '歌词',
   'QUEUE': '播放队列',
@@ -170,15 +175,36 @@ watch(() => playerStore.activeLyricIndex, (newIdx) => {
             <div class="space-y-5 text-[11px] tracking-wider uppercase text-[#555] pb-8">
               <div>
                 <span class="text-[#a0a0a0] block mb-1 text-[9px] font-bold">格式</span>
-                <span class="text-black">{{ playerStore.currentTrack?.format || '-' }} (无损)</span>
+                <span class="text-black">
+                  {{ playerStore.currentTrackFileInfo?.format ? playerStore.currentTrackFileInfo.format.toUpperCase() : (playerStore.currentTrack?.format || '-').toUpperCase() }}
+                  <span v-if="playerStore.currentTrackFileInfo?.format && isLossless(playerStore.currentTrackFileInfo.format)" class="text-[#d25050] ml-1 font-bold text-[9px]">(无损)</span>
+                  <span v-else-if="playerStore.currentTrackFileInfo?.format" class="text-gray-500 ml-1 text-[9px]">(有损)</span>
+                </span>
               </div>
               <div>
-                <span class="text-[#a0a0a0] block mb-1 text-[9px] font-bold">采样率</span>
-                <span class="text-black">44,100 Hz / 16-bit</span>
+                <span class="text-[#a0a0a0] block mb-1 text-[9px] font-bold">比特率 / 采样率</span>
+                <span class="text-black">
+                  <template v-if="playerStore.currentTrackFileInfo">
+                    {{ playerStore.currentTrackFileInfo.bitrate ? `${Math.round(playerStore.currentTrackFileInfo.bitrate / 1000)} kbps` : '-' }} @ 
+                    {{ playerStore.currentTrackFileInfo.sample_rate ? `${playerStore.currentTrackFileInfo.sample_rate.toLocaleString()} Hz` : '-' }}
+                    <template v-if="playerStore.currentTrackFileInfo.bit_depth">
+                       / {{ playerStore.currentTrackFileInfo.bit_depth }}-bit
+                    </template>
+                  </template>
+                  <template v-else>-</template>
+                </span>
               </div>
               <div>
                 <span class="text-[#a0a0a0] block mb-1 text-[9px] font-bold">声道</span>
-                <span class="text-black">立体声</span>
+                <span class="text-black">
+                  {{ playerStore.currentTrackFileInfo?.channels === 1 ? '单声道' : (playerStore.currentTrackFileInfo?.channels === 2 ? '立体声' : (playerStore.currentTrackFileInfo?.channels ? `${playerStore.currentTrackFileInfo.channels} 声道` : '-')) }}
+                </span>
+              </div>
+              <div>
+                <span class="text-[#a0a0a0] block mb-1 text-[9px] font-bold">文件大小</span>
+                <span class="text-black">
+                  {{ playerStore.currentTrackFileInfo?.file_size ? `${(playerStore.currentTrackFileInfo.file_size / (1024 * 1024)).toFixed(2)} MB` : '-' }}
+                </span>
               </div>
               <div>
                 <span class="text-[#a0a0a0] block mb-1 text-[9px] font-bold">时长</span>

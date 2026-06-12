@@ -256,3 +256,93 @@ pub fn library_get_lyrics(db_state: State<'_, DbState>, track_id: i64) -> Result
     ).optional().map_err(|e| e.to_string())?;
     Ok(lyr)
 }
+
+#[tauri::command]
+pub fn library_get_track_file_info(db_state: State<'_, DbState>, track_id: i64) -> Result<Option<crate::models::TrackFileInfoDTO>, String> {
+    use rusqlite::OptionalExtension;
+    let conn = db_state.db.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare("
+        SELECT id, normalized_path, file_size, duration_ms, bitrate, sample_rate, bit_depth, channels, file_ext
+        FROM media_files
+        WHERE track_id = ?1
+        LIMIT 1
+    ").map_err(|e| e.to_string())?;
+    
+    let info = stmt.query_row(params![track_id], |row| {
+        Ok(crate::models::TrackFileInfoDTO {
+            id: row.get(0)?,
+            path: row.get(1)?,
+            file_size: row.get(2)?,
+            duration_ms: row.get(3)?,
+            bitrate: row.get(4)?,
+            sample_rate: row.get(5)?,
+            bit_depth: row.get(6)?,
+            channels: row.get(7)?,
+            format: row.get(8)?,
+        })
+    }).optional().map_err(|e| e.to_string())?;
+    
+    Ok(info)
+}
+
+#[tauri::command]
+pub fn library_delete_playlist(db_state: State<'_, DbState>, playlist_id: i64) -> Result<(), String> {
+    let conn = db_state.db.lock().map_err(|e| e.to_string())?;
+    LibraryService::delete_playlist(&conn, playlist_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn library_remove_playlist_item(db_state: State<'_, DbState>, playlist_id: i64, track_id: i64) -> Result<(), String> {
+    let conn = db_state.db.lock().map_err(|e| e.to_string())?;
+    LibraryService::remove_playlist_item(&conn, playlist_id, track_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn library_save_play_queue(db_state: State<'_, DbState>, track_ids: Vec<i64>) -> Result<(), String> {
+    let conn = db_state.db.lock().map_err(|e| e.to_string())?;
+    LibraryService::save_play_queue(&conn, &track_ids).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn library_get_play_queue(db_state: State<'_, DbState>) -> Result<Vec<TrackDTO>, String> {
+    let conn = db_state.db.lock().map_err(|e| e.to_string())?;
+    LibraryService::get_play_queue(&conn).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn library_get_cache_size(app: tauri::AppHandle) -> Result<u64, String> {
+    let app_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let artworks_dir = app_dir.join("artworks");
+    if !artworks_dir.exists() {
+        return Ok(0);
+    }
+    
+    let mut total_size = 0;
+    if let Ok(entries) = std::fs::read_dir(artworks_dir) {
+        for entry in entries.flatten() {
+            if let Ok(meta) = entry.metadata() {
+                if meta.is_file() {
+                    total_size += meta.len();
+                }
+            }
+        }
+    }
+    Ok(total_size)
+}
+
+#[tauri::command]
+pub fn library_clear_cache(app: tauri::AppHandle, db_state: State<'_, DbState>) -> Result<(), String> {
+    let app_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let artworks_dir = app_dir.join("artworks");
+    if artworks_dir.exists() {
+        let _ = std::fs::remove_dir_all(&artworks_dir);
+        let _ = std::fs::create_dir_all(&artworks_dir);
+    }
+    
+    let conn = db_state.db.lock().map_err(|e| e.to_string())?;
+    let _ = conn.execute("DELETE FROM artwork", []);
+    let _ = conn.execute("UPDATE albums SET cover_artwork_id = NULL", []);
+    
+    Ok(())
+}
+

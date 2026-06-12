@@ -23,28 +23,49 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="flex-1 overflow-y-auto custom-scrollbar relative z-10 pr-2" @scroll="handleScroll">
-    <div class="flex flex-col pb-10">
-      <div 
-        v-for="(artist, index) in playerStore.artists" 
-        :key="artist.id"
-        @click="goToArtist(artist.id)"
-        class="group cursor-pointer flex items-center justify-between py-5 border-b border-[#f0eee6]/50 hover:border-black transition-colors"
-      >
-        <div class="flex items-center gap-8">
-          <span class="text-[10px] font-bold tracking-widest text-[#a0a0a0] w-6 text-right">
-            {{ String(index + 1).padStart(2, '0') }}
-          </span>
-          <div class="w-16 h-16 rounded-full overflow-hidden bg-[#e8e6df] shrink-0">
-             <div 
-               class="w-full h-full bg-gradient-to-tr opacity-70 group-hover:opacity-100 transition-opacity"
-               :class="artist.avatarColor"
-             ></div>
+  <div class="flex-1 flex flex-col min-h-0">
+    <!-- 加载中 -->
+    <div v-if="playerStore.isLoadingArtists && playerStore.artists.length === 0" class="flex-1 flex flex-col items-center justify-center py-20 text-[#a0a0a0] tracking-[0.25em] text-xs">
+      <span class="animate-pulse">LOADING METADATA...</span>
+    </div>
+
+    <!-- 加载出错 -->
+    <div v-else-if="playerStore.isErrorArtists" class="flex-1 flex flex-col items-center justify-center py-20 text-[#d25050] tracking-[0.25em] text-xs font-bold uppercase">
+      <span>加载艺人失败，请稍后重试</span>
+    </div>
+
+    <!-- 空状态 -->
+    <div v-else-if="playerStore.artists.length === 0" class="flex-1 flex flex-col items-center justify-center py-20">
+      <p class="font-serif italic text-2xl text-black/60 mb-4">暂无艺人</p>
+      <p class="text-xs text-[#a0a0a0] tracking-widest max-w-sm text-center leading-relaxed">
+        未检测到艺人列表。请确保本地音乐目录中含有音频文件并已完成扫描。
+      </p>
+    </div>
+
+    <!-- 正常渲染 -->
+    <div v-else class="flex-1 overflow-y-auto custom-scrollbar relative z-10 pr-2" @scroll="handleScroll">
+      <div class="flex flex-col pb-10">
+        <div 
+          v-for="(artist, index) in playerStore.artists" 
+          :key="artist.id"
+          @click="goToArtist(artist.id)"
+          class="group cursor-pointer flex items-center justify-between py-5 border-b border-[#f0eee6]/50 hover:border-black transition-colors"
+        >
+          <div class="flex items-center gap-8">
+            <span class="text-[10px] font-bold tracking-widest text-[#a0a0a0] w-6 text-right">
+              {{ String(index + 1).padStart(2, '0') }}
+            </span>
+            <div class="w-16 h-16 rounded-full overflow-hidden bg-[#e8e6df] shrink-0">
+               <div 
+                 class="w-full h-full bg-gradient-to-tr opacity-70 group-hover:opacity-100 transition-opacity"
+                 :class="artist.avatarColor"
+               ></div>
+            </div>
+            <h3 class="font-serif italic text-3xl text-black group-hover:translate-x-2 transition-transform duration-300">{{ artist.name }}</h3>
           </div>
-          <h3 class="font-serif italic text-3xl text-black group-hover:translate-x-2 transition-transform duration-300">{{ artist.name }}</h3>
-        </div>
-        <div class="text-[10px] font-bold tracking-[0.2em] text-[#888] uppercase">
-          {{ artist.track_count }} 首歌曲
+          <div class="text-[10px] font-bold tracking-[0.2em] text-[#888] uppercase">
+            {{ artist.track_count }} 首歌曲
+          </div>
         </div>
       </div>
     </div>

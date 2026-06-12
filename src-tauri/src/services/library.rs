@@ -615,4 +615,58 @@ impl LibraryService {
             cover_artwork_id: row.get(8)?,
         })
     }
+
+    /// 删除歌单
+    pub fn delete_playlist(conn: &Connection, playlist_id: i64) -> rusqlite::Result<()> {
+        conn.execute("DELETE FROM playlists WHERE id = ?1", params![playlist_id])?;
+        Ok(())
+    }
+
+    /// 从歌单中移除一首歌曲
+    pub fn remove_playlist_item(conn: &Connection, playlist_id: i64, track_id: i64) -> rusqlite::Result<()> {
+        conn.execute(
+            "DELETE FROM playlist_items WHERE playlist_id = ?1 AND track_id = ?2",
+            params![playlist_id, track_id],
+        )?;
+        Ok(())
+    }
+
+    /// 保存播放队列
+    pub fn save_play_queue(conn: &Connection, track_ids: &[i64]) -> rusqlite::Result<()> {
+        conn.execute("DELETE FROM play_queue", [])?;
+        let mut stmt = conn.prepare("INSERT INTO play_queue (track_id, position) VALUES (?1, ?2)")?;
+        for (idx, id) in track_ids.iter().enumerate() {
+            stmt.execute(params![id, idx as f64])?;
+        }
+        Ok(())
+    }
+
+    /// 获取持久化的播放队列关联详情
+    pub fn get_play_queue(conn: &Connection) -> rusqlite::Result<Vec<TrackDTO>> {
+        let sql = "
+            SELECT 
+                t.id, 
+                t.title, 
+                (SELECT GROUP_CONCAT(a.name, ', ') FROM track_artists ta JOIN artists a ON ta.artist_id = a.id WHERE ta.track_id = t.id ORDER BY ta.position) AS artist_name,
+                al.title AS album_title, 
+                m.duration_ms, 
+                m.file_ext, 
+                m.id AS media_file_id,
+                (ft.track_id IS NOT NULL) AS is_favorite,
+                al.cover_artwork_id
+            FROM play_queue pq
+            JOIN tracks t ON pq.track_id = t.id
+            LEFT JOIN albums al ON t.album_id = al.id
+            JOIN media_files m ON t.id = m.track_id
+            LEFT JOIN favorite_tracks ft ON t.id = ft.track_id
+            ORDER BY pq.position ASC
+        ";
+        let mut stmt = conn.prepare(sql)?;
+        let rows = stmt.query_map([], Self::map_track_row)?;
+        let mut result = Vec::new();
+        for r in rows {
+            result.push(r?);
+        }
+        Ok(result)
+    }
 }

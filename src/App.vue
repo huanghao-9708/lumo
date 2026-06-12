@@ -1,10 +1,71 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent } from 'vue';
+import { computed, defineAsyncComponent, onMounted, onUnmounted } from 'vue';
 import { useUiStore } from './stores/ui';
+import { usePlayerStore } from './stores/player';
 import { Minus, Square, X } from 'lucide-vue-next';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 
 const uiStore = useUiStore();
+const playerStore = usePlayerStore();
+
+// 键盘快捷键监听
+const handleGlobalKeyDown = (e: KeyboardEvent) => {
+  // 判断当前焦点是否在输入框
+  const activeEl = document.activeElement;
+  if (activeEl && (
+    activeEl.tagName === 'INPUT' || 
+    activeEl.tagName === 'TEXTAREA' || 
+    activeEl.getAttribute('contenteditable') === 'true'
+  )) {
+    return;
+  }
+
+  // 1. 空格键播放/暂停
+  if (e.code === 'Space') {
+    e.preventDefault();
+    playerStore.togglePlay();
+  }
+
+  // 2. Ctrl + 左右箭头：切歌
+  if (e.ctrlKey && e.code === 'ArrowRight') {
+    e.preventDefault();
+    playerStore.nextTrack();
+  } else if (e.ctrlKey && e.code === 'ArrowLeft') {
+    e.preventDefault();
+    playerStore.prevTrack();
+  }
+
+  // 3. 左右箭头：快退 / 快进 5 秒
+  else if (e.code === 'ArrowRight') {
+    e.preventDefault();
+    const newPos = Math.min(playerStore.durationMs, playerStore.progressMs + 5000);
+    playerStore.seek(newPos);
+  } else if (e.code === 'ArrowLeft') {
+    e.preventDefault();
+    const newPos = Math.max(0, playerStore.progressMs - 5000);
+    playerStore.seek(newPos);
+  }
+
+  // 4. 上下箭头：增减音量
+  else if (e.code === 'ArrowUp') {
+    e.preventDefault();
+    const newVol = Math.min(100, playerStore.volume + 5);
+    playerStore.setVolume(newVol);
+  } else if (e.code === 'ArrowDown') {
+    e.preventDefault();
+    const newVol = Math.max(0, playerStore.volume - 5);
+    playerStore.setVolume(newVol);
+  }
+};
+
+onMounted(() => {
+  playerStore.restoreSession();
+  window.addEventListener('keydown', handleGlobalKeyDown);
+});
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleGlobalKeyDown);
+});
 
 // 动态载入当前激活的 UI 插件入口
 const activeUiComponent = computed(() => {

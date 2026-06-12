@@ -12,6 +12,7 @@ import {
   Settings,
   SunMoon,
   ChevronDown,
+  Trash2,
 } from 'lucide-vue-next';
 import { onMounted } from 'vue';
 import { usePlayerStore } from '../../stores/player';
@@ -25,6 +26,16 @@ const toggleTheme = () => {
     uiStore.setActivePlugin('ui-default');
   } else {
     uiStore.setActivePlugin('ui-simple');
+  }
+};
+
+const confirmDeletePlaylist = async (playlist: any) => {
+  if (confirm(`确定要删除歌单“${playlist.name}”吗？`)) {
+    try {
+      await playerStore.deletePlaylist(playlist.id);
+    } catch (e) {
+      alert("删除歌单失败");
+    }
   }
 };
 
@@ -123,11 +134,22 @@ onMounted(() => {
         <h3 class="text-[10px] font-bold tracking-[0.2em] text-[#a0a0a0] mb-5 uppercase">歌单</h3>
         <ul class="space-y-5">
           <li v-for="playlist in playerStore.playlists" :key="playlist.id">
-            <a href="#" @click.prevent="openPlaylist(playlist.id)" class="flex items-center gap-4 text-[13px] transition-colors group" :class="playerStore.activeLibraryTab === '歌单详情' && playerStore.activePlaylistId === playlist.id ? 'text-black font-semibold' : 'text-[#777777] font-medium hover:text-black'">
-              <ListMusic class="w-4 h-4 stroke-[1.5]" />
-              <span class="tracking-widest flex-1 truncate">{{ playlist.name }}</span>
-              <span class="text-[10px] text-[#cccccc] group-hover:text-[#888888]">{{ playlist.count }}</span>
-            </a>
+            <div class="flex items-center justify-between group py-1 pr-2 rounded-md transition-colors hover:bg-black/[0.03]">
+              <a href="#" @click.prevent="openPlaylist(playlist.id)" class="flex items-center gap-4 text-[13px] transition-colors flex-1 min-w-0" :class="playerStore.activeLibraryTab === '歌单详情' && playerStore.activePlaylistId === playlist.id ? 'text-black font-semibold' : 'text-[#777777] font-medium hover:text-black'">
+                <ListMusic class="w-4 h-4 stroke-[1.5] shrink-0" />
+                <span class="tracking-widest truncate">{{ playlist.name }}</span>
+              </a>
+              <div class="flex items-center gap-2 shrink-0">
+                <span class="text-[10px] text-[#cccccc] group-hover:hidden">{{ playlist.count }}</span>
+                <button 
+                  @click.stop="confirmDeletePlaylist(playlist)" 
+                  class="hidden group-hover:flex text-[#a0a0a0] hover:text-[#d25050] transition-colors"
+                  title="删除歌单"
+                >
+                  <Trash2 class="w-3.5 h-3.5 stroke-[1.5]" />
+                </button>
+              </div>
+            </div>
           </li>
           <li class="pt-2">
             <button @click="createPlaylist" class="flex items-center gap-4 text-[13px] font-medium text-[#777777] hover:text-black transition-colors w-full">

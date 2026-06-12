@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, watch } from 'vue';
 import { RefreshCw, Trash2, Power, PowerOff, Plus, X, ChevronDown, ChevronRight, HardDrive, Globe, Folder } from 'lucide-vue-next';
 import { usePlayerStore } from '../../../stores/player';
 import { open } from '@tauri-apps/plugin-dialog';
+import { invoke } from '@tauri-apps/api/core';
 
 const playerStore = usePlayerStore();
 
@@ -16,6 +17,11 @@ const newSourceName = ref('');
 const newSourcePath = ref('');
 const newSourceUsername = ref('');
 const newSourcePassword = ref('');
+
+// 图片缓存与偏好状态
+const cacheSizeStr = ref('计算中...');
+const audioQuality = ref('无损优先');
+const fadeSeconds = ref(0);
 
 const selectFolder = async () => {
   const selected = await open({
@@ -51,8 +57,55 @@ const confirmAddSource = () => {
   }
 };
 
+const fetchCacheSize = async () => {
+  try {
+    const bytes = await invoke<number>('library_get_cache_size');
+    if (bytes === 0) {
+      cacheSizeStr.value = '0 MB';
+    } else {
+      cacheSizeStr.value = `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+    }
+  } catch (e) {
+    console.error("Failed to fetch cache size:", e);
+    cacheSizeStr.value = '计算失败';
+  }
+};
+
+const clearCache = async () => {
+  if (confirm('确定要清空封面缓存吗？这将清理已缓存的封面图像并重新加载。')) {
+    try {
+      cacheSizeStr.value = '清理中...';
+      await invoke('library_clear_cache');
+      await fetchCacheSize();
+      alert('清理缓存成功');
+    } catch (e) {
+      alert('清理缓存失败');
+      await fetchCacheSize();
+    }
+  }
+};
+
 onMounted(() => {
   playerStore.fetchSources();
+  fetchCacheSize();
+  
+  const savedQuality = localStorage.getItem('lumo_pref_audio_quality');
+  if (savedQuality) {
+    audioQuality.value = savedQuality;
+  }
+  
+  const savedFade = localStorage.getItem('lumo_pref_fade_seconds');
+  if (savedFade) {
+    fadeSeconds.value = parseInt(savedFade, 10) || 0;
+  }
+});
+
+watch(audioQuality, (newVal) => {
+  localStorage.setItem('lumo_pref_audio_quality', newVal);
+});
+
+watch(fadeSeconds, (newVal) => {
+  localStorage.setItem('lumo_pref_fade_seconds', String(newVal));
 });
 </script>
 
@@ -174,10 +227,10 @@ onMounted(() => {
         <div class="space-y-6">
           <div class="flex items-center justify-between group">
             <h3 class="text-[13px] font-semibold text-black">音质偏好</h3>
-            <select class="bg-transparent text-xs text-[#777] font-medium uppercase tracking-widest focus:outline-none cursor-pointer text-right">
-              <option>无损优先</option>
-              <option>高品质 (320kbps)</option>
-              <option>标准</option>
+            <select v-model="audioQuality" class="bg-transparent text-xs text-[#777] font-medium uppercase tracking-widest focus:outline-none cursor-pointer text-right">
+              <option value="无损优先">无损优先</option>
+              <option value="高品质 (320kbps)">高品质 (320kbps)</option>
+              <option value="标准">标准</option>
             </select>
           </div>
 
@@ -187,9 +240,8 @@ onMounted(() => {
               <p class="text-xs text-[#777]">歌曲之间平滑过渡</p>
             </div>
             <div class="flex items-center gap-2">
-              <span class="text-xs font-bold text-black">0s</span>
-              <input type="range" class="w-24 accent-black" min="0" max="12" value="0" />
-              <span class="text-xs font-medium text-[#777]">12s</span>
+              <input v-model.number="fadeSeconds" type="range" class="w-24 accent-black" min="0" max="12" />
+              <span class="text-xs font-bold text-black w-6 text-right">{{ fadeSeconds }}s</span>
             </div>
           </div>
         </div>
@@ -202,9 +254,9 @@ onMounted(() => {
         <div class="flex items-start justify-between group">
           <div>
             <h3 class="text-[13px] font-semibold text-black mb-1">封面缓存</h3>
-            <p class="text-xs text-[#777]">已使用 45 MB 磁盘空间</p>
+            <p class="text-xs text-[#777]">已使用 {{ cacheSizeStr }} 磁盘空间</p>
           </div>
-          <button class="flex items-center gap-2 text-xs font-medium text-red-400 hover:text-red-600 transition-colors">
+          <button @click="clearCache" class="flex items-center gap-2 text-xs font-medium text-red-400 hover:text-red-600 transition-colors">
             <Trash2 class="w-4 h-4 stroke-[1.5]" />
             <span>清理</span>
           </button>

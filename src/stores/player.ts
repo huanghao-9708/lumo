@@ -83,6 +83,12 @@ export const usePlayerStore = defineStore("player", () => {
   const durationMs = ref(0);
   let progressTimer: ReturnType<typeof setInterval> | null = null;
   
+  const currentTrackFileInfo = ref<any>(null);
+  const isErrorTracks = ref(false);
+  const isErrorAlbums = ref(false);
+  const isErrorArtists = ref(false);
+  const hasLoadedCurrentFile = ref(false);
+  
   const activeLibraryTab = ref("全部歌曲");
   const activeSourceTab = ref("本地音乐库");
   const activeRightTab = ref<"歌词" | "播放队列" | "文件信息">("歌词");
@@ -183,6 +189,7 @@ export const usePlayerStore = defineStore("player", () => {
     isLoadingTracks.value = true;
 
     try {
+      isErrorTracks.value = false;
       const result: any[] = await invoke('library_get_tracks', { 
         limit: tracksLimit, 
         offset: tracksOffset,
@@ -209,6 +216,7 @@ export const usePlayerStore = defineStore("player", () => {
       tracksOffset += result.length;
     } catch (e) {
       console.error("Failed to fetch tracks:", e);
+      isErrorTracks.value = true;
     } finally {
       isLoadingTracks.value = false;
     }
@@ -391,6 +399,7 @@ export const usePlayerStore = defineStore("player", () => {
     if (!hasMoreAlbums.value || isLoadingAlbums.value) return;
     isLoadingAlbums.value = true;
     try {
+      isErrorAlbums.value = false;
       const result: any[] = await invoke('library_get_albums', {
         limit: albumsLimit,
         offset: albumsOffset,
@@ -413,6 +422,7 @@ export const usePlayerStore = defineStore("player", () => {
       albumsOffset += result.length;
     } catch (e) {
       console.error(e);
+      isErrorAlbums.value = true;
     } finally {
       isLoadingAlbums.value = false;
     }
@@ -432,6 +442,7 @@ export const usePlayerStore = defineStore("player", () => {
     if (!hasMoreArtists.value || isLoadingArtists.value) return;
     isLoadingArtists.value = true;
     try {
+      isErrorArtists.value = false;
       const result: any[] = await invoke('library_get_artists', {
         limit: artistsLimit,
         offset: artistsOffset,
@@ -451,6 +462,7 @@ export const usePlayerStore = defineStore("player", () => {
       artistsOffset += result.length;
     } catch (e) {
       console.error(e);
+      isErrorArtists.value = true;
     } finally {
       isLoadingArtists.value = false;
     }
@@ -501,7 +513,7 @@ export const usePlayerStore = defineStore("player", () => {
     return result;
   }
 
-  // 监听当前播放曲目，自动加载对应歌词
+  // 监听当前播放曲目，自动加载对应歌词与文件元数据
   watch(currentTrack, async (newTrack) => {
     if (newTrack) {
       try {
@@ -522,8 +534,17 @@ export const usePlayerStore = defineStore("player", () => {
           { text: "— 暂无歌词 —", time: 3 }
         ];
       }
+
+      try {
+        const fileInfo = await invoke<any>('library_get_track_file_info', { trackId: newTrack.id });
+        currentTrackFileInfo.value = fileInfo;
+      } catch (e) {
+        console.error("Failed to load track file info:", e);
+        currentTrackFileInfo.value = null;
+      }
     } else {
       lyrics.value = [];
+      currentTrackFileInfo.value = null;
     }
   }, { immediate: true });
 
@@ -733,14 +754,147 @@ export const usePlayerStore = defineStore("player", () => {
     return `${min.toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")}`;
   }
 
+  // ================= 持久化与恢复逻辑 =================
+  
+  // 监视播放队列的变化，自动将 track id 保存到后端的 play_queue 表中
+  watch(queue, async (newQueue) => {
+    try {
+      const ids = newQueue.map(t => t.id);
+      await invoke('library_save_play_queue', { trackIds: ids });
+    } catch (e) {
+      console.error("Failed to auto-save play queue:", e);
+    }
+  }, { deep: true });
+
+  // 监视状态标量并写入 localStorage
+  watch(currentIndex, (newIdx) => {
+    localStorage.setItem('lumo_current_index', String(newIdx));
+  });
+  watch(playMode, (newMode) => {
+    localStorage.setItem('lumo_play_mode', newMode);
+  });
+  watch(volume, (newVol) => {
+    localStorage.setItem('lumo_volume', String(newVol));
+  });
+  watch(progressMs, (newProgress) => {
+    localStorage.setItem('lumo_progress_ms', String(newProgress));
+  });
+
+  // 恢复状态与队列
+  async function restoreSession() {
+    try {
+      // 1. 恢复播放队列
+      const savedQueue: any[] = await invoke('library_get_play_queue');
+      if (savedQueue && savedQueue.length > 0) {
+        queue.value = savedQueue.map((t: any) => ({
+          ...t,
+          artist: t.artist_name || '未知艺人',
+          album: t.album_title || '未知专辑',
+          duration: formatTime(t.duration_ms / 1000),
+          durationSec: Math.floor(t.duration_ms / 1000),
+          format: t.format ? t.format.toUpperCase() : 'UNKNOWN',
+          coverColor: getDeterministicColor(t.album_title || t.title || 'Unknown'),
+          cover_artwork_id: t.cover_artwork_id,
+          isFavorite: t.is_favorite || false,
+          primary_file_id: t.media_file_id
+        }));
+      }
+
+      // 2. 恢复播放模式
+      const savedMode = localStorage.getItem('lumo_play_mode');
+      if (savedMode && ['normal', 'repeat', 'repeat-one', 'shuffle'].includes(savedMode)) {
+        playMode.value = savedMode as any;
+      }
+
+      // 3. 恢复音量
+      const savedVolume = localStorage.getItem('lumo_volume');
+      if (savedVolume !== null) {
+        const vol = parseInt(savedVolume, 10);
+        if (!isNaN(vol) && vol >= 0 && vol <= 100) {
+          volume.value = vol;
+          await invoke('playback_set_volume', { volume: vol / 100 });
+        }
+      }
+
+      // 4. 恢复当前曲目索引（处于暂停/载入锁状态）
+      const savedIdx = localStorage.getItem('lumo_current_index');
+      if (savedIdx !== null) {
+        const idx = parseInt(savedIdx, 10);
+        if (!isNaN(idx) && idx >= 0 && idx < queue.value.length) {
+          currentIndex.value = idx;
+          hasLoadedCurrentFile.value = false; // 设定需要初次重新加载文件锁
+          
+          const savedProgress = localStorage.getItem('lumo_progress_ms');
+          if (savedProgress !== null) {
+            const prog = parseInt(savedProgress, 10);
+            if (!isNaN(prog) && prog >= 0) {
+              progressMs.value = prog;
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.error("Failed to restore session:", e);
+    }
+  }
+
+  // ================= 歌单操作 Actions =================
+
+  // 删除歌单
+  async function deletePlaylist(playlistId: number) {
+    try {
+      await invoke('library_delete_playlist', { playlistId });
+      await fetchPlaylists();
+      if (activePlaylistId.value === playlistId) {
+        activePlaylistId.value = null;
+        activeLibraryTab.value = '全部歌曲';
+      }
+    } catch (e) {
+      console.error("Failed to delete playlist:", e);
+      throw e;
+    }
+  }
+
+  // 从歌单移除单曲
+  async function removeTrackFromPlaylist(playlistId: number, trackId: number) {
+    try {
+      await invoke('library_remove_playlist_item', { playlistId, trackId });
+      await refreshCurrentPlaylistTracks(playlistId);
+      await fetchPlaylists();
+    } catch (e) {
+      console.error("Failed to remove track from playlist:", e);
+      throw e;
+    }
+  }
+
   async function togglePlay() {
+    if (queue.value.length === 0) return;
+    if (currentIndex.value === -1) {
+      currentIndex.value = 0;
+    }
+    
+    const track = queue.value[currentIndex.value];
+    if (!track) return;
+
     try {
       if (isPlaying.value) {
         await invoke('playback_pause');
         isPlaying.value = false;
       } else {
-        await invoke('playback_resume');
+        if (!hasLoadedCurrentFile.value) {
+          if (track.primary_file_id) {
+            await invoke('playback_play', { mediaFileId: track.primary_file_id });
+            hasLoadedCurrentFile.value = true;
+            
+            if (progressMs.value > 0) {
+              await invoke('playback_seek', { positionMs: progressMs.value });
+            }
+          }
+        } else {
+          await invoke('playback_resume');
+        }
         isPlaying.value = true;
+        startProgressPolling();
       }
     } catch (e) {
       console.error("Toggle play failed:", e);
@@ -774,6 +928,7 @@ export const usePlayerStore = defineStore("player", () => {
       try {
         await invoke('playback_play', { mediaFileId: track.primary_file_id });
         isPlaying.value = true;
+        hasLoadedCurrentFile.value = true;
         startProgressPolling();
         recordPlay(track.id);
       } catch (e) {
@@ -952,5 +1107,15 @@ export const usePlayerStore = defineStore("player", () => {
     scanSource,
     refreshCurrentPlaylistTracks,
     activeLyricIndex,
+    currentTrackFileInfo,
+    isErrorTracks,
+    isErrorAlbums,
+    isErrorArtists,
+    isLoadingTracks,
+    isLoadingAlbums,
+    isLoadingArtists,
+    restoreSession,
+    deletePlaylist,
+    removeTrackFromPlaylist,
   };
 });
