@@ -78,7 +78,7 @@ export const usePlayerStore = defineStore("player", () => {
   
   const queue = ref<any[]>([]);
   const currentIndex = ref(-1);
-  const playMode = ref<'normal'|'repeat'|'shuffle'>('normal');
+  const playMode = ref<'normal'|'repeat'|'repeat-one'|'shuffle'>('normal');
   const progressMs = ref(0);
   const durationMs = ref(0);
   let progressTimer: ReturnType<typeof setInterval> | null = null;
@@ -755,7 +755,7 @@ export const usePlayerStore = defineStore("player", () => {
           const pos = await invoke<number>('playback_get_pos');
           progressMs.value = pos;
           if (durationMs.value > 0 && pos >= durationMs.value - 500) {
-            nextTrack();
+            nextTrack(true);
           }
         } catch (e) {
           console.error(e);
@@ -782,9 +782,11 @@ export const usePlayerStore = defineStore("player", () => {
     }
   }
 
-  async function nextTrack() {
+  async function nextTrack(isAuto = false) {
     if (queue.value.length === 0) return;
-    if (playMode.value === 'shuffle') {
+    if (isAuto && playMode.value === 'repeat-one') {
+      // Keep currentIndex unchanged
+    } else if (playMode.value === 'shuffle') {
       currentIndex.value = Math.floor(Math.random() * queue.value.length);
     } else {
       currentIndex.value = (currentIndex.value + 1) % queue.value.length;
