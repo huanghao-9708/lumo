@@ -228,15 +228,55 @@ export const usePlayerStore = defineStore("player", () => {
   }
 
   async function toggleFavorite(trackId: number) {
-    const track = tracks.value.find(t => t.id === trackId);
-    if (!track) return;
-    const newStatus = !track.isFavorite;
-    track.isFavorite = newStatus;
     try {
-      await invoke('library_toggle_favorite', { trackId, isFavorite: newStatus });
+      const targetTracks: Track[] = [];
+      
+      if (tracks.value) {
+        const trackInTracks = tracks.value.find(t => t && t.id === trackId);
+        if (trackInTracks) targetTracks.push(trackInTracks);
+      }
+      
+      if (currentAlbumDetailsData.value?.tracks) {
+        const trackInAlbum = currentAlbumDetailsData.value.tracks.find((t: any) => t && t.id === trackId);
+        if (trackInAlbum) targetTracks.push(trackInAlbum);
+      }
+      
+      if (currentPlaylistDetailsData.value?.tracks) {
+        const trackInPlaylist = currentPlaylistDetailsData.value.tracks.find((t: any) => t && t.id === trackId);
+        if (trackInPlaylist) targetTracks.push(trackInPlaylist);
+      }
+      
+      if (currentArtistDetailsData.value?.tracks) {
+        const trackInArtist = currentArtistDetailsData.value.tracks.find((t: any) => t && t.id === trackId);
+        if (trackInArtist) targetTracks.push(trackInArtist);
+      }
+      
+      if (queue.value) {
+        const trackInQueue = queue.value.find(t => t && t.id === trackId);
+        if (trackInQueue) targetTracks.push(trackInQueue);
+      }
+      
+      if (targetTracks.length === 0) {
+        // 备选方案：如果都没有，直接向后端发送 toggle，并且乐观添加/移除
+        await invoke('library_toggle_favorite', { trackId, isFavorite: true });
+        return;
+      }
+      
+      const newStatus = !targetTracks[0].isFavorite;
+      targetTracks.forEach(t => {
+        if (t) t.isFavorite = newStatus;
+      });
+      
+      try {
+        await invoke('library_toggle_favorite', { trackId, isFavorite: newStatus });
+      } catch (e) {
+        console.error("Backend failed to toggle favorite:", e);
+        targetTracks.forEach(t => {
+          if (t) t.isFavorite = !newStatus; // rollback
+        });
+      }
     } catch (e) {
-      console.error(e);
-      track.isFavorite = !newStatus; // fallback
+      console.error("Exception in toggleFavorite:", e);
     }
   }
 
@@ -252,6 +292,9 @@ export const usePlayerStore = defineStore("player", () => {
     try {
       await invoke('library_add_to_playlist', { playlistId, trackId });
       await fetchPlaylists();
+      if (activePlaylistId.value === playlistId) {
+        await refreshCurrentPlaylistTracks(playlistId);
+      }
     } catch(e) {
       console.error("Failed to add to playlist:", e);
     }
@@ -432,30 +475,43 @@ export const usePlayerStore = defineStore("player", () => {
     }
   };
 
+  async function refreshCurrentPlaylistTracks(playlistId: number) {
+    const playlist = playlists.value.find(p => p.id === playlistId) || { id: playlistId, name: '未知歌单', count: 0, description: '' };
+    if (!currentPlaylistDetailsData.value) {
+      currentPlaylistDetailsData.value = { ...playlist, tracks: [], isLoadingTracks: true };
+    } else {
+      currentPlaylistDetailsData.value.isLoadingTracks = true;
+    }
+    
+    try {
+      const result: any[] = await invoke('library_get_playlist_tracks', { playlistId });
+      const tracksData = result.map(t => ({
+         ...t,
+         artist: t.artist_name || '未知艺人',
+         album: t.album_title || '未知专辑',
+         duration: formatTime(t.duration_ms / 1000),
+         durationSec: Math.floor(t.duration_ms / 1000),
+         format: t.format ? t.format.toUpperCase() : 'UNKNOWN',
+         coverColor: getDeterministicColor(t.album_title || t.title || 'Unknown'), cover_artwork_id: t.cover_artwork_id,
+         isFavorite: t.is_favorite || false,
+         primary_file_id: t.media_file_id
+       }));
+       
+       playlist.count = tracksData.length;
+       currentPlaylistDetailsData.value = { 
+         ...playlist,
+         tracks: tracksData,
+         isLoadingTracks: false
+       };
+    } catch(e) {
+       console.error(e);
+       currentPlaylistDetailsData.value.isLoadingTracks = false;
+    }
+  }
+
   watch(activePlaylistId, async (newId) => {
     if (newId) {
-      const playlist = playlists.value.find(p => p.id === newId) || { id: newId, name: '未知歌单', count: 0, description: '' };
-      currentPlaylistDetailsData.value = { ...playlist, tracks: [], isLoadingTracks: true };
-      
-      try {
-        const result: any[] = await invoke('library_get_playlist_tracks', { playlistId: newId });
-        const tracksData = result.map(t => ({
-           ...t,
-           artist: t.artist_name || '未知艺人',
-           album: t.album_title || '未知专辑',
-           duration: formatTime(t.duration_ms / 1000),
-           durationSec: Math.floor(t.duration_ms / 1000),
-           format: t.format ? t.format.toUpperCase() : 'UNKNOWN',
-           coverColor: getDeterministicColor(t.album_title || t.title || 'Unknown'), cover_artwork_id: t.cover_artwork_id,
-           isFavorite: t.is_favorite || false,
-           primary_file_id: t.media_file_id
-         }));
-         currentPlaylistDetailsData.value.tracks = tracksData;
-      } catch(e) {
-         console.error(e);
-      } finally {
-        currentPlaylistDetailsData.value.isLoadingTracks = false;
-      }
+      await refreshCurrentPlaylistTracks(newId);
     } else {
       currentPlaylistDetailsData.value = null;
     }
@@ -824,5 +880,6 @@ export const usePlayerStore = defineStore("player", () => {
     removeSource,
     toggleSource,
     scanSource,
+    refreshCurrentPlaylistTracks,
   };
 });

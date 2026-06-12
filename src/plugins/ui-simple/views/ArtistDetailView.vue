@@ -1,15 +1,37 @@
 <script setup lang="ts">
-import { ref } from 'vue';
-import { Heart, AudioLines, MoveLeft, Play } from 'lucide-vue-next';
+import { ref, onMounted, onUnmounted } from 'vue';
+import { Heart, AudioLines, Play, Plus } from 'lucide-vue-next';
 import { usePlayerStore } from '../../../stores/player';
 import { getArtworkUrl } from '../../../utils';
 
 const playerStore = usePlayerStore();
 
-const goBack = () => {
-  playerStore.activeArtistId = null;
-  playerStore.activeLibraryTab = '艺人';
+const activeMenuTrackId = ref<number | null>(null);
+
+const openPlaylistMenu = (trackId: number) => {
+  if (activeMenuTrackId.value === trackId) {
+    activeMenuTrackId.value = null;
+  } else {
+    activeMenuTrackId.value = trackId;
+  }
 };
+
+const addToPlaylist = (playlistId: number, trackId: number) => {
+  playerStore.addToPlaylist(playlistId, trackId);
+  activeMenuTrackId.value = null;
+};
+
+const closeMenu = () => {
+  activeMenuTrackId.value = null;
+};
+
+onMounted(() => {
+  window.addEventListener('click', closeMenu);
+});
+
+onUnmounted(() => {
+  window.removeEventListener('click', closeMenu);
+});
 
 const goToAlbum = (albumId: number) => {
   playerStore.activeAlbumId = albumId;
@@ -33,17 +55,6 @@ const handleScroll = (e: Event) => {
 <template>
   <div class="flex-1 flex flex-col min-h-0 relative z-10">
     <div v-if="playerStore.currentArtistDetails" class="flex-1 flex flex-col h-full overflow-hidden">
-      <!-- 顶部返回 -->
-      <div class="mb-8 shrink-0">
-        <button 
-          @click="goBack" 
-          class="flex items-center gap-2 text-[10px] font-bold tracking-[0.2em] text-[#a0a0a0] hover:text-black transition-colors uppercase group"
-        >
-          <MoveLeft class="w-4 h-4 stroke-[1.5] group-hover:-translate-x-1 transition-transform" />
-          返回艺人列表
-        </button>
-      </div>
-
       <!-- 艺人头 (巨型 Typography) -->
       <div class="flex flex-col mb-20 shrink-0 relative">
         <h2 class="text-[10px] font-bold tracking-[0.3em] text-[#a0a0a0] mb-8 uppercase z-10">Artist</h2>
@@ -89,12 +100,22 @@ const handleScroll = (e: Event) => {
         
         <!-- 歌曲列表 -->
         <section v-if="activeTab === 'tracks'">
-          <h3 class="text-[10px] font-bold tracking-[0.2em] text-[#a0a0a0] mb-4 uppercase border-b border-[#e8e6df] pb-2">热门曲目</h3>
+          <div class="flex items-center justify-between mb-4 border-b border-[#e8e6df] pb-2">
+            <h3 class="text-[10px] font-bold tracking-[0.2em] text-[#a0a0a0] uppercase">热门曲目</h3>
+            <button 
+              v-if="playerStore.currentArtistDetails.tracks.length > 0"
+              @click="playerStore.playQueue(playerStore.currentArtistDetails.tracks, 0)" 
+              class="flex items-center gap-2 bg-black text-white px-4 py-1.5 hover:bg-black/80 transition-all group rounded-sm shadow-sm"
+            >
+              <Play class="w-3 h-3 fill-current text-white" />
+              <span class="text-[10px] font-bold tracking-[0.2em] uppercase">播放全部</span>
+            </button>
+          </div>
           <div class="flex flex-col">
             <div 
               v-for="(song, index) in playerStore.currentArtistDetails.tracks" 
               :key="song.id"
-              @click="playerStore.playTrack(song.id)"
+              @dblclick="playerStore.playQueue(playerStore.currentArtistDetails.tracks, index)"
               class="flex items-center text-[13px] py-4 border-b border-[#f0eee6]/60 group transition-colors duration-200 cursor-pointer hover:bg-[#faf9f5]"
             >
               <div class="w-12 text-left text-[#a0a0a0] font-medium relative">
@@ -112,8 +133,24 @@ const handleScroll = (e: Event) => {
                   :class="[
                     song.isFavorite ? 'text-black fill-current' : 'text-[#ccc] opacity-0 group-hover:opacity-100 hover:text-black'
                   ]"
-                  @click.stop="song.isFavorite = !song.isFavorite"
+                  @click.stop="playerStore.toggleFavorite(song.id)"
                 />
+                <div class="relative flex items-center">
+                  <button @click.stop="openPlaylistMenu(song.id)" class="text-[#ccc] opacity-0 group-hover:opacity-100 hover:text-black transition-opacity" title="添加到歌单">
+                    <Plus class="w-3.5 h-3.5 stroke-[1.5]" />
+                  </button>
+                  <div v-if="activeMenuTrackId === song.id" class="absolute left-6 top-0 bg-white border border-[#e8e6df] shadow-sm z-50 py-1 min-w-[120px] rounded-sm">
+                    <div v-if="playerStore.playlists.length === 0" class="px-3 py-1.5 text-xs text-[#a0a0a0] whitespace-nowrap">暂无自建歌单</div>
+                    <button 
+                      v-for="pl in playerStore.playlists" 
+                      :key="pl.id"
+                      @click.stop="addToPlaylist(pl.id, song.id)"
+                      class="block w-full text-left px-3 py-1.5 text-[11px] font-medium text-[#555] hover:text-black hover:bg-black/5 transition-colors whitespace-nowrap truncate tracking-wider"
+                    >
+                      {{ pl.name }}
+                    </button>
+                  </div>
+                </div>
                 <span 
                   class="truncate" 
                   :class="playerStore.currentTrack?.id === song.id ? 'font-serif italic font-semibold text-[16px] text-black' : 'text-[#333] font-medium'"

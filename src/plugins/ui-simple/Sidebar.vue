@@ -33,7 +33,11 @@ const createPlaylist = () => {
 };
 
 const openPlaylist = (id: number) => {
-  playerStore.activePlaylistId = id;
+  if (playerStore.activePlaylistId === id) {
+    playerStore.refreshCurrentPlaylistTracks(id);
+  } else {
+    playerStore.activePlaylistId = id;
+  }
   playerStore.activeLibraryTab = '歌单详情';
 };
 

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref, onUnmounted, watch } from 'vue';
-import { Heart, AudioLines, Plus } from 'lucide-vue-next';
+import { Heart, AudioLines, Plus, Play } from 'lucide-vue-next';
 import { usePlayerStore } from '../../../stores/player';
 
 const playerStore = usePlayerStore();
@@ -48,6 +48,12 @@ const closeMenu = () => {
   activeMenuTrackId.value = null;
 };
 
+const playAll = () => {
+  if (playerStore.tracks && playerStore.tracks.length > 0) {
+    playerStore.playQueue(playerStore.tracks, 0);
+  }
+};
+
 watch(() => playerStore.activeLibraryTab, () => {
   loadData();
 });
@@ -64,6 +70,17 @@ onUnmounted(() => {
 
 <template>
   <div class="flex-1 flex flex-col min-h-0">
+    <!-- 播放全部按钮 -->
+    <div v-if="playerStore.tracks.length > 0" class="flex items-center gap-4 mb-6 shrink-0 relative z-10">
+      <button 
+        @click="playAll" 
+        class="flex items-center gap-2 bg-black text-white px-5 py-2 hover:bg-black/80 transition-all group rounded-sm shadow-sm"
+      >
+        <Play class="w-3.5 h-3.5 fill-current text-white" />
+        <span class="text-[10px] font-bold tracking-[0.2em] uppercase">播放全部</span>
+      </button>
+    </div>
+
     <!-- Table Header -->
     <div class="flex items-center text-[10px] font-bold tracking-[0.15em] text-[#888] uppercase pb-4 mb-4 border-b border-black shrink-0 relative z-10">
       <div class="w-16 text-center">序号</div>
