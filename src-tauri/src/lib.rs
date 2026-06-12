@@ -12,7 +12,7 @@ use crate::commands::{
     playback_set_volume, playback_get_pos, playback_seek,
     library_toggle_favorite, library_create_playlist, library_get_playlists,
     library_add_to_playlist, library_get_playlist_tracks, library_record_play,
-    library_get_recently_played, library_get_favorite_tracks
+    library_get_recently_played, library_get_favorite_tracks, library_get_lyrics
 };
 use tracing_subscriber;
 use std::sync::Mutex;
@@ -108,7 +108,8 @@ pub fn run() {
             library_get_playlist_tracks,
             library_record_play,
             library_get_recently_played,
-            library_get_favorite_tracks
+            library_get_favorite_tracks,
+            library_get_lyrics
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

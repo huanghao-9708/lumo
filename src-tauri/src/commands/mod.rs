@@ -244,3 +244,15 @@ pub fn library_get_favorite_tracks(db_state: State<'_, DbState>) -> Result<Vec<T
     let conn = db_state.db.lock().map_err(|e| e.to_string())?;
     LibraryService::get_favorite_tracks(&conn).map_err(|e| e.to_string())
 }
+
+#[tauri::command]
+pub fn library_get_lyrics(db_state: State<'_, DbState>, track_id: i64) -> Result<Option<String>, String> {
+    use rusqlite::OptionalExtension;
+    let conn = db_state.db.lock().map_err(|e| e.to_string())?;
+    let lyr: Option<String> = conn.query_row(
+        "SELECT content FROM lyrics WHERE track_id = ?1 LIMIT 1",
+        params![track_id],
+        |row| row.get(0),
+    ).optional().map_err(|e| e.to_string())?;
+    Ok(lyr)
+}

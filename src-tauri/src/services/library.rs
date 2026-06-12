@@ -173,6 +173,28 @@ impl LibraryService {
         // 7. 将刚刚存储成功的最优物理文件作为此歌曲的首选音源
         conn.execute("UPDATE tracks SET primary_file_id = ?1 WHERE id = ?2", params![media_file_id, track_id])?;
 
+        // 8. 尝试提取歌词存入 lyrics 表中（优先使用同目录下同名 LRC 文件，没有则使用内嵌歌词）
+        let mut lrc_content = None;
+        let mut lrc_path = path.with_extension("lrc");
+        if !lrc_path.exists() {
+            lrc_path = path.with_extension("LRC");
+        }
+        if lrc_path.exists() && lrc_path.is_file() {
+            if let Ok(content) = std::fs::read_to_string(&lrc_path) {
+                lrc_content = Some(content);
+            }
+        }
+        if lrc_content.is_none() {
+            lrc_content = metadata.lyrics.clone();
+        }
+
+        if let Some(content) = lrc_content {
+            let _ = conn.execute(
+                "INSERT OR REPLACE INTO lyrics (track_id, media_file_id, format, synced, content, source) VALUES (?1, ?2, 'lrc', 1, ?3, 'local')",
+                params![track_id, media_file_id, content],
+            );
+        }
+
         Ok(())
     }
 

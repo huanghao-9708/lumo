@@ -133,20 +133,21 @@ export const usePlayerStore = defineStore("player", () => {
   }
 
   // 歌词数据
-  const lyrics = ref([
-    { text: "We are going on a journey", time: 0 },
-    { text: "A journey to experience", time: 15 },
-    { text: "We are going on a journey", time: 30 },
-    { text: "A journey to experience", time: 45, isActive: true }, // 当前播放的高亮行
-    { text: "We are going on a journey", time: 60 },
-    { text: "A journey to experience", time: 75 },
-    { text: "We are going on a journey", time: 90 },
-    { text: "A journey to experience", time: 105 },
-    { text: "Close your eyes", time: 120 },
-    { text: "Let the music take you higher", time: 135 },
-    { text: "Close your eyes", time: 150 },
-    { text: "Let the music take you higher", time: 165 },
-  ]);
+  const lyrics = ref<any[]>([]);
+
+  const activeLyricIndex = computed(() => {
+    if (lyrics.value.length === 0) return -1;
+    const currentSec = progressMs.value / 1000;
+    let index = -1;
+    for (let i = 0; i < lyrics.value.length; i++) {
+      if (lyrics.value[i].time <= currentSec) {
+        index = i;
+      } else {
+        break;
+      }
+    }
+    return index;
+  });
 
   // 歌单数据
   const playlists = ref<Playlist[]>([]);
@@ -458,6 +459,73 @@ export const usePlayerStore = defineStore("player", () => {
   const currentTrack = computed(() => {
     return queue.value[currentIndex.value] || null;
   });
+
+  // 歌词行接口定义
+  interface LyricLine {
+    text: string;
+    time: number;
+  }
+
+  function parseLrc(lrcText: string): LyricLine[] {
+    const lines = lrcText.split('\n');
+    const result: LyricLine[] = [];
+    const timeReg = /\[(\d+):(\d+)(?:\.(\d+))?\]/g;
+    
+    for (const line of lines) {
+      const cleanLine = line.trim();
+      if (!cleanLine) continue;
+      
+      let match;
+      const times: number[] = [];
+      let lastIndex = 0;
+      
+      timeReg.lastIndex = 0;
+      while ((match = timeReg.exec(cleanLine)) !== null) {
+        const min = parseInt(match[1], 10);
+        const sec = parseInt(match[2], 10);
+        const ms = match[3] ? parseInt(match[3], 10) : 0;
+        const msLen = match[3] ? match[3].length : 0;
+        const msFraction = msLen === 3 ? ms / 1000 : ms / 100;
+        const timeInSeconds = min * 60 + sec + msFraction;
+        times.push(timeInSeconds);
+        lastIndex = timeReg.lastIndex;
+      }
+      
+      const text = cleanLine.substring(lastIndex).trim();
+      for (const time of times) {
+        result.push({ text, time });
+      }
+    }
+    
+    result.sort((a, b) => a.time - b.time);
+    return result;
+  }
+
+  // 监听当前播放曲目，自动加载对应歌词
+  watch(currentTrack, async (newTrack) => {
+    if (newTrack) {
+      try {
+        const lrcText = await invoke<string | null>('library_get_lyrics', { trackId: newTrack.id });
+        if (lrcText) {
+          lyrics.value = parseLrc(lrcText);
+        } else {
+          lyrics.value = [
+            { text: newTrack.title, time: 0 },
+            { text: newTrack.artist, time: 3 },
+            { text: "— 暂无歌词 —", time: 6 }
+          ];
+        }
+      } catch (e) {
+        console.error("Failed to load lyrics:", e);
+        lyrics.value = [
+          { text: newTrack.title, time: 0 },
+          { text: "— 暂无歌词 —", time: 3 }
+        ];
+      }
+    } else {
+      lyrics.value = [];
+    }
+  }, { immediate: true });
 
   const currentAlbumDetailsData = ref<any>(null);
   const currentArtistDetailsData = ref<any>(null);
@@ -881,5 +949,6 @@ export const usePlayerStore = defineStore("player", () => {
     toggleSource,
     scanSource,
     refreshCurrentPlaylistTracks,
+    activeLyricIndex,
   };
 });

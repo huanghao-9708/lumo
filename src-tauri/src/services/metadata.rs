@@ -14,6 +14,7 @@ pub struct AudioMetadata {
     pub channels: Option<i64>,
     pub picture_data: Option<Vec<u8>>,
     pub picture_mime: Option<String>,
+    pub lyrics: Option<String>,
 }
 
 pub fn extract_metadata<P: AsRef<Path>>(path: P) -> Result<AudioMetadata, String> {
@@ -41,6 +42,16 @@ pub fn extract_metadata<P: AsRef<Path>>(path: P) -> Result<AudioMetadata, String
         if let Some(pic) = tag.pictures().first() {
             metadata.picture_data = Some(pic.data().to_vec());
             metadata.picture_mime = pic.mime_type().map(|m| m.to_string());
+        }
+
+        // 尝试从 tag items 里面查找 Lyrics 键，取出内嵌歌词
+        for item in tag.items() {
+            if item.key() == &lofty::tag::ItemKey::Lyrics {
+                if let Some(txt) = item.value().text() {
+                    metadata.lyrics = Some(txt.to_string());
+                    break;
+                }
+            }
         }
     }
 
