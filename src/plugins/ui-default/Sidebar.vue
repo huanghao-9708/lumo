@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import {
-  AudioLines,
   Music2,
   Disc3,
   Mic2,

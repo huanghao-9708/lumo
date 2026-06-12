@@ -1,0 +1,64 @@
+name: 'Publish Release'
+
+on:
+  push:
+    tags:
+      - 'v*' # 当推送形如 v0.1.0 的 tag 时触发
+  workflow_dispatch: # 允许手动触发
+
+jobs:
+  publish-tauri:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: 'macos-latest'
+            args: '--target universal-apple-darwin'
+          - platform: 'ubuntu-22.04'
+            args: ''
+          - platform: 'windows-latest'
+            args: ''
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'x86_64-apple-darwin,aarch64-apple-darwin' || '' }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          work-dir: './src-tauri'
+
+      - name: Install dependencies (ubuntu only)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Install frontend dependencies
+        run: npm install
+
+      - name: Build and Publish
+        uses: tauri-apps/tauri-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: v__VERSION__ # 使用 tauri.conf.json 里的版本自动创建 tag，例如 v0.1.0
+          releaseName: 'Lumo v__VERSION__'
+          releaseBody: 'Lumo 音乐播放器版本发布。请在下方下载对应平台的安装包。'
+          releaseDraft: true # 创建为一个草稿发布，方便您确认后手动发布
+          prerelease: false
+          args: ${{ matrix.args }}

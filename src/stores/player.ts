@@ -553,9 +553,9 @@ export const usePlayerStore = defineStore("player", () => {
   const currentPlaylistDetailsData = ref<any>(null);
   const isCreatePlaylistModalOpen = ref(false);
 
-  const createPlaylist = async (name: string, description: string) => {
+  const createPlaylist = async (name: string, description: string): Promise<number> => {
     try {
-      const id = await invoke('library_create_playlist', { name, description });
+      const id = await invoke<number>('library_create_playlist', { name, description });
       await fetchPlaylists();
       return id;
     } catch(e) {

@@ -99,7 +99,7 @@ onUnmounted(() => {
           <Play v-else class="w-5 h-5 fill-current ml-1" />
         </button>
 
-        <button @click="playerStore.nextTrack" class="text-gray-600 hover:text-gray-900 transition-smooth hover-scale"><SkipForward class="w-5 h-5 fill-current" /></button>
+        <button @click="playerStore.nextTrack()" class="text-gray-600 hover:text-gray-900 transition-smooth hover-scale"><SkipForward class="w-5 h-5 fill-current" /></button>
         <button class="text-gray-400 hover:text-gray-700 transition-smooth hover-scale"><Repeat class="w-[18px] h-[18px]" /></button>
       </div>
       

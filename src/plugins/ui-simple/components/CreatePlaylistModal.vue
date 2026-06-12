@@ -17,7 +17,7 @@ const submit = async () => {
   if (!name.value.trim() || isSubmitting.value) return;
   isSubmitting.value = true;
   try {
-    const newId = await playerStore.createPlaylist(name.value.trim(), description.value.trim());
+    const newId = await playerStore.createPlaylist(name.value.trim(), description.value.trim()) as number;
     close();
     playerStore.activePlaylistId = newId;
     playerStore.activeLibraryTab = '歌单详情';
