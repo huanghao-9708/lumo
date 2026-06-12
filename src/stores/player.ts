@@ -1,7 +1,7 @@
 import { defineStore } from "pinia";
 import { ref, computed, watch } from "vue";
 import { invoke } from '@tauri-apps/api/core';
-
+import { listen } from '@tauri-apps/api/event';
 export interface Track {
   id: number;
   title: string;
@@ -1037,14 +1037,33 @@ export const usePlayerStore = defineStore("player", () => {
       source.lastScanned = "Scanning...";
       try {
         await invoke('source_scan', { sourceId: id });
-        source.lastScanned = "Just now";
-        await fetchTracks(); // 扫描完刷新歌曲列表
+        // Don't set "Just now" here, the backend will emit `scan-progress` and `scan-complete`.
       } catch (e) {
         console.error("Scan failed:", e);
         source.lastScanned = "Error";
       }
     }
   }
+
+  // Register global listeners for scan events
+  listen('scan-progress', (event: any) => {
+    const payload = event.payload as { source_id: number; scanned_count: number; current_path: string };
+    const source = sources.value.find(s => s.id === payload.source_id);
+    if (source) {
+      source.lastScanned = `扫描中: ${payload.scanned_count} 首...`;
+    }
+  });
+
+  listen('scan-complete', async (event: any) => {
+    const sourceId = event.payload as number;
+    const source = sources.value.find(s => s.id === sourceId);
+    if (source) {
+      source.lastScanned = "刚刚扫描";
+    }
+    await fetchTracks(true); // Reset and fetch
+    await fetchAlbums(true);
+    await fetchArtists(true);
+  });
 
   return {
     isDarkMode,

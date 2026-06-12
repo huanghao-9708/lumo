@@ -38,8 +38,10 @@ pub fn source_scan(app: tauri::AppHandle, db_state: State<'_, DbState>, source_i
     };
 
     let app_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let conn = db_state.db.lock().map_err(|e| e.to_string())?;
-    scan_local_directory(&conn, source_id, &PathBuf::from(path), &app_dir);
+    
+    std::thread::spawn(move || {
+        scan_local_directory(app, source_id, &PathBuf::from(path), &app_dir);
+    });
     
     Ok(())
 }
