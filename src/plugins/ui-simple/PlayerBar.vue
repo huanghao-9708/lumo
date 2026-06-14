@@ -101,7 +101,7 @@ onUnmounted(() => {
       </div>
       <div class="flex-1 min-w-0 flex flex-col justify-center">
         <h3 class="font-serif italic font-semibold text-black text-lg truncate mb-0.5">{{ playerStore.currentTrack?.title || 'Lumo Music' }}</h3>
-        <p class="text-[10px] text-[#555] font-bold tracking-widest uppercase truncate">{{ playerStore.currentTrack?.artist_name || playerStore.currentTrack?.artist || 'Ready to play' }}</p>
+        <p class="text-[10px] text-[#555] font-bold tracking-widest uppercase truncate">{{ playerStore.currentTrack?.artist || 'Ready to play' }}</p>
       </div>
       
       <!-- 收藏与添加歌单按钮 -->

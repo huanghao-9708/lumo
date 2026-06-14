@@ -3,7 +3,8 @@ import { ref, onMounted, watch } from 'vue';
 import { RefreshCw, Trash2, Power, PowerOff, Plus, X, ChevronDown, ChevronRight, HardDrive, Globe, Folder } from 'lucide-vue-next';
 import { usePlayerStore } from '../../../stores/player';
 import { open } from '@tauri-apps/plugin-dialog';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '../../../utils/tauriInvoke';
+import { resetArtworkFrontCache } from '../../../composables/useArtworkSrc';
 
 const playerStore = usePlayerStore();
 
@@ -76,6 +77,8 @@ const clearCache = async () => {
     try {
       cacheSizeStr.value = '清理中...';
       await invoke('library_clear_cache');
+      // 同步清掉前端内存里的 dataURL 缓存，否则已删除的后端封面还会被继续使用
+      resetArtworkFrontCache();
       await fetchCacheSize();
       alert('清理缓存成功');
     } catch (e) {

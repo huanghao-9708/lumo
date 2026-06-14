@@ -243,3 +243,13 @@ pub struct FolderEntryDTO {
     /// 如果是音频文件且被索引，则附带其完整歌曲信息
     pub track: Option<TrackDTO>,
 }
+
+/// `library_get_folder_contents` 的返回包装。
+/// 包含当前页的条目和总条目数，前端据此判断是否还有更多内容需要滚动加载。
+#[derive(Debug, serde::Serialize)]
+pub struct FolderContentsResult {
+    /// 当前页的文件夹条目（已排序：目录优先、再按名称）
+    pub entries: Vec<FolderEntryDTO>,
+    /// 该文件夹下的总条目数（不随分页变化），前端用 `entries.len() < total` 判断是否到末尾
+    pub total: usize,
+}

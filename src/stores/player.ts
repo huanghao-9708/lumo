@@ -1,7 +1,49 @@
 import { defineStore } from "pinia";
-import { ref, computed, watch } from "vue";
-import { invoke } from '@tauri-apps/api/core';
+import { ref, computed, watch, shallowRef } from "vue";
+import { invoke } from '../utils/tauriInvoke';
 import { listen } from '@tauri-apps/api/event';
+
+// ================= 后端 DTO 接口（与 Rust 端 models.rs 保持一致） =================
+
+/** 后端 `TrackDTO` 序列化结果，字段名沿用 snake_case */
+export interface TrackDTO {
+  id: number;
+  title: string;
+  artist_name: string | null;
+  album_title: string | null;
+  duration_ms: number | null;
+  format: string | null;
+  media_file_id: number;
+  is_favorite: boolean;
+  cover_artwork_id?: number | null;
+}
+
+/** 后端 `AlbumDTO` 序列化结果 */
+export interface AlbumDTO {
+  id: number;
+  title: string;
+  artist_name: string | null;
+  cover_artwork_id: number | null;
+  track_count: number;
+}
+
+/** 后端 `ArtistDTO` 序列化结果 */
+export interface ArtistDTO {
+  id: number;
+  name: string;
+  track_count: number;
+}
+
+/** 后端 `PlaylistDTO` 序列化结果 */
+interface PlaylistDTOBackend {
+  id: number;
+  name: string;
+  description: string | null;
+  track_count: number;
+}
+
+// ================= 前端展示模型 =================
+
 export interface Track {
   id: number;
   title: string;
@@ -20,6 +62,7 @@ export interface Playlist {
   id: number;
   name: string;
   count: number;
+  description?: string | null;
 }
 
 export interface Album {
@@ -29,7 +72,7 @@ export interface Album {
   year: number;
   coverColor: string;
   cover_artwork_id?: number | null;
-  artist_name?: string;
+  artist_name?: string | null;
   track_count?: number;
 }
 
@@ -55,8 +98,21 @@ export interface FolderEntry {
   name: string;
   is_dir: boolean;
   path: string;
-  track?: any;
+  track?: Track;
 }
+
+/** 后端 `FolderContentsResult` 序列化结果 */
+interface FolderContentsResultDTO {
+  entries: Array<{
+    name: string;
+    is_dir: boolean;
+    path: string;
+    track?: TrackDTO;
+  }>;
+  total: number;
+}
+
+// ================= Store 实现 =================
 
 export const usePlayerStore = defineStore("player", () => {
   function getDeterministicColor(str: string): string {
@@ -78,24 +134,58 @@ export const usePlayerStore = defineStore("player", () => {
     return colors[Math.abs(hash) % colors.length];
   }
 
+  /** 把秒数格式化成 `mm:ss`，用于 UI 显示 */
+  function formatTime(seconds: number): string {
+    const min = Math.floor(seconds / 60);
+    const sec = Math.floor(seconds % 60);
+    return `${min.toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")}`;
+  }
+
+  /**
+   * 统一的 DTO → 前端 Track 映射器。
+   * 之前这段逻辑在 7+ 处 fetch 函数里几乎一字不差地重复，难以维护，
+   * 现在抽到这里，所有 `TrackDTO[]` 来源都走同一通道。
+   */
+  function mapTrackDTO(t: TrackDTO): Track {
+    const durationMs = t.duration_ms ?? 0;
+    return {
+      id: t.id,
+      title: t.title,
+      artist: t.artist_name || '未知艺人',
+      album: t.album_title || '未知专辑',
+      duration: formatTime(durationMs / 1000),
+      durationSec: Math.floor(durationMs / 1000),
+      format: t.format ? t.format.toUpperCase() : 'UNKNOWN',
+      coverColor: getDeterministicColor(t.album_title || t.title || 'Unknown'),
+      cover_artwork_id: t.cover_artwork_id,
+      isFavorite: t.is_favorite || false,
+      primary_file_id: t.media_file_id,
+    };
+  }
+
+  /** 把 `TrackDTO[]` 批量映射为前端 Track[] */
+  function mapTrackList(list: TrackDTO[]): Track[] {
+    return list.map(mapTrackDTO);
+  }
+
   // 基础状态
   const isDarkMode = ref(false);
   const isPlaying = ref(false);
   const volume = ref(75);
-  
-  const queue = ref<any[]>([]);
+
+  const queue = ref<Track[]>([]);
   const currentIndex = ref(-1);
   const playMode = ref<'normal'|'repeat'|'repeat-one'|'shuffle'>('normal');
   const progressMs = ref(0);
   const durationMs = ref(0);
   let progressTimer: ReturnType<typeof setInterval> | null = null;
-  
+
   const currentTrackFileInfo = ref<any>(null);
   const isErrorTracks = ref(false);
   const isErrorAlbums = ref(false);
   const isErrorArtists = ref(false);
   const hasLoadedCurrentFile = ref(false);
-  
+
   const activeLibraryTab = ref("全部歌曲");
   const activeSourceTab = ref("本地音乐库");
   const activeRightTab = ref<"歌词" | "播放队列" | "文件信息">("歌词");
@@ -112,47 +202,89 @@ export const usePlayerStore = defineStore("player", () => {
   const folderBreadcrumbs = ref<string[]>([]);
   const isFetchingFolder = ref(false);
 
-  async function fetchFolderContents(sourceId: number, folderPath?: string) {
+  // 文件夹分页状态：服务端真分页，前端按需增量加载。
+  // hasMoreFolderEntries 用 total - 已加载条数 判定，避免大目录一次性塞进 DOM。
+  const folderPageSize = 100;
+  let folderOffset = 0;
+  const folderTotalCount = ref(0);
+  const hasMoreFolderEntries = computed(() => currentFolderContents.value.length < folderTotalCount.value);
+
+  /**
+   * 拉取文件夹内容。
+   * - `append=false`（默认）：重置并加载第一页，用于切换来源/进入子目录
+   * - `append=true`：在当前列表后追加下一页，用于滚动到底部时增量加载
+   */
+  async function fetchFolderContents(sourceId: number, folderPath?: string, append = false) {
+    // 增量加载时如果正在请求或已无更多，直接返回，避免重复请求
+    if (append && (isFetchingFolder.value || !hasMoreFolderEntries.value)) return;
+
+    if (!append) {
+      // 切换目录：先清空旧内容，立刻给用户"已切换"的视觉反馈
+      currentFolderContents.value = [];
+      folderOffset = 0;
+      folderTotalCount.value = 0;
+    }
+
     isFetchingFolder.value = true;
     try {
-      const res: any[] = await invoke('library_get_folder_contents', { sourceId, folderPath: folderPath || null });
-      currentFolderContents.value = res.map(item => ({
-        ...item,
-        track: item.track ? {
-          ...item.track,
-          artist: item.track.artist_name || '未知艺人',
-          album: item.track.album_title || '未知专辑',
-          duration: formatTime(item.track.duration_ms / 1000),
-          durationSec: Math.floor(item.track.duration_ms / 1000),
-          format: item.track.format ? item.track.format.toUpperCase() : 'UNKNOWN',
-          coverColor: getDeterministicColor(item.track.album_title || item.track.title || 'Unknown'),
-          primary_file_id: item.track.media_file_id
-        } : undefined
+      const res = await invoke('library_get_folder_contents', {
+        sourceId,
+        folderPath: folderPath || null,
+        limit: folderPageSize,
+        offset: folderOffset,
+      }) as FolderContentsResultDTO;
+
+      const page = res.entries.map(item => ({
+        name: item.name,
+        is_dir: item.is_dir,
+        path: item.path,
+        track: item.track ? mapTrackDTO(item.track) : undefined,
       }));
+
+      folderTotalCount.value = res.total;
+      if (append) {
+        currentFolderContents.value.push(...page);
+      } else {
+        currentFolderContents.value = page;
+      }
+      folderOffset += page.length;
+
       activeFolderSourceId.value = sourceId;
       activeFolderPath.value = folderPath || null;
-      
-      // 更新面包屑
-      if (!folderPath) {
-        folderBreadcrumbs.value = [];
-      } else {
-        // 如果我们进入一个子目录，且当前面包屑最后一个不是它，则加入面包屑
-        if (folderBreadcrumbs.value[folderBreadcrumbs.value.length - 1] !== folderPath) {
-          const isGoingBack = folderBreadcrumbs.value.includes(folderPath);
-          if (isGoingBack) {
-            const idx = folderBreadcrumbs.value.indexOf(folderPath);
-            folderBreadcrumbs.value = folderBreadcrumbs.value.slice(0, idx + 1);
-          } else {
-            folderBreadcrumbs.value.push(folderPath);
+
+      // 更新面包屑（只在非追加模式下更新，避免追加时破坏导航状态）
+      if (!append) {
+        if (!folderPath) {
+          folderBreadcrumbs.value = [];
+        } else {
+          // 如果我们进入一个子目录，且当前面包屑最后一个不是它，则加入面包屑
+          if (folderBreadcrumbs.value[folderBreadcrumbs.value.length - 1] !== folderPath) {
+            const isGoingBack = folderBreadcrumbs.value.includes(folderPath);
+            if (isGoingBack) {
+              const idx = folderBreadcrumbs.value.indexOf(folderPath);
+              folderBreadcrumbs.value = folderBreadcrumbs.value.slice(0, idx + 1);
+            } else {
+              folderBreadcrumbs.value.push(folderPath);
+            }
           }
         }
       }
     } catch (e) {
       console.error(e);
-      currentFolderContents.value = [];
+      if (!append) currentFolderContents.value = [];
     } finally {
       isFetchingFolder.value = false;
     }
+  }
+
+  /** 滚动到底部时调用：加载当前文件夹的下一页 */
+  async function fetchMoreFolderEntries() {
+    if (activeFolderSourceId.value === null) return;
+    await fetchFolderContents(
+      activeFolderSourceId.value,
+      activeFolderPath.value || undefined,
+      true,
+    );
   }
 
   async function addFolderToPlaylist(sourceId: number, folderPath: string, playlistId: number) {
@@ -233,7 +365,10 @@ export const usePlayerStore = defineStore("player", () => {
   const sources = ref<MusicSource[]>([]);
 
   // 专辑数据
-  const albums = ref<Album[]>([]);
+  // [验证] 改为 shallowRef：只追踪 .value 的整体替换，不深度代理数组内对象。
+// 目的：验证 invoke 慢是否由 Vue 对大数组的深度 reactive proxy 开销导致。
+// 若验证成立，后续会把 tracks/queue 等也迁移（它们需要额外处理属性直改）。
+const albums = shallowRef<Album[]>([]);
 
   // 艺人数据
   const artists = ref<Artist[]>([]);
@@ -255,34 +390,23 @@ export const usePlayerStore = defineStore("player", () => {
       tracksOffset = 0;
       hasMoreTracks.value = true;
     }
-    
+
     if (!hasMoreTracks.value || isLoadingTracks.value) return;
     isLoadingTracks.value = true;
 
     try {
       isErrorTracks.value = false;
-      const result: any[] = await invoke('library_get_tracks', { 
-        limit: tracksLimit, 
+      const result: TrackDTO[] = await invoke('library_get_tracks', {
+        limit: tracksLimit,
         offset: tracksOffset,
         searchKeyword: searchQuery.value || null
       });
-      
+
       if (result.length < tracksLimit) {
         hasMoreTracks.value = false;
       }
-      
-      const newTracks = result.map((t: any) => ({
-        ...t,
-        artist: t.artist_name || '未知艺人',
-        album: t.album_title || '未知专辑',
-        duration: formatTime(t.duration_ms / 1000),
-        durationSec: Math.floor(t.duration_ms / 1000),
-        format: t.format ? t.format.toUpperCase() : 'UNKNOWN',
-        coverColor: getDeterministicColor(t.album_title || t.title || 'Unknown'), cover_artwork_id: t.cover_artwork_id,
-        isFavorite: t.is_favorite || false,
-        primary_file_id: t.media_file_id
-      }));
 
+      const newTracks = mapTrackList(result);
       tracks.value.push(...newTracks);
       tracksOffset += result.length;
     } catch (e) {
@@ -295,7 +419,7 @@ export const usePlayerStore = defineStore("player", () => {
 
   async function fetchPlaylists() {
     try {
-      const result: any[] = await invoke('library_get_playlists');
+      const result: PlaylistDTOBackend[] = await invoke('library_get_playlists');
       playlists.value = result.map(p => ({
         id: p.id,
         name: p.name,
@@ -309,50 +433,59 @@ export const usePlayerStore = defineStore("player", () => {
 
   async function toggleFavorite(trackId: number) {
     try {
+      // 在所有可能缓存了该 track 的位置中找到引用，统一更新 UI。
+      // 注意：不再在找不到时硬编码 isFavorite=true，而是先查询后端真实状态再翻转。
       const targetTracks: Track[] = [];
-      
+
       if (tracks.value) {
         const trackInTracks = tracks.value.find(t => t && t.id === trackId);
         if (trackInTracks) targetTracks.push(trackInTracks);
       }
-      
+
       if (currentAlbumDetailsData.value?.tracks) {
-        const trackInAlbum = currentAlbumDetailsData.value.tracks.find((t: any) => t && t.id === trackId);
+        const trackInAlbum = currentAlbumDetailsData.value.tracks.find((t: Track) => t && t.id === trackId);
         if (trackInAlbum) targetTracks.push(trackInAlbum);
       }
-      
+
       if (currentPlaylistDetailsData.value?.tracks) {
-        const trackInPlaylist = currentPlaylistDetailsData.value.tracks.find((t: any) => t && t.id === trackId);
+        const trackInPlaylist = currentPlaylistDetailsData.value.tracks.find((t: Track) => t && t.id === trackId);
         if (trackInPlaylist) targetTracks.push(trackInPlaylist);
       }
-      
+
       if (currentArtistDetailsData.value?.tracks) {
-        const trackInArtist = currentArtistDetailsData.value.tracks.find((t: any) => t && t.id === trackId);
+        const trackInArtist = currentArtistDetailsData.value.tracks.find((t: Track) => t && t.id === trackId);
         if (trackInArtist) targetTracks.push(trackInArtist);
       }
-      
+
       if (queue.value) {
         const trackInQueue = queue.value.find(t => t && t.id === trackId);
         if (trackInQueue) targetTracks.push(trackInQueue);
       }
-      
+
+      // 兜底：本地没有该 track 的缓存，无法判断当前状态。
+      // 早期实现硬编码 isFavorite=true，会导致"取消收藏"被误当作"添加收藏"。
+      // 这里改为：查询是否已在收藏表里，再决定翻转方向。
+      let newStatus: boolean;
       if (targetTracks.length === 0) {
-        // 备选方案：如果都没有，直接向后端发送 toggle，并且乐观添加/移除
-        await invoke('library_toggle_favorite', { trackId, isFavorite: true });
-        return;
+        const favorites: TrackDTO[] = await invoke('library_get_favorite_tracks');
+        const exists = favorites.some(t => t.id === trackId);
+        newStatus = !exists;
+      } else {
+        newStatus = !targetTracks[0].isFavorite;
       }
-      
-      const newStatus = !targetTracks[0].isFavorite;
+
+      // 乐观更新
       targetTracks.forEach(t => {
         if (t) t.isFavorite = newStatus;
       });
-      
+
       try {
         await invoke('library_toggle_favorite', { trackId, isFavorite: newStatus });
       } catch (e) {
         console.error("Backend failed to toggle favorite:", e);
+        // 回滚
         targetTracks.forEach(t => {
-          if (t) t.isFavorite = !newStatus; // rollback
+          if (t) t.isFavorite = !newStatus;
         });
       }
     } catch (e) {
@@ -382,18 +515,8 @@ export const usePlayerStore = defineStore("player", () => {
 
   async function fetchPlaylistTracks(playlistId: number) {
     try {
-      const result: any[] = await invoke('library_get_playlist_tracks', { playlistId });
-      tracks.value = result.map((t: any) => ({
-        ...t,
-        artist: t.artist_name || '未知艺人',
-        album: t.album_title || '未知专辑',
-        duration: formatTime(t.duration_ms / 1000),
-        durationSec: Math.floor(t.duration_ms / 1000),
-        format: t.format ? t.format.toUpperCase() : 'UNKNOWN',
-        coverColor: getDeterministicColor(t.album_title || t.title || 'Unknown'), cover_artwork_id: t.cover_artwork_id,
-        isFavorite: t.is_favorite || false,
-        primary_file_id: t.media_file_id
-      }));
+      const result: TrackDTO[] = await invoke('library_get_playlist_tracks', { playlistId });
+      tracks.value = mapTrackList(result);
       hasMoreTracks.value = false;
       tracksOffset = tracks.value.length;
     } catch(e) {
@@ -403,18 +526,8 @@ export const usePlayerStore = defineStore("player", () => {
 
   async function fetchRecentlyPlayed() {
     try {
-      const result: any[] = await invoke('library_get_recently_played', { limit: 50 });
-      tracks.value = result.map((t: any) => ({
-        ...t,
-        artist: t.artist_name || '未知艺人',
-        album: t.album_title || '未知专辑',
-        duration: formatTime(t.duration_ms / 1000),
-        durationSec: Math.floor(t.duration_ms / 1000),
-        format: t.format ? t.format.toUpperCase() : 'UNKNOWN',
-        coverColor: getDeterministicColor(t.album_title || t.title || 'Unknown'), cover_artwork_id: t.cover_artwork_id,
-        isFavorite: t.is_favorite || false,
-        primary_file_id: t.media_file_id
-      }));
+      const result: TrackDTO[] = await invoke('library_get_recently_played', { limit: 50 });
+      tracks.value = mapTrackList(result);
       hasMoreTracks.value = false;
     } catch(e) {
       console.error(e);
@@ -423,18 +536,8 @@ export const usePlayerStore = defineStore("player", () => {
 
   async function fetchFavoriteTracks() {
     try {
-      const result: any[] = await invoke('library_get_favorite_tracks');
-      tracks.value = result.map((t: any) => ({
-        ...t,
-        artist: t.artist_name || '未知艺人',
-        album: t.album_title || '未知专辑',
-        duration: formatTime(t.duration_ms / 1000),
-        durationSec: Math.floor(t.duration_ms / 1000),
-        format: t.format ? t.format.toUpperCase() : 'UNKNOWN',
-        coverColor: getDeterministicColor(t.album_title || t.title || 'Unknown'), cover_artwork_id: t.cover_artwork_id,
-        isFavorite: t.is_favorite || false,
-        primary_file_id: t.media_file_id
-      }));
+      const result: TrackDTO[] = await invoke('library_get_favorite_tracks');
+      tracks.value = mapTrackList(result);
       hasMoreTracks.value = false;
     } catch(e) {
       console.error(e);
@@ -462,35 +565,62 @@ export const usePlayerStore = defineStore("player", () => {
   const isLoadingAlbums = ref(false);
 
   async function fetchAlbums(reset: boolean = false) {
+    // ===== [诊断日志] 临时性能分析，问题定位后可移除 =====
+    const t0 = performance.now();
+    const tag = reset ? '[RESET]' : '[MORE]';
+
     if (reset) {
       albums.value = [];
       albumsOffset = 0;
       hasMoreAlbums.value = true;
     }
-    if (!hasMoreAlbums.value || isLoadingAlbums.value) return;
+    if (!hasMoreAlbums.value || isLoadingAlbums.value) {
+      console.log(`%c[PERF] fetchAlbums ${tag} SKIPPED (loading=${isLoadingAlbums.value} hasMore=${hasMoreAlbums.value})`, 'color:#888');
+      return;
+    }
     isLoadingAlbums.value = true;
     try {
       isErrorAlbums.value = false;
-      const result: any[] = await invoke('library_get_albums', {
+      const t_invoke_start = performance.now();
+      // [诊断] 用 MessageChannel 测量主线程阻塞。
+      // postMessage 是宏任务，正常情况下 ~4ms 内会被处理。
+      // 如果 invoke 期间主线程被滚动事件/响应式更新占满，这个回调会被严重延迟。
+      let mt_latency = -1;
+      const mtPostedAt = performance.now();
+      const ch = new MessageChannel();
+      ch.port2.onmessage = () => { mt_latency = performance.now() - mtPostedAt; };
+      ch.port1.postMessage(null);
+
+      const result: AlbumDTO[] = await invoke('library_get_albums', {
         limit: albumsLimit,
         offset: albumsOffset,
-        searchKeyword: searchQuery.value || null
+        searchQuery: searchQuery.value || null
       });
+      const t_invoke_end = performance.now();
       if (result.length < albumsLimit) {
         hasMoreAlbums.value = false;
       }
-      const newAlbums = result.map((a: any) => ({
+      const newAlbums: Album[] = result.map((a) => ({
         id: a.id,
         title: a.title,
         artist: a.artist_name || '未知艺人',
-        year: a.release_year || new Date().getFullYear(),
+        year: (a as any).release_year || new Date().getFullYear(),
         coverColor: getDeterministicColor(a.title || 'Unknown'),
         cover_artwork_id: a.cover_artwork_id,
         artist_name: a.artist_name,
         track_count: a.track_count
       }));
-      albums.value.push(...newAlbums);
+      // [验证] shallowRef 下 push 不会触发响应，必须整体替换
+      albums.value = [...albums.value, ...newAlbums];
       albumsOffset += result.length;
+      const t_done = performance.now();
+      console.log(
+        `%c[PERF] fetchAlbums ${tag} offset=${albumsOffset - result.length} returned=${result.length} | ` +
+        `invoke=${Math.round(t_invoke_end - t_invoke_start)}ms ` +
+        `(后端耗时见 Rust 日志) | map+push=${Math.round(t_done - t_invoke_end)}ms | total=${Math.round(t_done - t0)}ms | ` +
+        `main_thread_idle=${Math.round(mt_latency)}ms (主线程空闲延迟，>50ms 说明被阻塞)`,
+        'color:#08c'
+      );
     } catch (e) {
       console.error(e);
       isErrorAlbums.value = true;
@@ -514,7 +644,7 @@ export const usePlayerStore = defineStore("player", () => {
     isLoadingArtists.value = true;
     try {
       isErrorArtists.value = false;
-      const result: any[] = await invoke('library_get_artists', {
+      const result: ArtistDTO[] = await invoke('library_get_artists', {
         limit: artistsLimit,
         offset: artistsOffset,
         searchKeyword: searchQuery.value || null
@@ -522,7 +652,7 @@ export const usePlayerStore = defineStore("player", () => {
       if (result.length < artistsLimit) {
         hasMoreArtists.value = false;
       }
-      const newArtists = result.map((a: any) => ({
+      const newArtists: Artist[] = result.map((a) => ({
         id: a.id,
         name: a.name,
         trackCount: a.track_count,
@@ -553,15 +683,15 @@ export const usePlayerStore = defineStore("player", () => {
     const lines = lrcText.split('\n');
     const result: LyricLine[] = [];
     const timeReg = /\[(\d+):(\d+)(?:\.(\d+))?\]/g;
-    
+
     for (const line of lines) {
       const cleanLine = line.trim();
       if (!cleanLine) continue;
-      
+
       let match;
       const times: number[] = [];
       let lastIndex = 0;
-      
+
       timeReg.lastIndex = 0;
       while ((match = timeReg.exec(cleanLine)) !== null) {
         const min = parseInt(match[1], 10);
@@ -573,13 +703,13 @@ export const usePlayerStore = defineStore("player", () => {
         times.push(timeInSeconds);
         lastIndex = timeReg.lastIndex;
       }
-      
+
       const text = cleanLine.substring(lastIndex).trim();
       for (const time of times) {
         result.push({ text, time });
       }
     }
-    
+
     result.sort((a, b) => a.time - b.time);
     return result;
   }
@@ -642,30 +772,20 @@ export const usePlayerStore = defineStore("player", () => {
     } else {
       currentPlaylistDetailsData.value.isLoadingTracks = true;
     }
-    
+
     try {
-      const result: any[] = await invoke('library_get_playlist_tracks', { playlistId });
-      const tracksData = result.map(t => ({
-         ...t,
-         artist: t.artist_name || '未知艺人',
-         album: t.album_title || '未知专辑',
-         duration: formatTime(t.duration_ms / 1000),
-         durationSec: Math.floor(t.duration_ms / 1000),
-         format: t.format ? t.format.toUpperCase() : 'UNKNOWN',
-         coverColor: getDeterministicColor(t.album_title || t.title || 'Unknown'), cover_artwork_id: t.cover_artwork_id,
-         isFavorite: t.is_favorite || false,
-         primary_file_id: t.media_file_id
-       }));
-       
-       playlist.count = tracksData.length;
-       currentPlaylistDetailsData.value = { 
-         ...playlist,
-         tracks: tracksData,
-         isLoadingTracks: false
-       };
+      const result: TrackDTO[] = await invoke('library_get_playlist_tracks', { playlistId });
+      const tracksData = mapTrackList(result);
+
+      playlist.count = tracksData.length;
+      currentPlaylistDetailsData.value = {
+        ...playlist,
+        tracks: tracksData,
+        isLoadingTracks: false
+      };
     } catch(e) {
-       console.error(e);
-       currentPlaylistDetailsData.value.isLoadingTracks = false;
+      console.error(e);
+      currentPlaylistDetailsData.value.isLoadingTracks = false;
     }
   }
 
@@ -682,18 +802,8 @@ export const usePlayerStore = defineStore("player", () => {
        const album = albums.value.find(a => a.id === newId);
        if (album) {
          try {
-           const result: any[] = await invoke('library_get_album_tracks', { albumId: newId });
-           const tracksData = result.map(t => ({
-             ...t,
-             artist: t.artist_name || '未知艺人',
-             album: t.album_title || '未知专辑',
-             duration: formatTime(t.duration_ms / 1000),
-             durationSec: Math.floor(t.duration_ms / 1000),
-             format: t.format ? t.format.toUpperCase() : 'UNKNOWN',
-             coverColor: getDeterministicColor(t.album_title || t.title || 'Unknown'), cover_artwork_id: t.cover_artwork_id,
-             isFavorite: t.is_favorite || false,
-             primary_file_id: t.media_file_id
-           }));
+           const result: TrackDTO[] = await invoke('library_get_album_tracks', { albumId: newId });
+           const tracksData = mapTrackList(result);
            currentAlbumDetailsData.value = { ...album, tracks: tracksData };
          } catch (e) {
            console.error(e);
@@ -712,19 +822,9 @@ export const usePlayerStore = defineStore("player", () => {
     try {
       const limit = 30;
       const offset = currentArtistDetailsData.value.tracksOffset;
-      const tracksResult: any[] = await invoke('library_get_artist_tracks', { artistId, limit, offset });
-      
-      const tracksData = tracksResult.map(t => ({
-            ...t,
-            artist: t.artist_name || '未知艺人',
-            album: t.album_title || '未知专辑',
-            duration: formatTime(t.duration_ms / 1000),
-            durationSec: Math.floor(t.duration_ms / 1000),
-            format: t.format ? t.format.toUpperCase() : 'UNKNOWN',
-            coverColor: getDeterministicColor(t.album_title || t.title || 'Unknown'), cover_artwork_id: t.cover_artwork_id,
-            isFavorite: t.is_favorite || false,
-            primary_file_id: t.media_file_id
-      }));
+      const tracksResult: TrackDTO[] = await invoke('library_get_artist_tracks', { artistId, limit, offset });
+
+      const tracksData = mapTrackList(tracksResult);
 
       if (isLoadMore) {
         currentArtistDetailsData.value.tracks.push(...tracksData);
@@ -748,17 +848,17 @@ export const usePlayerStore = defineStore("player", () => {
     try {
       const limit = 20;
       const offset = currentArtistDetailsData.value.albumsOffset;
-      const albumsResult: any[] = await invoke('library_get_artist_albums', { artistId, limit, offset });
-      
-      const artistAlbums = albumsResult.map(a => ({
-              id: a.id,
-              title: a.title,
-              artist: a.artist_name || '未知艺人',
-              year: a.release_year || new Date().getFullYear(),
-              coverColor: getDeterministicColor(a.title || 'Unknown'),
-              cover_artwork_id: a.cover_artwork_id,
-              artist_name: a.artist_name,
-              track_count: a.track_count
+      const albumsResult: AlbumDTO[] = await invoke('library_get_artist_albums', { artistId, limit, offset });
+
+      const artistAlbums: Album[] = albumsResult.map(a => ({
+        id: a.id,
+        title: a.title,
+        artist: a.artist_name || '未知艺人',
+        year: (a as any).release_year || new Date().getFullYear(),
+        coverColor: getDeterministicColor(a.title || 'Unknown'),
+        cover_artwork_id: a.cover_artwork_id,
+        artist_name: a.artist_name,
+        track_count: a.track_count
       }));
 
       if (isLoadMore) {
@@ -778,11 +878,11 @@ export const usePlayerStore = defineStore("player", () => {
   watch(activeArtistId, async (newId) => {
     if (newId) {
       const artist = artists.value.find(a => a.id === newId) || { id: newId, name: '未知艺人', avatarColor: getDeterministicColor('未知艺人') };
-      
-      currentArtistDetailsData.value = { 
-        ...artist, 
+
+      currentArtistDetailsData.value = {
+        ...artist,
         stats: { track_count: 0, album_count: 0 },
-        tracks: [], 
+        tracks: [],
         albums: [],
         tracksOffset: 0,
         albumsOffset: 0,
@@ -818,24 +918,21 @@ export const usePlayerStore = defineStore("player", () => {
     return sources.value.filter(s => s.kind === 'webdav');
   });
 
-  // 方法 (Actions)
-  function formatTime(seconds: number): string {
-    const min = Math.floor(seconds / 60);
-    const sec = Math.floor(seconds % 60);
-    return `${min.toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")}`;
-  }
-
   // ================= 持久化与恢复逻辑 =================
-  
-  // 监视播放队列的变化，自动将 track id 保存到后端的 play_queue 表中
-  watch(queue, async (newQueue) => {
-    try {
-      const ids = newQueue.map(t => t.id);
-      await invoke('library_save_play_queue', { trackIds: ids });
-    } catch (e) {
-      console.error("Failed to auto-save play queue:", e);
-    }
-  }, { deep: true });
+
+  /**
+   * 持久化播放队列：只在队列内容（id 序列）真正变化时调用，避免 deep watch 在
+   * toggleFavorite / 任何深层字段修改时都触发整表 DELETE+INSERT。
+   * 通过比较 id 序列的快照来判断"内容是否变了"。
+   */
+  let lastSavedQueueSignature = '';
+  function persistPlayQueueIfNeeded() {
+    const sig = queue.value.map(t => t.id).join(',');
+    if (sig === lastSavedQueueSignature) return;
+    lastSavedQueueSignature = sig;
+    invoke('library_save_play_queue', { trackIds: queue.value.map(t => t.id) })
+      .catch(e => console.error("Failed to auto-save play queue:", e));
+  }
 
   // 监视状态标量并写入 localStorage
   watch(currentIndex, (newIdx) => {
@@ -855,20 +952,10 @@ export const usePlayerStore = defineStore("player", () => {
   async function restoreSession() {
     try {
       // 1. 恢复播放队列
-      const savedQueue: any[] = await invoke('library_get_play_queue');
+      const savedQueue: TrackDTO[] = await invoke('library_get_play_queue');
       if (savedQueue && savedQueue.length > 0) {
-        queue.value = savedQueue.map((t: any) => ({
-          ...t,
-          artist: t.artist_name || '未知艺人',
-          album: t.album_title || '未知专辑',
-          duration: formatTime(t.duration_ms / 1000),
-          durationSec: Math.floor(t.duration_ms / 1000),
-          format: t.format ? t.format.toUpperCase() : 'UNKNOWN',
-          coverColor: getDeterministicColor(t.album_title || t.title || 'Unknown'),
-          cover_artwork_id: t.cover_artwork_id,
-          isFavorite: t.is_favorite || false,
-          primary_file_id: t.media_file_id
-        }));
+        queue.value = mapTrackList(savedQueue);
+        lastSavedQueueSignature = queue.value.map(t => t.id).join(',');
       }
 
       // 2. 恢复播放模式
@@ -894,7 +981,7 @@ export const usePlayerStore = defineStore("player", () => {
         if (!isNaN(idx) && idx >= 0 && idx < queue.value.length) {
           currentIndex.value = idx;
           hasLoadedCurrentFile.value = false; // 设定需要初次重新加载文件锁
-          
+
           const savedProgress = localStorage.getItem('lumo_progress_ms');
           if (savedProgress !== null) {
             const prog = parseInt(savedProgress, 10);
@@ -943,7 +1030,7 @@ export const usePlayerStore = defineStore("player", () => {
     if (currentIndex.value === -1) {
       currentIndex.value = 0;
     }
-    
+
     const track = queue.value[currentIndex.value];
     if (!track) return;
 
@@ -956,7 +1043,7 @@ export const usePlayerStore = defineStore("player", () => {
           if (track.primary_file_id) {
             await invoke('playback_play', { mediaFileId: track.primary_file_id });
             hasLoadedCurrentFile.value = true;
-            
+
             if (progressMs.value > 0) {
               await invoke('playback_seek', { positionMs: progressMs.value });
             }
@@ -975,26 +1062,39 @@ export const usePlayerStore = defineStore("player", () => {
   async function startProgressPolling() {
     if (progressTimer) clearInterval(progressTimer);
     progressTimer = setInterval(async () => {
-      if (isPlaying.value) {
-        try {
-          const pos = await invoke<number>('playback_get_pos');
-          progressMs.value = pos;
-          if (durationMs.value > 0 && pos >= durationMs.value - 500) {
-            nextTrack(true);
+      if (!isPlaying.value) return;
+      try {
+        const pos = await invoke<number>('playback_get_pos');
+        progressMs.value = pos;
+
+        // 自动切歌判定：
+        //   1) 时长已知且接近末尾 → 切
+        //   2) 后端报告播放已结束（sink 为空）→ 切。
+        //      早期实现仅靠 (1)，遇到无时长元数据的文件会卡死，第 2 条是兜底。
+        const reachedEnd = durationMs.value > 0 && pos >= durationMs.value - 500;
+        let backendFinished = false;
+        if (!reachedEnd) {
+          try {
+            backendFinished = await invoke<boolean>('playback_is_finished');
+          } catch {
+            // 后端命令不可用时静默忽略，仍走 (1) 的判定
           }
-        } catch (e) {
-          console.error(e);
         }
+        if (reachedEnd || backendFinished) {
+          nextTrack(true);
+        }
+      } catch (e) {
+        console.error(e);
       }
     }, 500);
   }
 
-  async function playQueue(newQueue: any[], index: number) {
+  async function playQueue(newQueue: Track[], index: number) {
     queue.value = [...newQueue];
     currentIndex.value = index;
     const track = queue.value[index];
     if (track && track.primary_file_id) {
-      durationMs.value = track.durationSec ? track.durationSec * 1000 : (track.duration_ms || 0);
+      durationMs.value = track.durationSec ? track.durationSec * 1000 : 0;
       progressMs.value = 0;
       try {
         await invoke('playback_play', { mediaFileId: track.primary_file_id });
@@ -1002,6 +1102,7 @@ export const usePlayerStore = defineStore("player", () => {
         hasLoadedCurrentFile.value = true;
         startProgressPolling();
         recordPlay(track.id);
+        persistPlayQueueIfNeeded();
       } catch (e) {
         console.error("Play failed:", e);
       }
@@ -1011,8 +1112,11 @@ export const usePlayerStore = defineStore("player", () => {
   async function nextTrack(isAuto = false) {
     if (queue.value.length === 0) return;
     if (isAuto && playMode.value === 'repeat-one') {
-      // Keep currentIndex unchanged
-    } else if (playMode.value === 'shuffle') {
+      // Keep currentIndex unchanged，但需要重新载入播放
+      await playQueue(queue.value, currentIndex.value);
+      return;
+    }
+    if (playMode.value === 'shuffle') {
       currentIndex.value = Math.floor(Math.random() * queue.value.length);
     } else {
       currentIndex.value = (currentIndex.value + 1) % queue.value.length;
@@ -1118,10 +1222,11 @@ export const usePlayerStore = defineStore("player", () => {
 
   // Register global listeners for scan events
   listen('scan-progress', (event: any) => {
-    const payload = event.payload as { source_id: number; scanned_count: number; current_path: string };
+    const payload = event.payload as { source_id: number; scanned_count: number; skipped_count?: number; current_path: string };
     const source = sources.value.find(s => s.id === payload.source_id);
     if (source) {
-      source.lastScanned = `扫描中: ${payload.scanned_count} 首...`;
+      const skipped = payload.skipped_count ? `，跳过 ${payload.skipped_count}` : '';
+      source.lastScanned = `扫描中: ${payload.scanned_count} 首${skipped}...`;
     }
   });
 
@@ -1183,6 +1288,8 @@ export const usePlayerStore = defineStore("player", () => {
     folderBreadcrumbs,
     isFetchingFolder,
     fetchFolderContents,
+    fetchMoreFolderEntries,
+    hasMoreFolderEntries,
     addFolderToPlaylist,
     searchQuery,
     canGoBack,

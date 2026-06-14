@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { onMounted, ref, onUnmounted, watch } from 'vue';
+import { onMounted, ref, onUnmounted, watch, computed } from 'vue';
 import { Heart, AudioLines, Plus, Play } from 'lucide-vue-next';
 import { usePlayerStore } from '../../../stores/player';
+import type { Track } from '../../../stores/player';
 
 const playerStore = usePlayerStore();
 const activeMenuTrackId = ref<number | null>(null);
@@ -22,12 +23,57 @@ const loadData = () => {
   }
 };
 
+// ============ 虚拟滚动 ============
+// 单行高度：py-4 (16px*2) + 行内容约 32px ≈ 64px
+const ROW_HEIGHT = 64;
+const BUFFER_ROWS = 6;
+const scrollContainer = ref<HTMLElement | null>(null);
+const tick = ref(0);
+
+const totalHeight = computed(() => playerStore.tracks.length * ROW_HEIGHT);
+
+interface VisibleItem { index: number; data: Track }
+
+const visibleItems = computed<VisibleItem[]>(() => {
+  void tick.value; // 建立对滚动的响应依赖
+  const el = scrollContainer.value;
+  const all = playerStore.tracks;
+  if (!el || all.length === 0) return [];
+
+  const scrollTop = el.scrollTop;
+  const viewH = el.clientHeight;
+  const startRow = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - BUFFER_ROWS);
+  const visibleRows = Math.ceil(viewH / ROW_HEIGHT) + BUFFER_ROWS * 2;
+  const endRow = startRow + visibleRows;
+  const endIdx = Math.min(all.length, endRow);
+
+  const out: VisibleItem[] = [];
+  for (let i = startRow; i < endIdx; i++) {
+    out.push({ index: i, data: all[i] });
+  }
+  return out;
+});
+
+const offsetY = computed(() => {
+  void tick.value;
+  const el = scrollContainer.value;
+  if (!el) return 0;
+  return Math.max(0, Math.floor(el.scrollTop / ROW_HEIGHT) - BUFFER_ROWS) * ROW_HEIGHT;
+});
+
+let ticking = false;
 const handleScroll = (e: Event) => {
+  tick.value++;
+  // 滚动到底加载更多（仅"全部歌曲"有分页）
   const target = e.target as HTMLElement;
-  if (target.scrollTop + target.clientHeight >= target.scrollHeight - 50) {
+  if (target.scrollTop + target.clientHeight >= target.scrollHeight - 200) {
     if (playerStore.activeLibraryTab === '全部歌曲') {
       playerStore.fetchTracks();
     }
+  }
+  if (!ticking) {
+    ticking = true;
+    requestAnimationFrame(() => { ticking = false; });
   }
 };
 
@@ -92,8 +138,8 @@ onUnmounted(() => {
     <template v-else>
       <!-- 播放全部按钮 -->
       <div class="flex items-center gap-4 mb-6 shrink-0 relative z-10">
-        <button 
-          @click="playAll" 
+        <button
+          @click="playAll"
           class="flex items-center gap-2 bg-black text-white px-5 py-2 hover:bg-black/80 transition-all group rounded-sm shadow-sm"
         >
           <Play class="w-3.5 h-3.5 fill-current text-white" />
@@ -111,55 +157,67 @@ onUnmounted(() => {
         <div class="w-24 pl-4 text-left">格式</div>
       </div>
 
-      <!-- Song List -->
-      <div class="flex-1 overflow-y-auto custom-scrollbar relative z-10 pr-2" @scroll="handleScroll">
-        <div 
-          v-for="(song, index) in playerStore.tracks" 
-          :key="song.id"
-          @dblclick="playerStore.playQueue(playerStore.tracks, index)"
-          class="flex items-center text-[13px] py-4 border-b border-[#f0eee6]/50 group transition-colors cursor-pointer hover:bg-black/5"
-        >
-          <div class="w-16 text-center text-[#888]">
-            <template v-if="playerStore.currentTrack?.id === song.id && playerStore.isPlaying">
-              <AudioLines class="w-4 h-4 mx-auto stroke-[1.5] text-black animate-pulse" />
-            </template>
-            <template v-else>
-              {{ String(index + 1).padStart(2, '0') }}
-            </template>
-          </div>
-          <div class="flex-[2] pl-2 flex items-center gap-4">
-            <Heart 
-              class="w-3.5 h-3.5 transition-colors stroke-[1.5]" 
-              :class="[
-                song.isFavorite ? 'text-black fill-current' : 'text-[#ccc] opacity-0 group-hover:opacity-100 hover:text-black'
-              ]"
-              @click.stop="playerStore.toggleFavorite(song.id)"
-            />
-            <div class="relative flex items-center">
-              <button @click.stop="openPlaylistMenu(song.id)" class="text-[#ccc] opacity-0 group-hover:opacity-100 hover:text-black transition-opacity" title="添加到歌单">
-                <Plus class="w-3.5 h-3.5 stroke-[1.5]" />
-              </button>
-              <div v-if="activeMenuTrackId === song.id" class="absolute left-6 top-0 bg-white border border-[#e8e6df] shadow-sm z-50 py-1 min-w-[120px] rounded-sm">
-                <div v-if="playerStore.playlists.length === 0" class="px-3 py-1.5 text-xs text-[#a0a0a0] whitespace-nowrap">暂无自建歌单</div>
-                <button 
-                  v-for="pl in playerStore.playlists" 
-                  :key="pl.id"
-                  @click.stop="addToPlaylist(pl.id, song.id)"
-                  class="block w-full text-left px-3 py-1.5 text-[11px] font-medium text-[#555] hover:text-black hover:bg-black/5 transition-colors whitespace-nowrap truncate tracking-wider"
-                >
-                  {{ pl.name }}
-                </button>
+      <!-- 虚拟滚动歌曲列表 -->
+      <div
+        ref="scrollContainer"
+        class="flex-1 overflow-y-auto custom-scrollbar relative z-10 pr-2"
+        @scroll="handleScroll"
+      >
+        <div :style="{ height: totalHeight + 'px', position: 'relative' }">
+          <div
+            class="absolute top-0 left-0 right-0 will-change-transform"
+            :style="{ transform: `translateY(${offsetY}px)` }"
+          >
+            <div
+              v-for="item in visibleItems"
+              :key="item.data.id"
+              @dblclick="playerStore.playQueue(playerStore.tracks, item.index)"
+              class="flex items-center text-[13px] py-4 border-b border-[#f0eee6]/50 group transition-colors duration-200 cursor-pointer hover:bg-black/5"
+              :style="{ height: ROW_HEIGHT + 'px' }"
+            >
+              <div class="w-16 text-center text-[#888]">
+                <template v-if="playerStore.currentTrack?.id === item.data.id && playerStore.isPlaying">
+                  <AudioLines class="w-4 h-4 mx-auto stroke-[1.5] text-black animate-pulse" />
+                </template>
+                <template v-else>
+                  {{ String(item.index + 1).padStart(2, '0') }}
+                </template>
               </div>
+              <div class="flex-[2] pl-2 flex items-center gap-4">
+                <Heart
+                  class="w-3.5 h-3.5 transition-colors stroke-[1.5]"
+                  :class="[
+                    item.data.isFavorite ? 'text-black fill-current' : 'text-[#ccc] opacity-0 group-hover:opacity-100 hover:text-black'
+                  ]"
+                  @click.stop="playerStore.toggleFavorite(item.data.id)"
+                />
+                <div class="relative flex items-center">
+                  <button @click.stop="openPlaylistMenu(item.data.id)" class="text-[#ccc] opacity-0 group-hover:opacity-100 hover:text-black transition-opacity" title="添加到歌单">
+                    <Plus class="w-3.5 h-3.5 stroke-[1.5]" />
+                  </button>
+                  <div v-if="activeMenuTrackId === item.data.id" class="absolute left-6 top-0 bg-white border border-[#e8e6df] shadow-sm z-50 py-1 min-w-[120px] rounded-sm">
+                    <div v-if="playerStore.playlists.length === 0" class="px-3 py-1.5 text-xs text-[#a0a0a0] whitespace-nowrap">暂无自建歌单</div>
+                    <button
+                      v-for="pl in playerStore.playlists"
+                      :key="pl.id"
+                      @click.stop="addToPlaylist(pl.id, item.data.id)"
+                      class="block w-full text-left px-3 py-1.5 text-[11px] font-medium text-[#555] hover:text-black hover:bg-black/5 transition-colors whitespace-nowrap truncate tracking-wider"
+                    >
+                      {{ pl.name }}
+                    </button>
+                  </div>
+                </div>
+                <span
+                  class="truncate"
+                  :class="playerStore.currentTrack?.id === item.data.id ? 'font-serif italic font-semibold text-[16px] text-black' : 'text-[#333] font-medium'"
+                >{{ item.data.title }}</span>
+              </div>
+              <div class="flex-[1.5] truncate pr-4 text-[#555]">{{ item.data.artist }}</div>
+              <div class="flex-[2] truncate pr-4 text-[#777] italic">{{ item.data.album }}</div>
+              <div class="w-20 text-right pr-4 text-[#888]">{{ item.data.duration }}</div>
+              <div class="w-24 pl-4 text-left text-[11px] text-[#aaa] tracking-wider">{{ item.data.format }}</div>
             </div>
-            <span 
-              class="truncate" 
-              :class="playerStore.currentTrack?.id === song.id ? 'font-serif italic font-semibold text-[16px] text-black' : 'text-[#333] font-medium'"
-            >{{ song.title }}</span>
           </div>
-          <div class="flex-[1.5] truncate pr-4 text-[#555]">{{ song.artist }}</div>
-          <div class="flex-[2] truncate pr-4 text-[#777] italic">{{ song.album }}</div>
-          <div class="w-20 text-right pr-4 text-[#888]">{{ song.duration }}</div>
-          <div class="w-24 pl-4 text-left text-[11px] text-[#aaa] tracking-wider">{{ song.format }}</div>
         </div>
       </div>
 

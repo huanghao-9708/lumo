@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { usePlayerStore } from '../../../stores/player';
-import { onMounted } from 'vue';
+import { onMounted, ref, computed } from 'vue';
+import type { Artist } from '../../../stores/player';
+
 const playerStore = usePlayerStore();
 
 const goToArtist = (artistId: number) => {
@@ -8,10 +10,54 @@ const goToArtist = (artistId: number) => {
   playerStore.activeLibraryTab = '艺人详情';
 };
 
+// ============ 虚拟滚动 ============
+// 单行高度：py-5 (20px*2) + 头像 w-16 h-16 (64px) ≈ 104px
+const ROW_HEIGHT = 104;
+const BUFFER_ROWS = 4;
+const scrollContainer = ref<HTMLElement | null>(null);
+const tick = ref(0);
+
+const totalHeight = computed(() => playerStore.artists.length * ROW_HEIGHT);
+
+interface VisibleItem { index: number; data: Artist }
+
+const visibleItems = computed<VisibleItem[]>(() => {
+  void tick.value;
+  const el = scrollContainer.value;
+  const all = playerStore.artists;
+  if (!el || all.length === 0) return [];
+
+  const scrollTop = el.scrollTop;
+  const viewH = el.clientHeight;
+  const startRow = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - BUFFER_ROWS);
+  const visibleRows = Math.ceil(viewH / ROW_HEIGHT) + BUFFER_ROWS * 2;
+  const endRow = startRow + visibleRows;
+  const endIdx = Math.min(all.length, endRow);
+
+  const out: VisibleItem[] = [];
+  for (let i = startRow; i < endIdx; i++) {
+    out.push({ index: i, data: all[i] });
+  }
+  return out;
+});
+
+const offsetY = computed(() => {
+  void tick.value;
+  const el = scrollContainer.value;
+  if (!el) return 0;
+  return Math.max(0, Math.floor(el.scrollTop / ROW_HEIGHT) - BUFFER_ROWS) * ROW_HEIGHT;
+});
+
+let ticking = false;
 const handleScroll = (e: Event) => {
+  tick.value++;
   const target = e.target as HTMLElement;
-  if (target.scrollHeight - target.scrollTop <= target.clientHeight + 200) {
+  if (target.scrollHeight - target.scrollTop <= target.clientHeight + 300) {
     playerStore.fetchArtists();
+  }
+  if (!ticking) {
+    ticking = true;
+    requestAnimationFrame(() => { ticking = false; });
   }
 };
 
@@ -42,29 +88,39 @@ onMounted(() => {
       </p>
     </div>
 
-    <!-- 正常渲染 -->
-    <div v-else class="flex-1 overflow-y-auto custom-scrollbar relative z-10 pr-2" @scroll="handleScroll">
-      <div class="flex flex-col pb-10">
-        <div 
-          v-for="(artist, index) in playerStore.artists" 
-          :key="artist.id"
-          @click="goToArtist(artist.id)"
-          class="group cursor-pointer flex items-center justify-between py-5 border-b border-[#f0eee6]/50 hover:border-black transition-colors"
-        >
-          <div class="flex items-center gap-8">
-            <span class="text-[10px] font-bold tracking-widest text-[#a0a0a0] w-6 text-right">
-              {{ String(index + 1).padStart(2, '0') }}
-            </span>
-            <div class="w-16 h-16 rounded-full overflow-hidden bg-[#e8e6df] shrink-0">
-               <div 
-                 class="w-full h-full bg-gradient-to-tr opacity-70 group-hover:opacity-100 transition-opacity"
-                 :class="artist.avatarColor"
-               ></div>
+    <!-- 正常渲染：虚拟滚动 -->
+    <div
+      v-else
+      ref="scrollContainer"
+      class="flex-1 overflow-y-auto custom-scrollbar relative z-10 pr-2"
+      @scroll="handleScroll"
+    >
+      <div :style="{ height: totalHeight + 'px', position: 'relative' }">
+        <div class="absolute top-0 left-0 right-0 will-change-transform" :style="{ transform: `translateY(${offsetY}px)` }">
+          <div class="flex flex-col pb-10">
+            <div
+              v-for="item in visibleItems"
+              :key="item.data.id"
+              @click="goToArtist(item.data.id)"
+              class="group cursor-pointer flex items-center justify-between py-5 border-b border-[#f0eee6]/50 hover:border-black transition-colors"
+              :style="{ height: ROW_HEIGHT + 'px' }"
+            >
+              <div class="flex items-center gap-8">
+                <span class="text-[10px] font-bold tracking-widest text-[#a0a0a0] w-6 text-right">
+                  {{ String(item.index + 1).padStart(2, '0') }}
+                </span>
+                <div class="w-16 h-16 rounded-full overflow-hidden bg-[#e8e6df] shrink-0">
+                  <div
+                    class="w-full h-full bg-gradient-to-tr opacity-70 group-hover:opacity-100 transition-opacity"
+                    :class="item.data.avatarColor"
+                  ></div>
+                </div>
+                <h3 class="font-serif italic text-3xl text-black group-hover:translate-x-2 transition-transform duration-300">{{ item.data.name }}</h3>
+              </div>
+              <div class="text-[10px] font-bold tracking-[0.2em] text-[#888] uppercase">
+                {{ item.data.track_count }} 首歌曲
+              </div>
             </div>
-            <h3 class="font-serif italic text-3xl text-black group-hover:translate-x-2 transition-transform duration-300">{{ artist.name }}</h3>
-          </div>
-          <div class="text-[10px] font-bold tracking-[0.2em] text-[#888] uppercase">
-            {{ artist.track_count }} 首歌曲
           </div>
         </div>
       </div>
