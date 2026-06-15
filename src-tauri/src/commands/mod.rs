@@ -27,6 +27,7 @@ pub fn source_add_local(db_state: State<'_, DbState>, path: String, name: String
     Ok(id)
 }
 
+
 #[tauri::command]
 pub fn source_scan(app: tauri::AppHandle, db_state: State<'_, DbState>, source_id: i64) -> Result<(), String> {
     let _trace = ipc_trace!("source_scan");
@@ -302,10 +303,10 @@ pub fn library_get_playlist_tracks(db_state: State<'_, DbState>, playlist_id: i6
 }
 
 #[tauri::command]
-pub fn library_record_play(db_state: State<'_, DbState>, track_id: i64) -> Result<(), String> {
+pub fn library_record_play(db_state: State<'_, DbState>, track_id: i64, duration_ms: i64) -> Result<(), String> {
     let _trace = ipc_trace!("library_record_play");
     let conn = db_state.db.get().map_err(|e| e.to_string())?;
-    LibraryService::record_play(&conn, track_id).map_err(|e| e.to_string())
+    LibraryService::record_play(&conn, track_id, duration_ms).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

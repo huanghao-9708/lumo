@@ -62,6 +62,8 @@ impl LibraryService {
         path: &std::path::Path,
         metadata: &AudioMetadata,
         app_data_dir: &std::path::Path,
+        mtime: i64,
+        file_size: i64,
     ) -> rusqlite::Result<()> {
         let file_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_string();
@@ -172,14 +174,16 @@ impl LibraryService {
 
         // 6. 插入具体的 MediaFile 物理文件记录 (同一首歌可能存在不同品质的多个物理文件)
         // 使用 UPSERT 确保同一来源下的同一文件只更新不重复新增。
-        // 注意：on conflict 时仅刷新可变属性（时长/比特率/可见时间），
+        // 注意：on conflict 时仅刷新可变属性（时长/比特率/可见时间等），
         // 不要把 track_id 改回自身之外的其他值，保持引用稳定。
         conn.execute(
             "INSERT INTO media_files (
-                source_id, track_id, relative_path, normalized_path, file_name, file_ext, duration_ms, bitrate, sample_rate, channels, last_seen_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, datetime('now'))
+                source_id, track_id, relative_path, normalized_path, file_name, file_ext, file_size, modified_at, duration_ms, bitrate, sample_rate, channels, last_seen_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, datetime('now'))
             ON CONFLICT(source_id, normalized_path) DO UPDATE SET
                 track_id=excluded.track_id,
+                file_size=excluded.file_size,
+                modified_at=excluded.modified_at,
                 duration_ms=excluded.duration_ms,
                 bitrate=excluded.bitrate,
                 sample_rate=excluded.sample_rate,
@@ -194,6 +198,8 @@ impl LibraryService {
                 normalized_path,
                 file_name,
                 ext,
+                file_size,
+                mtime.to_string(),
                 metadata.duration_ms,
                 metadata.bit_rate,
                 metadata.sample_rate,
@@ -598,7 +604,7 @@ impl LibraryService {
     }
 
     /// 每当歌曲发生播放时调用此接口，记录播放时间到历史流水中
-    pub fn record_play(conn: &Connection, track_id: i64) -> rusqlite::Result<()> {
+    pub fn record_play(conn: &Connection, track_id: i64, duration_ms: i64) -> rusqlite::Result<()> {
         // 更新总体计数字段
         conn.execute(
             "UPDATE tracks SET play_count = play_count + 1, last_played_at = datetime('now') WHERE id = ?1",
@@ -609,8 +615,8 @@ impl LibraryService {
         
         // 生成流水账单记录，用于复杂的统计
         conn.execute(
-            "INSERT INTO play_history (track_id, media_file_id, source_kind) VALUES (?1, ?2, 'local')",
-            params![track_id, media_file_id],
+            "INSERT INTO play_history (track_id, media_file_id, source_kind, play_duration_ms) VALUES (?1, ?2, 'local', ?3)",
+            params![track_id, media_file_id, duration_ms],
         )?;
         Ok(())
     }

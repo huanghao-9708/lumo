@@ -493,9 +493,10 @@ const albums = shallowRef<Album[]>([]);
     }
   }
 
-  async function recordPlay(trackId: number) {
+  async function recordPlay(trackId: number, durationPlayed: number) {
+    if (durationPlayed < 1000) return; // 忽略极短的切歌
     try {
-      await invoke('library_record_play', { trackId });
+      await invoke('library_record_play', { trackId, durationMs: durationPlayed });
     } catch(e) {
       console.error("Failed to record play:", e);
     }
@@ -1059,10 +1060,13 @@ const albums = shallowRef<Album[]>([]);
     }
   }
 
+  let actualListenMs = 0;
+
   async function startProgressPolling() {
     if (progressTimer) clearInterval(progressTimer);
     progressTimer = setInterval(async () => {
       if (!isPlaying.value) return;
+      actualListenMs += 500;
       try {
         const pos = await invoke<number>('playback_get_pos');
         progressMs.value = pos;
@@ -1090,9 +1094,15 @@ const albums = shallowRef<Album[]>([]);
   }
 
   async function playQueue(newQueue: Track[], index: number) {
+    // 切歌前记录上一首的播放时长
+    if (queue.value && queue.value[currentIndex.value] && actualListenMs > 0) {
+      recordPlay(queue.value[currentIndex.value].id, actualListenMs);
+    }
+    
     queue.value = [...newQueue];
     currentIndex.value = index;
     const track = queue.value[index];
+    actualListenMs = 0;
     if (track && track.primary_file_id) {
       durationMs.value = track.durationSec ? track.durationSec * 1000 : 0;
       progressMs.value = 0;
@@ -1101,7 +1111,6 @@ const albums = shallowRef<Album[]>([]);
         isPlaying.value = true;
         hasLoadedCurrentFile.value = true;
         startProgressPolling();
-        recordPlay(track.id);
         persistPlayQueueIfNeeded();
       } catch (e) {
         console.error("Play failed:", e);

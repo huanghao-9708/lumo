@@ -178,6 +178,7 @@ CREATE TABLE IF NOT EXISTS genres (
     normalized_name TEXT NOT NULL UNIQUE
 );
 
+
 -- 歌曲与流派关系表
 CREATE TABLE IF NOT EXISTS track_genres (
     track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,

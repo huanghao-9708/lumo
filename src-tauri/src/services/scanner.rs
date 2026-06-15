@@ -7,6 +7,7 @@ use tauri::{AppHandle, Manager, Emitter};
 use crate::db::DbState;
 use serde::Serialize;
 use std::path::PathBuf;
+use std::collections::{HashMap, HashSet};
 
 /// 判定一个扩展名是否为受支持的音频格式（与 library.rs 中保持一致）
 fn is_supported_audio_ext(ext: &str) -> bool {
@@ -28,8 +29,30 @@ pub fn scan_local_directory(app: AppHandle, source_id: i64, path: &Path, app_dat
     let mut scanned_count = 0usize;
     let mut skipped_count = 0usize;
 
+    // Load existing files for incremental scan
+    let mut file_cache: HashMap<String, (i64, i64)> = HashMap::new();
+    if let Some(db_state) = app.try_state::<DbState>() {
+        if let Ok(conn) = db_state.db.get() {
+            if let Ok(mut stmt) = conn.prepare("SELECT normalized_path, modified_at, file_size FROM media_files WHERE source_id = ?1") {
+                if let Ok(rows) = stmt.query_map(rusqlite::params![source_id], |row| {
+                    let mtime_str: Option<String> = row.get(1)?;
+                    let mtime = mtime_str.and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+                    let size: Option<i64> = row.get(2)?;
+                    Ok((row.get::<_, String>(0)?, mtime, size.unwrap_or(0)))
+                }) {
+                    for r in rows.filter_map(Result::ok) {
+                        file_cache.insert(r.0, (r.1, r.2));
+                    }
+                }
+            }
+        }
+    }
+    info!("Loaded {} existing files for incremental scan check.", file_cache.len());
+
+    let mut scanned_paths = HashSet::new();
+
     // Batch to hold extracted metadata before inserting into DB
-    let mut batch: Vec<(PathBuf, crate::services::metadata::AudioMetadata)> = Vec::with_capacity(50);
+    let mut batch: Vec<(PathBuf, crate::services::metadata::AudioMetadata, i64, i64)> = Vec::with_capacity(50);
 
     for entry in WalkDir::new(path).into_iter().filter_map(|e| e.ok()) {
         let entry_path = entry.path();
@@ -41,10 +64,49 @@ pub fn scan_local_directory(app: AppHandle, source_id: i64, path: &Path, app_dat
             continue;
         }
 
-        // 1. 提取元数据（耗时操作，不持锁）。失败则跳过，避免把损坏文件入库为 Unknown。
+        // 1. 获取文件系统元数据 (mtime, size)
+        let fs_metadata = std::fs::metadata(&entry_path).ok();
+        let fs_size = fs_metadata.as_ref().map(|m| m.len() as i64).unwrap_or(0);
+        let fs_mtime = fs_metadata
+            .as_ref()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+
+        // 构建 normalized_path
+        let relative_path = entry_path.strip_prefix(path).unwrap_or(&entry_path).to_string_lossy().to_string();
+        let normalized_path = relative_path.to_lowercase();
+        
+        // 记录已扫描的文件路径，用于后续的删除检测
+        scanned_paths.insert(normalized_path.clone());
+
+        // 增量判定：如果数据库中已经有且大小和修改时间均一致，则跳过解析
+        if let Some(&(db_mtime, db_size)) = file_cache.get(&normalized_path) {
+            if db_mtime == fs_mtime && db_size == fs_size {
+                skipped_count += 1;
+                
+                // 每 50 个 skipped 也发一次进度，避免长久卡顿感
+                if skipped_count % 50 == 0 {
+                    let _ = app.emit("scan-progress", ScanProgressPayload {
+                        source_id,
+                        scanned_count,
+                        skipped_count,
+                        current_path: entry_path.to_string_lossy().to_string(),
+                    });
+                }
+                
+                // 这里我们要更新 last_seen_at，因为文件仍在，只是没变。
+                // 暂时收集到 batch 或直接更新。为了不影响性能，可以搞个小 batch 更新。
+                // 简单起见，我们可以在后续 flush 或最后做，但考虑到批量，最好单独维护一个 seen 列表
+                continue;
+            }
+        }
+
+        // 2. 提取元数据（耗时操作，不持锁）。失败则跳过，避免把损坏文件入库为 Unknown。
         match extract_metadata(entry_path) {
             Ok(m) => {
-                batch.push((entry_path.to_path_buf(), m));
+                batch.push((entry_path.to_path_buf(), m, fs_mtime, fs_size));
                 scanned_count += 1;
             }
             Err(e) => {
@@ -77,17 +139,48 @@ pub fn scan_local_directory(app: AppHandle, source_id: i64, path: &Path, app_dat
         flush_batch(&app, source_id, path, &mut batch, app_data_dir);
     }
 
-    // Update the last_scan_at timestamp
+    // Clean up missing files (deleted from disk)
+    let mut missing_count = 0;
     if let Some(db_state) = app.try_state::<DbState>() {
-        if let Ok(conn) = db_state.db.get() {
+        if let Ok(mut conn) = db_state.db.get() {
+            // Find files in db that are not in scanned_paths
+            let mut to_delete = Vec::new();
+            for (db_path, _) in file_cache.iter() {
+                if !scanned_paths.contains(db_path) {
+                    to_delete.push(db_path.clone());
+                }
+            }
+            
+            missing_count = to_delete.len();
+            if missing_count > 0 {
+                info!("Found {} missing files, marking them as missing...", missing_count);
+                if let Ok(tx) = conn.transaction() {
+                    for missing_path in to_delete {
+                        let _ = tx.execute(
+                            "UPDATE media_files SET availability = 'missing' WHERE source_id = ?1 AND normalized_path = ?2",
+                            rusqlite::params![source_id, missing_path]
+                        );
+                    }
+                    let _ = tx.commit();
+                }
+            }
+
+            // Update the last_scan_at timestamp
             let _ = conn.execute(
                 "UPDATE sources SET last_scan_at = datetime('now') WHERE id = ?1",
+                rusqlite::params![source_id]
+            );
+            
+            // Also update last_seen_at for all scanned paths to keep them 'available'
+            // To do it efficiently, since we touched all, we can just bulk update the ones not missing
+            let _ = conn.execute(
+                "UPDATE media_files SET availability = 'available', last_seen_at = datetime('now') WHERE source_id = ?1 AND availability != 'missing'",
                 rusqlite::params![source_id]
             );
         }
     }
 
-    info!("Scan completed for directory: {:?} (scanned={}, skipped={})", path, scanned_count, skipped_count);
+    info!("Scan completed for directory: {:?} (scanned={}, skipped={}, missing={})", path, scanned_count, skipped_count, missing_count);
     let _ = app.emit("scan-complete", source_id);
 }
 
@@ -123,15 +216,15 @@ fn flush_batch(
     app: &AppHandle,
     source_id: i64,
     source_root: &Path,
-    batch: &mut Vec<(PathBuf, crate::services::metadata::AudioMetadata)>,
+    batch: &mut Vec<(PathBuf, crate::services::metadata::AudioMetadata, i64, i64)>,
     app_data_dir: &Path,
 ) {
     let Some(db_state) = app.try_state::<DbState>() else { return };
     let Ok(mut conn) = db_state.db.get() else { return };
 
     let Ok(tx) = conn.transaction() else { return };
-    for (path, metadata) in batch.iter() {
-        if let Err(e) = LibraryService::index_file(&tx, source_id, source_root, path, metadata, app_data_dir) {
+    for (path, metadata, mtime, size) in batch.iter() {
+        if let Err(e) = LibraryService::index_file(&tx, source_id, source_root, path, metadata, app_data_dir, *mtime, *size) {
             error!("Failed to index file {:?}: {}", path, e);
         }
     }
