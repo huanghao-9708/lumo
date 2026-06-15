@@ -46,15 +46,20 @@ const closeModal = () => {
   addModalType.value = 'none';
 };
 
-const confirmAddSource = () => {
+const confirmAddSource = async () => {
   if (newSourceName.value.trim() && newSourcePath.value.trim()) {
-    playerStore.addSource(
-      addModalType.value as 'local' | 'webdav', 
-      newSourceName.value.trim(), 
-      newSourcePath.value.trim(),
-      newSourceUsername.value.trim()
-    );
-    closeModal();
+    try {
+      await playerStore.addSource(
+        addModalType.value as 'local' | 'webdav', 
+        newSourceName.value.trim(), 
+        newSourcePath.value.trim(),
+        newSourceUsername.value.trim(),
+        newSourcePassword.value.trim()
+      );
+      closeModal();
+    } catch (e) {
+      alert("添加失败: " + e);
+    }
   }
 };
 

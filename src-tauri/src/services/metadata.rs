@@ -23,8 +23,6 @@ pub struct AudioMetadata {
 
 /// 解析单个音频文件，失败时返回 Err（由调用方决定跳过/标记 error）。
 pub fn extract_metadata<P: AsRef<Path>>(path: P) -> Result<AudioMetadata, String> {
-    let mut metadata = AudioMetadata::default();
-
     let tagged_file = match Probe::open(path.as_ref()) {
         Ok(probe) => match probe.read() {
             Ok(file) => file,
@@ -32,6 +30,22 @@ pub fn extract_metadata<P: AsRef<Path>>(path: P) -> Result<AudioMetadata, String
         },
         Err(e) => return Err(format!("Failed to open file: {}", e)),
     };
+    extract_metadata_inner(tagged_file)
+}
+
+pub fn extract_metadata_from_reader<R: std::io::Read + std::io::Seek>(reader: R) -> Result<AudioMetadata, String> {
+    let tagged_file = match Probe::new(reader).guess_file_type() {
+        Ok(probe) => match probe.read() {
+            Ok(file) => file,
+            Err(e) => return Err(format!("Failed to read stream: {}", e)),
+        },
+        Err(e) => return Err(format!("Failed to guess type for stream: {}", e)),
+    };
+    extract_metadata_inner(tagged_file)
+}
+
+fn extract_metadata_inner(tagged_file: lofty::file::TaggedFile) -> Result<AudioMetadata, String> {
+    let mut metadata = AudioMetadata::default();
 
     let properties = tagged_file.properties();
     metadata.duration_ms = Some(properties.duration().as_millis() as i64);

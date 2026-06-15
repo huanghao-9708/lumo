@@ -8,6 +8,7 @@ use crate::db::DbState;
 use serde::Serialize;
 use std::path::PathBuf;
 use std::collections::{HashMap, HashSet};
+use crate::services::webdav::{WebdavClient, HttpRangeReader};
 
 /// 判定一个扩展名是否为受支持的音频格式（与 library.rs 中保持一致）
 fn is_supported_audio_ext(ext: &str) -> bool {
@@ -181,6 +182,164 @@ pub fn scan_local_directory(app: AppHandle, source_id: i64, path: &Path, app_dat
     }
 
     info!("Scan completed for directory: {:?} (scanned={}, skipped={}, missing={})", path, scanned_count, skipped_count, missing_count);
+    let _ = app.emit("scan-complete", source_id);
+}
+
+pub fn scan_webdav_directory(app: AppHandle, source_id: i64, root_uri: String, username: Option<String>, password: Option<String>, app_data_dir: &Path) {
+    info!("Starting async scan for WebDAV: {}", root_uri);
+    let mut scanned_count = 0usize;
+    let mut skipped_count = 0usize;
+
+    let mut file_cache: HashMap<String, (i64, i64)> = HashMap::new();
+    if let Some(db_state) = app.try_state::<DbState>() {
+        if let Ok(conn) = db_state.db.get() {
+            if let Ok(mut stmt) = conn.prepare("SELECT normalized_path, modified_at, file_size FROM media_files WHERE source_id = ?1") {
+                if let Ok(rows) = stmt.query_map(rusqlite::params![source_id], |row| {
+                    let mtime_str: Option<String> = row.get(1)?;
+                    let mtime = mtime_str.and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+                    let size: Option<i64> = row.get(2)?;
+                    Ok((row.get::<_, String>(0)?, mtime, size.unwrap_or(0)))
+                }) {
+                    for r in rows.filter_map(Result::ok) {
+                        file_cache.insert(r.0, (r.1, r.2));
+                    }
+                }
+            }
+        }
+    }
+    info!("Loaded {} existing files for WebDAV incremental scan check.", file_cache.len());
+
+    let mut scanned_paths = HashSet::new();
+    let mut batch = Vec::with_capacity(50);
+    let source_root = PathBuf::from(reqwest::Url::parse(&root_uri).map(|u| u.path().to_string()).unwrap_or_else(|_| root_uri.clone()));
+    
+    let webdav = WebdavClient::new(root_uri.clone(), username, password);
+
+    // Recursive propfind
+    let mut dirs_to_scan = vec!["/".to_string()];
+    
+    while let Some(current_dir) = dirs_to_scan.pop() {
+        let files = match webdav.propfind(&current_dir) {
+            Ok(f) => f,
+            Err(e) => {
+                error!("Failed to propfind {}: {}", current_dir, e);
+                continue;
+            }
+        };
+
+        for file in files {
+            if file.is_dir {
+                dirs_to_scan.push(file.path.clone());
+                continue;
+            }
+
+            let entry_path = PathBuf::from(&file.path);
+            let Some(ext) = entry_path.extension().and_then(|e| e.to_str()) else { continue };
+            if !is_supported_audio_ext(&ext.to_lowercase()) {
+                continue;
+            }
+
+            // WebDAV dates are like "Mon, 12 Jul 2021 15:45:10 GMT". 
+            // We can just hash or approximate mtime. For simplicity we parse or fallback to 0.
+            let fs_mtime = if let Ok(t) = chrono::DateTime::parse_from_rfc2822(&file.last_modified) {
+                t.timestamp()
+            } else {
+                0
+            };
+            let fs_size = file.size as i64;
+
+            let relative_path = entry_path.strip_prefix(&source_root).unwrap_or(&entry_path).to_string_lossy().to_string();
+            let normalized_path = relative_path.to_lowercase();
+            scanned_paths.insert(normalized_path.clone());
+
+            if let Some(&(db_mtime, db_size)) = file_cache.get(&normalized_path) {
+                if db_mtime == fs_mtime && db_size == fs_size {
+                    skipped_count += 1;
+                    if skipped_count % 50 == 0 {
+                        let _ = app.emit("scan-progress", ScanProgressPayload {
+                            source_id,
+                            scanned_count,
+                            skipped_count,
+                            current_path: file.path.clone(),
+                        });
+                    }
+                    continue;
+                }
+            }
+
+            scanned_count += 1;
+            let _ = app.emit("scan-progress", ScanProgressPayload {
+                source_id,
+                scanned_count,
+                skipped_count,
+                current_path: file.path.clone(),
+            });
+
+            // Extract metadata via HttpRangeReader
+            let file_url = if file.path.starts_with("http://") || file.path.starts_with("https://") {
+                file.path.clone()
+            } else {
+                let base = reqwest::Url::parse(&format!("{}/", root_uri)).unwrap();
+                base.join(&file.path).unwrap().to_string()
+            };
+            let http_reader = HttpRangeReader::new(&webdav, file_url, file.size);
+            // Wrap in BufReader to reduce tiny HTTP range requests
+            let buffered_reader = std::io::BufReader::with_capacity(32 * 1024, http_reader);
+
+            match crate::services::metadata::extract_metadata_from_reader(buffered_reader) {
+                Ok(metadata) => {
+                    batch.push((entry_path, metadata, fs_mtime, fs_size));
+                    if batch.len() >= 50 {
+                        flush_batch(&app, source_id, &source_root, &mut batch, app_data_dir);
+                    }
+                }
+                Err(err) => {
+                    error!("Failed to extract metadata from WebDAV {:?}: {}", file.path, err);
+                    mark_scan_error(&app, source_id, &entry_path, &err);
+                }
+            }
+        }
+    }
+
+    if !batch.is_empty() {
+        flush_batch(&app, source_id, &source_root, &mut batch, app_data_dir);
+    }
+
+    // Cleanup logic for missing files
+    let mut missing_count = 0;
+    if let Some(db_state) = app.try_state::<DbState>() {
+        if let Ok(mut conn) = db_state.db.get() {
+            let mut to_delete = Vec::new();
+            if let Ok(mut stmt) = conn.prepare("SELECT normalized_path FROM media_files WHERE source_id = ?1") {
+                if let Ok(rows) = stmt.query_map(rusqlite::params![source_id], |row| row.get::<_, String>(0)) {
+                    for db_path in rows.filter_map(Result::ok) {
+                        if !scanned_paths.contains(&db_path) {
+                            to_delete.push(db_path);
+                        }
+                    }
+                }
+            }
+            
+            missing_count = to_delete.len();
+            if missing_count > 0 {
+                info!("Found {} missing WebDAV files, marking them as missing...", missing_count);
+                if let Ok(tx) = conn.transaction() {
+                    for missing_path in to_delete {
+                        let _ = tx.execute(
+                            "UPDATE media_files SET availability = 'missing' WHERE source_id = ?1 AND normalized_path = ?2",
+                            rusqlite::params![source_id, missing_path]
+                        );
+                    }
+                    let _ = tx.commit();
+                }
+            }
+
+            let _ = conn.execute("UPDATE sources SET last_scan_at = datetime('now') WHERE id = ?1", rusqlite::params![source_id]);
+            let _ = conn.execute("UPDATE media_files SET availability = 'available', last_seen_at = datetime('now') WHERE source_id = ?1 AND availability != 'missing'", rusqlite::params![source_id]);
+        }
+    }
+
+    info!("WebDAV Scan completed: scanned={}, skipped={}, missing={}", scanned_count, skipped_count, missing_count);
     let _ = app.emit("scan-complete", source_id);
 }
 

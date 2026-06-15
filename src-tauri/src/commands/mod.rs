@@ -27,24 +27,68 @@ pub fn source_add_local(db_state: State<'_, DbState>, path: String, name: String
     Ok(id)
 }
 
+#[tauri::command]
+pub fn source_add_webdav(db_state: State<'_, DbState>, url: String, name: String, username: Option<String>, password: Option<String>) -> Result<i64, String> {
+    let _trace = ipc_trace!("source_add_webdav");
+    let conn = db_state.db.get().map_err(|e| e.to_string())?;
+    
+    // Test connection
+    let webdav = crate::services::webdav::WebdavClient::new(url.clone(), username.clone(), password.clone());
+    webdav.propfind("/").map_err(|e| format!("Failed to connect to WebDAV: {}", e))?;
+
+    let cred = if let (Some(u), Some(p)) = (&username, &password) {
+        Some(format!("{}:{}", u, p))
+    } else if let Some(u) = &username {
+        Some(u.clone())
+    } else {
+        None
+    };
+
+    conn.execute(
+        "INSERT INTO sources (name, kind, root_uri, credential_ref) VALUES (?1, 'webdav', ?2, ?3)",
+        params![name, url, cred],
+    ).map_err(|e| e.to_string())?;
+    
+    let id = conn.last_insert_rowid();
+    Ok(id)
+}
+
 
 #[tauri::command]
 pub fn source_scan(app: tauri::AppHandle, db_state: State<'_, DbState>, source_id: i64) -> Result<(), String> {
     let _trace = ipc_trace!("source_scan");
-    let path = {
+    let (kind, path, credential) = {
         let conn = db_state.db.get().map_err(|e| e.to_string())?;
-        let root_uri: String = conn.query_row(
-            "SELECT root_uri FROM sources WHERE id = ?1",
+        let (k, r, c): (String, String, Option<String>) = conn.query_row(
+            "SELECT kind, root_uri, credential_ref FROM sources WHERE id = ?1",
             params![source_id],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         ).map_err(|e| e.to_string())?;
-        root_uri
+        (k, r, c)
     };
 
     let app_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
     
     std::thread::spawn(move || {
-        scan_local_directory(app, source_id, &PathBuf::from(path), &app_dir);
+        if kind == "local" {
+            crate::services::scanner::scan_local_directory(app, source_id, &PathBuf::from(path), &app_dir);
+        } else if kind == "webdav" {
+            // For now, assume config_json or credential_ref stores password. 
+            // In a real app we'd fetch username from config_json or format it. Let's assume username is extracted or empty.
+            // Actually, we can store "user:pass" in credential_ref for simplicity.
+            let mut username = None;
+            let mut password = None;
+            if let Some(cred) = credential {
+                let parts: Vec<&str> = cred.splitn(2, ':').collect();
+                if parts.len() == 2 {
+                    username = Some(parts[0].to_string());
+                    password = Some(parts[1].to_string());
+                } else if parts.len() == 1 {
+                    username = Some(parts[0].to_string());
+                }
+            }
+            crate::services::scanner::scan_webdav_directory(app, source_id, path, username, password, &app_dir);
+        }
     });
     
     Ok(())
@@ -193,32 +237,60 @@ pub fn library_get_artist_stats(db_state: State<'_, DbState>, artist_id: i64) ->
 }
 
 #[tauri::command]
-pub fn playback_play(playback_state: State<'_, PlaybackState>, db_state: State<'_, DbState>, media_file_id: i64) -> Result<(), String> {
+pub fn playback_play(playback_state: tauri::State<'_, PlaybackState>, db_state: tauri::State<'_, DbState>, media_file_id: i64) -> Result<Option<u64>, String> {
     let _trace = ipc_trace!("playback_play");
     // 通过 source 的 root_uri + media_files.relative_path 拼出真实物理路径。
     // 这样：① 路径语义清晰（relative_path 真的是相对路径）；
     //      ② 将来迁移 source 根目录或支持 WebDAV，只需调整 root_uri 的解释逻辑。
-    let path_buf = {
+    let (path_buf, webdav_reader) = {
         let conn = db_state.db.get().map_err(|e| e.to_string())?;
-        let (relative_path, root_uri, kind): (String, String, String) = conn.query_row(
-            "SELECT mf.relative_path, s.root_uri, s.kind
+        let (relative_path, root_uri, kind, cred, size): (String, String, String, Option<String>, i64) = conn.query_row(
+            "SELECT mf.relative_path, s.root_uri, s.kind, s.credential_ref, mf.file_size
              FROM media_files mf JOIN sources s ON mf.source_id = s.id
              WHERE mf.id = ?1",
             params![media_file_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
         ).map_err(|e| e.to_string())?;
 
         if kind == "webdav" {
-            // WebDAV 远程播放尚未实现，明确报错而不是把 URL 当本地路径乱打开
-            return Err("WebDAV 源的远程播放尚未支持".to_string());
+            let mut username = None;
+            let mut password = None;
+            if let Some(c) = cred {
+                let parts: Vec<&str> = c.splitn(2, ':').collect();
+                if parts.len() == 2 {
+                    username = Some(parts[0].to_string());
+                    password = Some(parts[1].to_string());
+                } else if parts.len() == 1 {
+                    username = Some(parts[0].to_string());
+                }
+            }
+            let webdav = crate::services::webdav::WebdavClient::new(root_uri.clone(), username, password);
+            
+            // relative_path is a relative path (e.g., Music/song.mp3 or Music\song.mp3).
+            // We need to resolve it against root_uri (the base URL).
+            let base_str = if root_uri.ends_with('/') { root_uri.clone() } else { format!("{}/", root_uri) };
+            let base = reqwest::Url::parse(&base_str).unwrap();
+            let relative_url_path = relative_path.replace('\\', "/");
+            let file_url = base.join(&relative_url_path).unwrap().to_string();
+            
+            let http_reader = crate::services::webdav::HttpRangeReader::new(&webdav, file_url, size as u64);
+            (None, Some(http_reader))
+        } else {
+            (Some(PathBuf::from(&root_uri).join(relative_path)), None)
         }
-
-        // 本地源：relative_path 是相对于 root_uri 的相对路径；用 PathBuf 拼接避免分隔符问题
-        PathBuf::from(&root_uri).join(relative_path)
     };
 
     let manager = playback_state.manager.lock().map_err(|e| e.to_string())?;
-    manager.play_file(&path_buf)
+    let duration = if let Some(reader) = webdav_reader {
+        let buffered_reader = std::io::BufReader::with_capacity(64 * 1024, reader);
+        manager.play_stream(buffered_reader)?
+    } else if let Some(path) = path_buf {
+        manager.play_file(&path)?
+    } else {
+        return Err("No playable source found".to_string());
+    };
+
+    Ok(duration)
 }
 
 #[tauri::command]

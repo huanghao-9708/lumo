@@ -38,16 +38,23 @@ impl PlaybackManager {
         Ok(Self { sink })
     }
 
-    pub fn play_file(&self, path: &std::path::Path) -> Result<(), String> {
+    pub fn play_file(&self, path: &std::path::Path) -> Result<Option<u64>, String> {
         info!("Playing file: {:?}", path);
         let file = File::open(path).map_err(|e| format!("Failed to open file: {}", e))?;
-        let decoder = Decoder::new(BufReader::new(file))
-            .map_err(|e| format!("Failed to decode file: {}", e))?;
+        self.play_stream(file)
+    }
+
+    pub fn play_stream<R: std::io::Read + std::io::Seek + Send + Sync + 'static>(&self, reader: R) -> Result<Option<u64>, String> {
+        let decoder = Decoder::new(BufReader::new(reader))
+            .map_err(|e| format!("Failed to decode stream: {}", e))?;
+
+        use rodio::Source;
+        let duration = decoder.total_duration().map(|d| d.as_millis() as u64);
 
         self.sink.stop(); // 清掉旧队列，避免叠加
         self.sink.append(decoder);
         self.sink.play();
-        Ok(())
+        Ok(duration)
     }
 
     pub fn pause(&self) {

@@ -1107,7 +1107,10 @@ const albums = shallowRef<Album[]>([]);
       durationMs.value = track.durationSec ? track.durationSec * 1000 : 0;
       progressMs.value = 0;
       try {
-        await invoke('playback_play', { mediaFileId: track.primary_file_id });
+        const playbackDuration = await invoke<number | null>('playback_play', { mediaFileId: track.primary_file_id });
+        if (playbackDuration && playbackDuration > 0) {
+          durationMs.value = playbackDuration;
+        }
         isPlaying.value = true;
         hasLoadedCurrentFile.value = true;
         startProgressPolling();
@@ -1162,22 +1165,22 @@ const albums = shallowRef<Album[]>([]);
   }
 
   // 来源管理 actions
-  async function addSource(kind: 'local' | 'webdav', name: string, path: string, username?: string) {
+  async function addSource(kind: 'local' | 'webdav', name: string, path: string, username?: string, password?: string) {
     if (kind === 'local') {
-      try {
-        const id: number = await invoke('source_add_local', { path, name });
-        sources.value.push({
-          id,
-          kind,
-          name,
-          path,
-          isEnabled: true,
-          lastScanned: "Never",
-          username,
-        });
-      } catch (e) {
-        console.error("Failed to add source:", e);
-      }
+        try {
+            const id: number = await invoke('source_add_local', { path, name });
+            sources.value.push({ id, kind, name, path, isEnabled: true, lastScanned: "Never", username });
+        } catch (e) {
+            console.error("Failed to add local source:", e);
+        }
+    } else if (kind === 'webdav') {
+        try {
+            const id: number = await invoke('source_add_webdav', { url: path, name, username, password });
+            sources.value.push({ id, kind, name, path, isEnabled: true, lastScanned: "Never", username });
+        } catch (e) {
+            console.error("Failed to add webdav source:", e);
+            throw e; // throw error so UI can show it
+        }
     }
   }
 
