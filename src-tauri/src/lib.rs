@@ -206,6 +206,8 @@ pub fn run() {
             crate::commands::library::library_get_artist_tracks,
             crate::commands::library::library_get_artist_stats,
             crate::commands::playback::playback_play,
+            crate::commands::playback::playback_enqueue_next,
+            crate::commands::playback::playback_get_queue_len,
             crate::commands::playback::playback_pause,
             crate::commands::playback::playback_resume,
             crate::commands::playback::playback_stop,

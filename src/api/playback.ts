@@ -4,6 +4,14 @@ export function playbackPlay(mediaFileId?: number): Promise<number | null> {
   return invoke('playback_play', { mediaFileId });
 }
 
+export function playbackEnqueueNext(mediaFileId: number): Promise<void> {
+  return invoke('playback_enqueue_next', { mediaFileId });
+}
+
+export function playbackGetQueueLen(): Promise<number> {
+  return invoke('playback_get_queue_len');
+}
+
 export function playbackPause(): Promise<void> {
   return invoke('playback_pause');
 }

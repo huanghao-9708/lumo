@@ -57,6 +57,26 @@ impl PlaybackManager {
         Ok(duration)
     }
 
+    /// [Gapless Playback] 将下一首曲目直接加入到当前播放队列的末尾。
+    /// 
+    /// 与 `play_file` 不同，此方法不会调用 `self.sink.stop()`。
+    /// rodio 的 Sink 会在当前曲目播放完毕后，立刻无缝开始播放这首曲目。
+    pub fn enqueue_next_file(&self, path: &std::path::Path) -> Result<(), String> {
+        info!("Enqueuing next file for gapless playback: {:?}", path);
+        let file = File::open(path).map_err(|e| format!("Failed to open file for enqueuing: {}", e))?;
+        let decoder = Decoder::new(BufReader::new(file))
+            .map_err(|e| format!("Failed to decode stream for enqueuing: {}", e))?;
+        self.sink.append(decoder);
+        Ok(())
+    }
+
+    /// 获取当前音频队列中剩余的曲目数。
+    /// 
+    /// 前端可利用此接口轮询。当队列长度从 2 变为 1 时，意味着已经无缝切入了下一首歌。
+    pub fn get_queue_len(&self) -> usize {
+        self.sink.len()
+    }
+
     pub fn pause(&self) {
         info!("Playback paused");
         self.sink.pause();

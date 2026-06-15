@@ -9,7 +9,7 @@ import {
   libraryGetFolderContents
 , libraryGetLyrics, libraryGetTrackFileInfo } from '../api/library';
 import {
-  playbackPlay, playbackPause, playbackResume, playbackSetVolume, playbackGetPos, playbackSeek, playbackIsFinished
+  playbackPlay, playbackPause, playbackResume, playbackSetVolume, playbackGetPos, playbackSeek, playbackIsFinished, playbackEnqueueNext, playbackGetQueueLen
 } from '../api/playback';
 import {
   sourceAddLocal, sourceAddWebdav, sourceList, sourceRemove, sourceScan
@@ -1027,6 +1027,8 @@ const albums = shallowRef<Album[]>([]);
   }
 
   let actualListenMs = 0;
+  let hasEnqueuedNext = false;
+    let enqueuedTrackIndex: number | null = null;
 
   async function startProgressPolling() {
     if (progressTimer) clearInterval(progressTimer);
@@ -1037,17 +1039,68 @@ const albums = shallowRef<Album[]>([]);
         const pos = await playbackGetPos();
         progressMs.value = pos;
 
-        // 自动切歌判定：
-        //   1) 时长已知且接近末尾 → 切
-        //   2) 后端报告播放已结束（sink 为空）→ 切。
-        //      早期实现仅靠 (1)，遇到无时长元数据的文件会卡死，第 2 条是兜底。
+        /**
+         * 无缝播放 (Gapless Playback) 预加载逻辑：
+         * 倒数 5 秒时，将下一首歌送入底层解码器队列。
+         */
+        if (!hasEnqueuedNext && durationMs.value > 0 && pos >= durationMs.value - 5000) {
+           let nextIdx = currentIndex.value;
+           if (playMode.value === 'shuffle') {
+             nextIdx = Math.floor(Math.random() * queue.value.length);
+           } else if (playMode.value === 'repeat-one') {
+             nextIdx = currentIndex.value;
+           } else {
+             nextIdx = (currentIndex.value + 1) % queue.value.length;
+           }
+           
+           const nextTrackObj = queue.value[nextIdx];
+           if (nextTrackObj && nextTrackObj.primary_file_id) {
+             console.log("[Gapless] Pre-enqueuing next track:", nextTrackObj.title);
+             try {
+                await playbackEnqueueNext(nextTrackObj.primary_file_id);
+                hasEnqueuedNext = true;
+                                enqueuedTrackIndex = nextIdx;
+             } catch(e) {
+                console.error("[Gapless] Failed to enqueue next track", e);
+             }
+           }
+        }
+
+        /**
+         * 状态轮询：静默状态切换 (Silent Switch)
+         * 当队列长度回归到 1，说明第一首刚好播完，物理上已经进入了无缝的新一首。
+         * 我们在这里偷偷切换前端的 UI 状态，不发 play 指令。
+         */
+        if (hasEnqueuedNext) {
+           try {
+             const queueLen = await playbackGetQueueLen();
+             if (queueLen === 1) {
+                console.log("[Gapless] Silent transition to next track!");
+                if (queue.value && queue.value[currentIndex.value] && actualListenMs > 0) {
+                   recordPlay(queue.value[currentIndex.value].id, actualListenMs);
+                }
+                
+                currentIndex.value = enqueuedTrackIndex as number;
+                const newTrack = queue.value[currentIndex.value];
+                actualListenMs = 0;
+                durationMs.value = newTrack.durationSec ? newTrack.durationSec * 1000 : 0;
+                progressMs.value = 0;
+                hasEnqueuedNext = false;
+                                enqueuedTrackIndex = null;
+                
+                return; // 直接返回，等待下一个轮询获取新歌进度
+             }
+           } catch(e) {}
+        }
+
+        // 传统切歌兜底判定
         const reachedEnd = durationMs.value > 0 && pos >= durationMs.value - 500;
         let backendFinished = false;
         if (!reachedEnd) {
           try {
             backendFinished = await playbackIsFinished();
           } catch {
-            // 后端命令不可用时静默忽略，仍走 (1) 的判定
+            // 忽略
           }
         }
         if (reachedEnd || backendFinished) {

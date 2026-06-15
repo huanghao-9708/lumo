@@ -25,6 +25,9 @@ pub struct ScanProgressPayload {
 
 /// 异步扫描本地目录：在独立线程中遍历，按 50 条/批写入数据库。
 /// 损坏或无法解析的文件会被跳过并计数（不再以 Unknown 形式污染曲库）。
+/// 执行本地目录扫描。
+/// 解析目录中支持的音频文件（mp3, flac, wav, m4a），提取元数据（ID3等）并入库。
+/// 如果文件已在数据库中，将检查其修改时间以决定是否更新。
 pub fn scan_local_directory(app: AppHandle, source_id: i64, path: &Path, app_data_dir: &Path) {
     info!("Starting async scan for directory: {:?}", path);
     let mut scanned_count = 0usize;
@@ -185,6 +188,8 @@ pub fn scan_local_directory(app: AppHandle, source_id: i64, path: &Path, app_dat
     let _ = app.emit("scan-complete", source_id);
 }
 
+/// 执行 WebDAV 远程目录扫描。
+/// 使用 HTTP HEAD/GET 探测文件列表，并尝试部分读取元数据。
 pub fn scan_webdav_directory(app: AppHandle, source_id: i64, root_uri: String, username: Option<String>, password: Option<String>, app_data_dir: &Path) {
     info!("Starting async scan for WebDAV: {}", root_uri);
     let mut scanned_count = 0usize;
@@ -345,6 +350,8 @@ pub fn scan_webdav_directory(app: AppHandle, source_id: i64, root_uri: String, u
 
 /// 把损坏的文件也记一行到 media_files（availability='error'），
 /// 让用户在文件浏览器里能看到"有这个文件但无法解析"，而不会污染曲库。
+/// 解析单个音频文件的元数据，如果包含封面则将其缓存到本地临时目录。
+/// 返回解析后的属性集合。
 fn mark_scan_error(app: &AppHandle, source_id: i64, path: &Path, err: &str) {
     let Some(db_state) = app.try_state::<DbState>() else { return };
     let Ok(conn) = db_state.db.get() else { return };
