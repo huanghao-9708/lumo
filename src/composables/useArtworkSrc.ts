@@ -6,6 +6,41 @@ import {
 } from '../utils/artworkCache';
 import { getArtworkUrl, getCurrentPlatform } from '../utils';
 
+// ================= 新增：全局并发控制队列 =================
+const MAX_CONCURRENT_FETCHES = 3; // 限制后台预加载并发数，留足通道给 IPC
+let activeFetches = 0;
+const fetchQueue: Array<() => void> = [];
+const pendingPrefetchIds = new Set<number>();
+
+function enqueuePrefetch(id: number, task: () => Promise<void>) {
+  if (pendingPrefetchIds.has(id)) return;
+  pendingPrefetchIds.add(id);
+
+  const execute = async () => {
+    try {
+      await task();
+    } finally {
+      pendingPrefetchIds.delete(id);
+      activeFetches--;
+      dequeuePrefetch();
+    }
+  };
+
+  fetchQueue.push(execute);
+  dequeuePrefetch();
+}
+
+function dequeuePrefetch() {
+  while (activeFetches < MAX_CONCURRENT_FETCHES && fetchQueue.length > 0) {
+    const task = fetchQueue.shift();
+    if (task) {
+      activeFetches++;
+      task();
+    }
+  }
+}
+// ==========================================================
+
 /**
  * 响应式的封面图片 src。
  *
@@ -54,9 +89,9 @@ export function useArtworkSrc(artworkIdGetter: () => number | null | undefined):
     //    只在 Windows（WebView2）下做预取——其他平台的 WKWebView 对自定义 scheme
     //    的 HTTP 缓存已经较好，不需要这层。
     if (getCurrentPlatform() === 'windows') {
-      prefetchAndCache(id, url).catch(() => {
+      enqueuePrefetch(id, () => prefetchAndCache(id, url).catch(() => {
         // 预取失败不致命，下次访问会重试
-      });
+      }));
     }
   }
 
