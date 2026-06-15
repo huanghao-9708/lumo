@@ -1,46 +1,23 @@
 import { defineStore } from "pinia";
 import { ref, computed, watch, shallowRef } from "vue";
-import { invoke } from '../utils/tauriInvoke';
 import { listen } from '@tauri-apps/api/event';
 
+import {
+  libraryGetTracks, libraryGetAlbums, libraryGetArtists, libraryGetAlbumTracks, libraryGetArtistAlbums, libraryGetArtistTracks, libraryGetArtistStats,
+  libraryCreatePlaylist, libraryGetPlaylists, libraryAddToPlaylist, libraryGetPlaylistTracks, libraryDeletePlaylist, libraryRemovePlaylistItem, libraryAddFolderToPlaylist,
+  libraryToggleFavorite, libraryRecordPlay, libraryGetRecentlyPlayed, libraryGetFavoriteTracks, librarySavePlayQueue, libraryGetPlayQueue,
+  libraryGetFolderContents
+, libraryGetLyrics, libraryGetTrackFileInfo } from '../api/library';
+import {
+  playbackPlay, playbackPause, playbackResume, playbackSetVolume, playbackGetPos, playbackSeek, playbackIsFinished
+} from '../api/playback';
+import {
+  sourceAddLocal, sourceAddWebdav, sourceList, sourceRemove, sourceScan
+} from '../api/scanner';
+
+
 // ================= 后端 DTO 接口（与 Rust 端 models.rs 保持一致） =================
-
-/** 后端 `TrackDTO` 序列化结果，字段名沿用 snake_case */
-export interface TrackDTO {
-  id: number;
-  title: string;
-  artist_name: string | null;
-  album_title: string | null;
-  duration_ms: number | null;
-  format: string | null;
-  media_file_id: number;
-  is_favorite: boolean;
-  cover_artwork_id?: number | null;
-}
-
-/** 后端 `AlbumDTO` 序列化结果 */
-export interface AlbumDTO {
-  id: number;
-  title: string;
-  artist_name: string | null;
-  cover_artwork_id: number | null;
-  track_count: number;
-}
-
-/** 后端 `ArtistDTO` 序列化结果 */
-export interface ArtistDTO {
-  id: number;
-  name: string;
-  track_count: number;
-}
-
-/** 后端 `PlaylistDTO` 序列化结果 */
-interface PlaylistDTOBackend {
-  id: number;
-  name: string;
-  description: string | null;
-  track_count: number;
-}
+import type { TrackDTO, AlbumDTO, ArtistDTO, PlaylistDTOBackend } from '../api/types';
 
 // ================= 前端展示模型 =================
 
@@ -99,17 +76,6 @@ export interface FolderEntry {
   is_dir: boolean;
   path: string;
   track?: Track;
-}
-
-/** 后端 `FolderContentsResult` 序列化结果 */
-interface FolderContentsResultDTO {
-  entries: Array<{
-    name: string;
-    is_dir: boolean;
-    path: string;
-    track?: TrackDTO;
-  }>;
-  total: number;
 }
 
 // ================= Store 实现 =================
@@ -227,12 +193,12 @@ export const usePlayerStore = defineStore("player", () => {
 
     isFetchingFolder.value = true;
     try {
-      const res = await invoke('library_get_folder_contents', {
-        sourceId,
-        folderPath: folderPath || null,
-        limit: folderPageSize,
-        offset: folderOffset,
-      }) as FolderContentsResultDTO;
+      const res = await libraryGetFolderContents(
+          sourceId,
+          folderPath || undefined,
+          folderPageSize,
+          folderOffset
+      );
 
       const page = res.entries.map(item => ({
         name: item.name,
@@ -289,7 +255,7 @@ export const usePlayerStore = defineStore("player", () => {
 
   async function addFolderToPlaylist(sourceId: number, folderPath: string, playlistId: number) {
     try {
-      await invoke('library_add_folder_to_playlist', { sourceId, folderPath, playlistId });
+      await libraryAddFolderToPlaylist(sourceId, folderPath, playlistId);
       // 刷新对应歌单的轨道
       if (activeLibraryTab.value === playlists.value.find(p => p.id === playlistId)?.name) {
         fetchPlaylistTracks(playlistId);
@@ -396,11 +362,11 @@ const albums = shallowRef<Album[]>([]);
 
     try {
       isErrorTracks.value = false;
-      const result: TrackDTO[] = await invoke('library_get_tracks', {
-        limit: tracksLimit,
-        offset: tracksOffset,
-        searchKeyword: searchQuery.value || null
-      });
+      const result: TrackDTO[] = await libraryGetTracks(
+          tracksLimit,
+          tracksOffset,
+          searchQuery.value || undefined
+      );
 
       if (result.length < tracksLimit) {
         hasMoreTracks.value = false;
@@ -419,7 +385,7 @@ const albums = shallowRef<Album[]>([]);
 
   async function fetchPlaylists() {
     try {
-      const result: PlaylistDTOBackend[] = await invoke('library_get_playlists');
+      const result: PlaylistDTOBackend[] = await libraryGetPlaylists();
       playlists.value = result.map(p => ({
         id: p.id,
         name: p.name,
@@ -467,7 +433,7 @@ const albums = shallowRef<Album[]>([]);
       // 这里改为：查询是否已在收藏表里，再决定翻转方向。
       let newStatus: boolean;
       if (targetTracks.length === 0) {
-        const favorites: TrackDTO[] = await invoke('library_get_favorite_tracks');
+        const favorites: TrackDTO[] = await libraryGetFavoriteTracks();
         const exists = favorites.some(t => t.id === trackId);
         newStatus = !exists;
       } else {
@@ -480,7 +446,7 @@ const albums = shallowRef<Album[]>([]);
       });
 
       try {
-        await invoke('library_toggle_favorite', { trackId, isFavorite: newStatus });
+        await libraryToggleFavorite(trackId, newStatus);
       } catch (e) {
         console.error("Backend failed to toggle favorite:", e);
         // 回滚
@@ -496,7 +462,7 @@ const albums = shallowRef<Album[]>([]);
   async function recordPlay(trackId: number, durationPlayed: number) {
     if (durationPlayed < 1000) return; // 忽略极短的切歌
     try {
-      await invoke('library_record_play', { trackId, durationMs: durationPlayed });
+      await libraryRecordPlay(trackId, durationPlayed);
     } catch(e) {
       console.error("Failed to record play:", e);
     }
@@ -504,7 +470,7 @@ const albums = shallowRef<Album[]>([]);
 
   async function addToPlaylist(playlistId: number, trackId: number) {
     try {
-      await invoke('library_add_to_playlist', { playlistId, trackId });
+      await libraryAddToPlaylist(playlistId, trackId);
       await fetchPlaylists();
       if (activePlaylistId.value === playlistId) {
         await refreshCurrentPlaylistTracks(playlistId);
@@ -516,7 +482,7 @@ const albums = shallowRef<Album[]>([]);
 
   async function fetchPlaylistTracks(playlistId: number) {
     try {
-      const result: TrackDTO[] = await invoke('library_get_playlist_tracks', { playlistId });
+      const result: TrackDTO[] = await libraryGetPlaylistTracks(playlistId);
       tracks.value = mapTrackList(result);
       hasMoreTracks.value = false;
       tracksOffset = tracks.value.length;
@@ -527,7 +493,7 @@ const albums = shallowRef<Album[]>([]);
 
   async function fetchRecentlyPlayed() {
     try {
-      const result: TrackDTO[] = await invoke('library_get_recently_played', { limit: 50 });
+      const result: TrackDTO[] = await libraryGetRecentlyPlayed(50);
       tracks.value = mapTrackList(result);
       hasMoreTracks.value = false;
     } catch(e) {
@@ -537,7 +503,7 @@ const albums = shallowRef<Album[]>([]);
 
   async function fetchFavoriteTracks() {
     try {
-      const result: TrackDTO[] = await invoke('library_get_favorite_tracks');
+      const result: TrackDTO[] = await libraryGetFavoriteTracks();
       tracks.value = mapTrackList(result);
       hasMoreTracks.value = false;
     } catch(e) {
@@ -592,11 +558,11 @@ const albums = shallowRef<Album[]>([]);
       ch.port2.onmessage = () => { mt_latency = performance.now() - mtPostedAt; };
       ch.port1.postMessage(null);
 
-      const result: AlbumDTO[] = await invoke('library_get_albums', {
-        limit: albumsLimit,
-        offset: albumsOffset,
-        searchQuery: searchQuery.value || null
-      });
+      const result: AlbumDTO[] = await libraryGetAlbums(
+          albumsLimit,
+          albumsOffset,
+          searchQuery.value || undefined
+      );
       const t_invoke_end = performance.now();
       if (result.length < albumsLimit) {
         hasMoreAlbums.value = false;
@@ -645,11 +611,11 @@ const albums = shallowRef<Album[]>([]);
     isLoadingArtists.value = true;
     try {
       isErrorArtists.value = false;
-      const result: ArtistDTO[] = await invoke('library_get_artists', {
-        limit: artistsLimit,
-        offset: artistsOffset,
-        searchKeyword: searchQuery.value || null
-      });
+      const result: ArtistDTO[] = await libraryGetArtists(
+          artistsLimit,
+          artistsOffset,
+          searchQuery.value || undefined
+      );
       if (result.length < artistsLimit) {
         hasMoreArtists.value = false;
       }
@@ -719,7 +685,7 @@ const albums = shallowRef<Album[]>([]);
   watch(currentTrack, async (newTrack) => {
     if (newTrack) {
       try {
-        const lrcText = await invoke<string | null>('library_get_lyrics', { trackId: newTrack.id });
+        const lrcText = await libraryGetLyrics(newTrack.id);
         if (lrcText) {
           lyrics.value = parseLrc(lrcText);
         } else {
@@ -738,7 +704,7 @@ const albums = shallowRef<Album[]>([]);
       }
 
       try {
-        const fileInfo = await invoke<any>('library_get_track_file_info', { trackId: newTrack.id });
+        const fileInfo = await libraryGetTrackFileInfo(newTrack.id);
         currentTrackFileInfo.value = fileInfo;
       } catch (e) {
         console.error("Failed to load track file info:", e);
@@ -757,7 +723,7 @@ const albums = shallowRef<Album[]>([]);
 
   const createPlaylist = async (name: string, description: string): Promise<number> => {
     try {
-      const id = await invoke<number>('library_create_playlist', { name, description });
+      const id = await libraryCreatePlaylist(name, description);
       await fetchPlaylists();
       return id;
     } catch(e) {
@@ -775,7 +741,7 @@ const albums = shallowRef<Album[]>([]);
     }
 
     try {
-      const result: TrackDTO[] = await invoke('library_get_playlist_tracks', { playlistId });
+      const result: TrackDTO[] = await libraryGetPlaylistTracks(playlistId);
       const tracksData = mapTrackList(result);
 
       playlist.count = tracksData.length;
@@ -803,7 +769,7 @@ const albums = shallowRef<Album[]>([]);
        const album = albums.value.find(a => a.id === newId);
        if (album) {
          try {
-           const result: TrackDTO[] = await invoke('library_get_album_tracks', { albumId: newId });
+           const result: TrackDTO[] = await libraryGetAlbumTracks(newId);
            const tracksData = mapTrackList(result);
            currentAlbumDetailsData.value = { ...album, tracks: tracksData };
          } catch (e) {
@@ -823,7 +789,7 @@ const albums = shallowRef<Album[]>([]);
     try {
       const limit = 30;
       const offset = currentArtistDetailsData.value.tracksOffset;
-      const tracksResult: TrackDTO[] = await invoke('library_get_artist_tracks', { artistId, limit, offset });
+      const tracksResult: TrackDTO[] = await libraryGetArtistTracks(artistId, limit, offset);
 
       const tracksData = mapTrackList(tracksResult);
 
@@ -849,7 +815,7 @@ const albums = shallowRef<Album[]>([]);
     try {
       const limit = 20;
       const offset = currentArtistDetailsData.value.albumsOffset;
-      const albumsResult: AlbumDTO[] = await invoke('library_get_artist_albums', { artistId, limit, offset });
+      const albumsResult: AlbumDTO[] = await libraryGetArtistAlbums(artistId, limit, offset);
 
       const artistAlbums: Album[] = albumsResult.map(a => ({
         id: a.id,
@@ -894,7 +860,7 @@ const albums = shallowRef<Album[]>([]);
       };
 
       try {
-        const stats: any = await invoke('library_get_artist_stats', { artistId: newId });
+        const stats: any = await libraryGetArtistStats(newId);
         currentArtistDetailsData.value.stats = stats;
       } catch(e) {
         console.error(e);
@@ -931,7 +897,7 @@ const albums = shallowRef<Album[]>([]);
     const sig = queue.value.map(t => t.id).join(',');
     if (sig === lastSavedQueueSignature) return;
     lastSavedQueueSignature = sig;
-    invoke('library_save_play_queue', { trackIds: queue.value.map(t => t.id) })
+    librarySavePlayQueue(queue.value.map(t => t.id))
       .catch(e => console.error("Failed to auto-save play queue:", e));
   }
 
@@ -953,7 +919,7 @@ const albums = shallowRef<Album[]>([]);
   async function restoreSession() {
     try {
       // 1. 恢复播放队列
-      const savedQueue: TrackDTO[] = await invoke('library_get_play_queue');
+      const savedQueue: TrackDTO[] = await libraryGetPlayQueue();
       if (savedQueue && savedQueue.length > 0) {
         queue.value = mapTrackList(savedQueue);
         lastSavedQueueSignature = queue.value.map(t => t.id).join(',');
@@ -971,7 +937,7 @@ const albums = shallowRef<Album[]>([]);
         const vol = parseInt(savedVolume, 10);
         if (!isNaN(vol) && vol >= 0 && vol <= 100) {
           volume.value = vol;
-          await invoke('playback_set_volume', { volume: vol / 100 });
+          await playbackSetVolume(vol / 100);
         }
       }
 
@@ -1002,7 +968,7 @@ const albums = shallowRef<Album[]>([]);
   // 删除歌单
   async function deletePlaylist(playlistId: number) {
     try {
-      await invoke('library_delete_playlist', { playlistId });
+      await libraryDeletePlaylist(playlistId);
       await fetchPlaylists();
       if (activePlaylistId.value === playlistId) {
         activePlaylistId.value = null;
@@ -1017,7 +983,7 @@ const albums = shallowRef<Album[]>([]);
   // 从歌单移除单曲
   async function removeTrackFromPlaylist(playlistId: number, trackId: number) {
     try {
-      await invoke('library_remove_playlist_item', { playlistId, trackId });
+      await libraryRemovePlaylistItem(playlistId, trackId);
       await refreshCurrentPlaylistTracks(playlistId);
       await fetchPlaylists();
     } catch (e) {
@@ -1037,20 +1003,20 @@ const albums = shallowRef<Album[]>([]);
 
     try {
       if (isPlaying.value) {
-        await invoke('playback_pause');
+        await playbackPause();
         isPlaying.value = false;
       } else {
         if (!hasLoadedCurrentFile.value) {
           if (track.primary_file_id) {
-            await invoke('playback_play', { mediaFileId: track.primary_file_id });
+            await playbackPlay(track.primary_file_id);
             hasLoadedCurrentFile.value = true;
 
             if (progressMs.value > 0) {
-              await invoke('playback_seek', { positionMs: progressMs.value });
+              await playbackSeek(progressMs.value);
             }
           }
         } else {
-          await invoke('playback_resume');
+          await playbackResume();
         }
         isPlaying.value = true;
         startProgressPolling();
@@ -1068,7 +1034,7 @@ const albums = shallowRef<Album[]>([]);
       if (!isPlaying.value) return;
       actualListenMs += 500;
       try {
-        const pos = await invoke<number>('playback_get_pos');
+        const pos = await playbackGetPos();
         progressMs.value = pos;
 
         // 自动切歌判定：
@@ -1079,7 +1045,7 @@ const albums = shallowRef<Album[]>([]);
         let backendFinished = false;
         if (!reachedEnd) {
           try {
-            backendFinished = await invoke<boolean>('playback_is_finished');
+            backendFinished = await playbackIsFinished();
           } catch {
             // 后端命令不可用时静默忽略，仍走 (1) 的判定
           }
@@ -1107,7 +1073,7 @@ const albums = shallowRef<Album[]>([]);
       durationMs.value = track.durationSec ? track.durationSec * 1000 : 0;
       progressMs.value = 0;
       try {
-        const playbackDuration = await invoke<number | null>('playback_play', { mediaFileId: track.primary_file_id });
+        const playbackDuration = await playbackPlay(track.primary_file_id);
         if (playbackDuration && playbackDuration > 0) {
           durationMs.value = playbackDuration;
         }
@@ -1149,7 +1115,7 @@ const albums = shallowRef<Album[]>([]);
   async function setVolume(v: number) {
     volume.value = v;
     try {
-      await invoke('playback_set_volume', { volume: v / 100 });
+      await playbackSetVolume(v / 100);
     } catch (e) {
       console.error(e);
     }
@@ -1157,7 +1123,7 @@ const albums = shallowRef<Album[]>([]);
 
   async function seek(positionMs: number) {
     try {
-      await invoke('playback_seek', { positionMs });
+      await playbackSeek(positionMs);
       progressMs.value = positionMs;
     } catch (e) {
       console.error(e);
@@ -1168,14 +1134,14 @@ const albums = shallowRef<Album[]>([]);
   async function addSource(kind: 'local' | 'webdav', name: string, path: string, username?: string, password?: string) {
     if (kind === 'local') {
         try {
-            const id: number = await invoke('source_add_local', { path, name });
+            const id: number = await sourceAddLocal(path, name);
             sources.value.push({ id, kind, name, path, isEnabled: true, lastScanned: "Never", username });
         } catch (e) {
             console.error("Failed to add local source:", e);
         }
     } else if (kind === 'webdav') {
         try {
-            const id: number = await invoke('source_add_webdav', { url: path, name, username, password });
+            const id: number = await sourceAddWebdav(path, name, username, password);
             sources.value.push({ id, kind, name, path, isEnabled: true, lastScanned: "Never", username });
         } catch (e) {
             console.error("Failed to add webdav source:", e);
@@ -1186,7 +1152,7 @@ const albums = shallowRef<Album[]>([]);
 
   async function fetchSources() {
     try {
-      const result: any[] = await invoke('source_list');
+      const result: any[] = await sourceList();
       sources.value = result.map(s => ({
         id: s.id,
         kind: s.kind as 'local' | 'webdav',
@@ -1203,7 +1169,7 @@ const albums = shallowRef<Album[]>([]);
 
   async function removeSource(id: number) {
     try {
-      await invoke('source_remove', { sourceId: id });
+      await sourceRemove(id);
       sources.value = sources.value.filter(s => s.id !== id);
       fetchTracks(true);
     } catch (e) {
@@ -1223,7 +1189,7 @@ const albums = shallowRef<Album[]>([]);
     if (source) {
       source.lastScanned = "Scanning...";
       try {
-        await invoke('source_scan', { sourceId: id });
+        await sourceScan(id);
         // Don't set "Just now" here, the backend will emit `scan-progress` and `scan-complete`.
       } catch (e) {
         console.error("Scan failed:", e);

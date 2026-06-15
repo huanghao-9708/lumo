@@ -1,0 +1,134 @@
+use rusqlite::{Connection, params};
+use crate::models::*;
+
+pub struct ArtistRepo;
+
+impl ArtistRepo {
+    pub fn get_artists_paginated(conn: &Connection, limit: u32, offset: u32, search_keyword: Option<String>) -> rusqlite::Result<Vec<ArtistDTO>> {
+            // 直接读 artists.track_count 冗余字段（迁移 V2 维护），去掉子查询。
+            let mut sql = "
+                SELECT
+                    ar.id,
+                    ar.name,
+                    ar.track_count
+                FROM artists ar
+                WHERE 1=1
+            ".to_string();
+    
+            let keyword_pattern = if let Some(keyword) = search_keyword {
+                let kw = keyword.trim();
+                if !kw.is_empty() {
+                    sql.push_str(" AND ar.name LIKE ?");
+                    Some(format!("%{}%", kw))
+                } else { None }
+            } else { None };
+    
+            // 用 normalized_name（已有索引）代替 COLLATE NOCASE，避免函数排序
+            sql.push_str(" ORDER BY ar.normalized_name ASC LIMIT ? OFFSET ?");
+            
+            let mut result = Vec::new();
+            if let Some(pattern) = keyword_pattern {
+                let mut stmt = conn.prepare(&sql)?;
+                let rows = stmt.query_map(params![pattern, limit, offset], |row| {
+                    Ok(ArtistDTO {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        track_count: row.get(2)?,
+                    })
+                })?;
+                for r in rows { result.push(r?); }
+            } else {
+                let mut stmt = conn.prepare(&sql)?;
+                let rows = stmt.query_map(params![limit, offset], |row| {
+                    Ok(ArtistDTO {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        track_count: row.get(2)?,
+                    })
+                })?;
+                for r in rows { result.push(r?); }
+            }
+            Ok(result)
+        }
+
+    pub fn get_artist_albums(conn: &Connection, artist_id: i64, limit: u32, offset: u32) -> rusqlite::Result<Vec<AlbumDTO>> {
+            // 直接读 albums.track_count 冗余字段，去掉子查询和 GROUP BY。
+            // 注意 DISTINCT + JOIN track_artists 会让同一专辑出现多次，仍需 GROUP BY al.id 去重，
+            // 但因为不再 COUNT(t.id)，分组本身极快（不需扫描 track_artists 的全部行）。
+            let mut stmt = conn.prepare("
+                SELECT
+                    al.id, al.title, ar.name AS artist_name, al.cover_artwork_id, al.track_count
+                FROM albums al
+                LEFT JOIN artists ar ON al.album_artist_id = ar.id
+                WHERE al.album_artist_id = ?1
+                   OR al.id IN (
+                       SELECT DISTINCT t.album_id
+                       FROM track_artists ta JOIN tracks t ON ta.track_id = t.id
+                       WHERE ta.artist_id = ?1 AND t.album_id IS NOT NULL
+                   )
+                GROUP BY al.id
+                ORDER BY al.release_year DESC, al.title ASC
+                LIMIT ?2 OFFSET ?3
+            ")?;
+            let rows = stmt.query_map(rusqlite::params![artist_id, limit, offset], |row| {
+                Ok(AlbumDTO {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    artist_name: row.get(2)?,
+                    cover_artwork_id: row.get(3)?,
+                    track_count: row.get(4)?,
+                })
+            })?;
+            let mut result = Vec::new();
+            for r in rows { result.push(r?); }
+            Ok(result)
+        }
+
+    pub fn get_artist_tracks(conn: &Connection, artist_id: i64, limit: u32, offset: u32) -> rusqlite::Result<Vec<TrackDTO>> {
+            let mut stmt = conn.prepare("
+                SELECT 
+                    t.id, t.title, 
+                    (SELECT GROUP_CONCAT(a.name, ', ') FROM track_artists ta2 JOIN artists a ON ta2.artist_id = a.id WHERE ta2.track_id = t.id ORDER BY ta2.position) AS artist_name,
+                    al.title AS album_title, m.duration_ms, m.file_ext, m.id AS media_file_id, ft.track_id IS NOT NULL AS is_favorite, al.cover_artwork_id
+                FROM tracks t
+                JOIN track_artists ta ON ta.track_id = t.id
+                LEFT JOIN albums al ON t.album_id = al.id
+                JOIN media_files m ON t.id = m.track_id
+                LEFT JOIN favorite_tracks ft ON t.id = ft.track_id
+                WHERE ta.artist_id = ?1
+                ORDER BY t.play_count DESC, t.title ASC
+                LIMIT ?2 OFFSET ?3
+            ")?;
+            let rows = stmt.query_map(rusqlite::params![artist_id, limit, offset], crate::repositories::map_track_row)?;
+            let mut result = Vec::new();
+            for r in rows { result.push(r?); }
+            Ok(result)
+        }
+
+    pub fn get_artist_stats(conn: &Connection, artist_id: i64) -> rusqlite::Result<ArtistStatsDTO> {
+            // track_count 直接读冗余字段（O(1)）。
+            // album_count 由于语义包含"参与的"专辑（不只是作为 album_artist），
+            // 与 artists.album_count 冗余字段定义不同，仍需一次查询。但单艺人涉及的专辑
+            // 通常只有几十张，配合 idx_track_artists_artist 索引，耗时几毫秒可接受。
+            let track_count: i64 = conn.query_row(
+                "SELECT track_count FROM artists WHERE id = ?1",
+                [artist_id],
+                |row| row.get(0)
+            ).unwrap_or(0);
+    
+            let album_count: i64 = conn.query_row(
+                "SELECT COUNT(DISTINCT al.id) FROM albums al
+                 LEFT JOIN tracks t ON t.album_id = al.id
+                 LEFT JOIN track_artists ta ON ta.track_id = t.id
+                 WHERE al.album_artist_id = ?1 OR ta.artist_id = ?1",
+                [artist_id],
+                |row| row.get(0)
+            ).unwrap_or(0);
+    
+            Ok(ArtistStatsDTO {
+                track_count,
+                album_count
+            })
+        }
+
+}

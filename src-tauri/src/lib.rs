@@ -1,23 +1,14 @@
 pub mod models;
 pub mod db;
 pub mod services;
+pub mod repositories;
 pub mod commands;
 pub mod ipc_trace;
+pub mod error;
 
 use db::{init_db, DbState};
 use services::playback::PlaybackManager;
-use crate::commands::{
-    PlaybackState, source_add_local, source_add_webdav, source_scan, source_list, source_remove, library_get_tracks, library_get_albums, library_get_artists,
-    library_get_album_tracks, library_get_artist_albums, library_get_artist_tracks, library_get_artist_stats,
-    playback_play, playback_pause, playback_resume, playback_stop,
-    playback_set_volume, playback_get_pos, playback_seek, playback_is_finished,
-    library_toggle_favorite, library_create_playlist, library_get_playlists,
-    library_add_to_playlist, library_get_playlist_tracks, library_record_play,
-    library_get_recently_played, library_get_favorite_tracks, library_get_lyrics,
-    library_get_track_file_info, library_delete_playlist, library_remove_playlist_item,
-    library_save_play_queue, library_get_play_queue, library_get_cache_size, library_clear_cache,
-    library_get_folder_contents, library_add_folder_to_playlist
-};
+use crate::commands::playback::PlaybackState;
 use tracing_subscriber;
 use std::sync::Mutex;
 use std::path::PathBuf;
@@ -202,44 +193,44 @@ pub fn run() {
                 .unwrap()
         })
         .invoke_handler(tauri::generate_handler![
-            source_add_local,
-            source_add_webdav,
-            source_scan,
-            source_list,
-            source_remove,
-            library_get_tracks,
-            library_get_albums,
-            library_get_artists,
-            library_get_album_tracks,
-            library_get_artist_albums,
-            library_get_artist_tracks,
-            library_get_artist_stats,
-            playback_play,
-            playback_pause,
-            playback_resume,
-            playback_stop,
-            playback_set_volume,
-            playback_get_pos,
-            playback_seek,
-            playback_is_finished,
-            library_toggle_favorite,
-            library_create_playlist,
-            library_get_playlists,
-            library_add_to_playlist,
-            library_get_playlist_tracks,
-            library_record_play,
-            library_get_recently_played,
-            library_get_favorite_tracks,
-            library_get_lyrics,
-            library_get_track_file_info,
-            library_delete_playlist,
-            library_remove_playlist_item,
-            library_save_play_queue,
-            library_get_play_queue,
-            library_get_cache_size,
-            library_clear_cache,
-            library_get_folder_contents,
-            library_add_folder_to_playlist
+            crate::commands::scanner::source_add_local,
+            crate::commands::scanner::source_add_webdav,
+            crate::commands::scanner::source_scan,
+            crate::commands::scanner::source_list,
+            crate::commands::scanner::source_remove,
+            crate::commands::library::library_get_tracks,
+            crate::commands::library::library_get_albums,
+            crate::commands::library::library_get_artists,
+            crate::commands::library::library_get_album_tracks,
+            crate::commands::library::library_get_artist_albums,
+            crate::commands::library::library_get_artist_tracks,
+            crate::commands::library::library_get_artist_stats,
+            crate::commands::playback::playback_play,
+            crate::commands::playback::playback_pause,
+            crate::commands::playback::playback_resume,
+            crate::commands::playback::playback_stop,
+            crate::commands::playback::playback_set_volume,
+            crate::commands::playback::playback_get_pos,
+            crate::commands::playback::playback_seek,
+            crate::commands::playback::playback_is_finished,
+            crate::commands::library::library_toggle_favorite,
+            crate::commands::library::library_create_playlist,
+            crate::commands::library::library_get_playlists,
+            crate::commands::library::library_add_to_playlist,
+            crate::commands::library::library_get_playlist_tracks,
+            crate::commands::library::library_record_play,
+            crate::commands::library::library_get_recently_played,
+            crate::commands::library::library_get_favorite_tracks,
+            crate::commands::library::library_get_lyrics,
+            crate::commands::library::library_get_track_file_info,
+            crate::commands::library::library_delete_playlist,
+            crate::commands::library::library_remove_playlist_item,
+            crate::commands::library::library_save_play_queue,
+            crate::commands::library::library_get_play_queue,
+            crate::commands::library::library_get_cache_size,
+            crate::commands::library::library_clear_cache,
+            crate::commands::library::library_get_folder_contents,
+            crate::commands::library::library_add_folder_to_playlist
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

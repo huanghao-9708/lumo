@@ -1,5 +1,5 @@
 use reqwest::blocking::Client;
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, RANGE};
+use reqwest::header::RANGE;
 use std::io::{self, Read, Seek, SeekFrom};
 use quick_xml::events::Event;
 use quick_xml::Reader;

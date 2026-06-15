@@ -4508,7 +4508,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-app"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "chrono",
  "hex",
@@ -4527,6 +4527,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
+ "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",
  "url",
