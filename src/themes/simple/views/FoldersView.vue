@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref, onUnmounted, computed } from 'vue';
-import { usePlayerStore } from '../../stores/player';
-import { useVirtualList } from '../../composables/useVirtualList';
+import { usePlayerStore } from '../../../stores/player';
+import { useVirtualList } from '../../../composables/useVirtualList';
 import { Folder, FileAudio, ChevronRight, CornerLeftUp, Play, Plus } from 'lucide-vue-next';
 
 const playerStore = usePlayerStore();
@@ -77,7 +77,7 @@ const scrollContainer = ref<HTMLElement | null>(null);
 // 第一项（index 0）固定为"返回上一级"按钮（仅当有面包屑时存在）。
 interface VRow {
   kind: 'back' | 'entry';
-  entry?: import('../../stores/player').FolderEntry;
+  entry?: import('../../../stores/player').FolderEntry;
 }
 
 const hasBackButton = computed(() => playerStore.folderBreadcrumbs.length > 0);

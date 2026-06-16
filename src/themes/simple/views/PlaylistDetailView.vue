@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue';
 import { Heart, AudioLines, Play, Plus, Trash2 } from 'lucide-vue-next';
-import { usePlayerStore } from '../../stores/player';
+import { usePlayerStore } from '../../../stores/player';
 
 const playerStore = usePlayerStore();
 

@@ -1,16 +1,26 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue';
+import { onMounted, onUnmounted, ref, computed } from 'vue';
 import { useUiStore } from './stores/ui';
 import { usePlayerStore } from './stores/player';
 import { Minus, Square, X, Sun, Moon, Palette, ChevronDown } from 'lucide-vue-next';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import AppLayout from './layout/index.vue';
+import { themes } from './themes';
 
 const isUiDropdownOpen = ref(false);
 const closeDropdown = () => setTimeout(() => isUiDropdownOpen.value = false, 200);
 
 const uiStore = useUiStore();
 const playerStore = usePlayerStore();
+
+// 计算当前主题的动态 Layout
+const ActiveLayout = computed(() => {
+  const theme = themes[uiStore.activeTheme];
+  if (theme && theme.components.Layout) {
+    return theme.components.Layout;
+  }
+  // Fallback to simple layout
+  return themes['theme-simple'].components.Layout;
+});
 
 // 键盘快捷键监听
 const handleGlobalKeyDown = (e: KeyboardEvent) => {
@@ -78,8 +88,8 @@ const close = () => appWindow.close();
 </script>
 
 <template>
-  <!-- 固定核心布局 -->
-  <AppLayout />
+  <!-- 动态装配的主题核心布局 -->
+  <component :is="ActiveLayout" />
 
   <!-- 全局窗口控制和 UI 切换按钮 -->
   <div class="fixed top-0 right-0 h-10 flex items-center px-4 gap-3 z-50 select-none pointer-events-none text-text-muted">
@@ -111,21 +121,21 @@ const close = () => appWindow.close();
         leave-from-class="transform scale-100 opacity-100"
         leave-to-class="transform scale-95 opacity-0">
         <div v-if="isUiDropdownOpen" 
-             class="absolute right-0 mt-1.5 w-32 rounded-xl shadow-lg border overflow-hidden backdrop-blur-md bg-bg-base/95 border-border-color">
+             class="absolute right-0 mt-1.5 w-36 rounded-xl shadow-lg border overflow-hidden backdrop-blur-md bg-bg-base/95 border-border-color">
           <div class="p-1 flex flex-col gap-0.5">
-            <button @click="uiStore.setActiveTheme('theme-default')"
-                    class="w-full text-left px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors"
-                    :class="uiStore.activeTheme === 'theme-default'
-                      ? 'bg-bg-active text-accent'
-                      : 'text-text-muted hover:bg-bg-panel'">
-              默认模板
-            </button>
             <button @click="uiStore.setActiveTheme('theme-simple')"
                     class="w-full text-left px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors"
                     :class="uiStore.activeTheme === 'theme-simple'
                       ? 'bg-bg-active text-accent'
                       : 'text-text-muted hover:bg-bg-panel'">
-              极简模板
+              极简视图 (Simple)
+            </button>
+            <button @click="uiStore.setActiveTheme('theme-advanced')"
+                    class="w-full text-left px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors"
+                    :class="uiStore.activeTheme === 'theme-advanced'
+                      ? 'bg-bg-active text-accent'
+                      : 'text-text-muted hover:bg-bg-panel'">
+              高级沉浸 (Advanced)
             </button>
           </div>
         </div>

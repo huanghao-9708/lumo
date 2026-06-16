@@ -16,8 +16,8 @@ import {
   Folder,
 } from 'lucide-vue-next';
 import { onMounted } from 'vue';
-import { usePlayerStore } from '../stores/player';
-import { useUiStore } from '../stores/ui';
+import { usePlayerStore } from '../../stores/player';
+import { useUiStore } from '../../stores/ui';
 
 const playerStore = usePlayerStore();
 const uiStore = useUiStore();

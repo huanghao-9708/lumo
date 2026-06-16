@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { ref, onMounted, watch } from 'vue';
 import { RefreshCw, Trash2, Power, PowerOff, Plus, X, ChevronDown, ChevronRight, HardDrive, Globe, Folder } from 'lucide-vue-next';
-import { usePlayerStore } from '../../stores/player';
+import { usePlayerStore } from '../../../stores/player';
 import { open } from '@tauri-apps/plugin-dialog';
-import { libraryClearCache, libraryGetCacheSize } from '../../api/library';
-import { resetArtworkFrontCache } from '../../composables/useArtworkSrc';
+import { libraryClearCache, libraryGetCacheSize } from '../../../api/library';
+import { resetArtworkFrontCache } from '../../../composables/useArtworkSrc';
 
 const playerStore = usePlayerStore();
 

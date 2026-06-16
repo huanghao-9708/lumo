@@ -4,8 +4,12 @@ import { ref, watch } from "vue";
 export const useUiStore = defineStore("ui", () => {
   // 深色模式状态
   const isDarkMode = ref(localStorage.getItem('lumo_dark_mode') === 'true');
-  // 主题状态 (默认主题 vs 极简主题)
-  const activeTheme = ref(localStorage.getItem('lumo_active_theme') || "theme-default");
+  // 主题状态
+  let savedTheme = localStorage.getItem('lumo_active_theme');
+  if (!savedTheme || savedTheme === 'theme-default') {
+    savedTheme = 'theme-simple'; // Migrate old default
+  }
+  const activeTheme = ref(savedTheme);
 
   function toggleDarkMode() {
     isDarkMode.value = !isDarkMode.value;

@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { usePlayerStore } from '../../stores/player';
+import { usePlayerStore } from '../../../stores/player';
 import { onMounted, ref, computed, onUnmounted } from 'vue';
-import type { Album } from '../../stores/player';
+import type { Album } from '../../../stores/player';
 import ArtworkImage from '../components/ArtworkImage.vue';
-import { getArtworkUrl } from '../../utils';
-import { prefetchArtworks } from '../../utils/artworkCache';
+import { getArtworkUrl } from '../../../utils';
+import { prefetchArtworks } from '../../../utils/artworkCache';
 
 const playerStore = usePlayerStore();
 

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { watch, ref, onBeforeUpdate } from 'vue';
-import { usePlayerStore } from '../stores/player';
-import { getArtworkUrl } from '../utils';
+import { usePlayerStore } from '../../stores/player';
+import { getArtworkUrl } from '../../utils';
 import { AudioLines, Play } from 'lucide-vue-next';
 
 const playerStore = usePlayerStore();

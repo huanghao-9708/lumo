@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { usePlayerStore } from '../../stores/player';
+import { usePlayerStore } from '../../../stores/player';
 import { onMounted, ref, computed } from 'vue';
-import type { Artist } from '../../stores/player';
+import type { Artist } from '../../../stores/player';
 
 const playerStore = usePlayerStore();
 

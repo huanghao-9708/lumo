@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, watch } from 'vue';
 import { Search, Filter, List, LayoutGrid } from 'lucide-vue-next';
-import { usePlayerStore } from '../stores/player';
+import { usePlayerStore } from '../../stores/player';
 
 import TracksView from './views/TracksView.vue';
 import AlbumsView from './views/AlbumsView.vue';

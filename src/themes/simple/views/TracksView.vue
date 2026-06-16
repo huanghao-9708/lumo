@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { onMounted, ref, onUnmounted, watch, computed } from 'vue';
 import { Heart, AudioLines, Plus, Play } from 'lucide-vue-next';
-import { usePlayerStore } from '../../stores/player';
-import type { Track } from '../../stores/player';
+import { usePlayerStore } from '../../../stores/player';
+import type { Track } from '../../../stores/player';
 
 const playerStore = usePlayerStore();
 const activeMenuTrackId = ref<number | null>(null);
