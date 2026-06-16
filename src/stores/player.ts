@@ -135,7 +135,6 @@ export const usePlayerStore = defineStore("player", () => {
   }
 
   // 基础状态
-  const isDarkMode = ref(false);
   const isPlaying = ref(false);
   const volume = ref(75);
 
@@ -1273,7 +1272,6 @@ const albums = shallowRef<Album[]>([]);
   });
 
   return {
-    isDarkMode,
     isPlaying,
     volume,
     queue,

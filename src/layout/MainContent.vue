@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, watch } from 'vue';
 import { Search, Filter, List, LayoutGrid } from 'lucide-vue-next';
-import { usePlayerStore } from '../../stores/player';
+import { usePlayerStore } from '../stores/player';
 
 import TracksView from './views/TracksView.vue';
 import AlbumsView from './views/AlbumsView.vue';
@@ -59,25 +59,25 @@ const isDetailView = computed(() => {
         <p class="text-[10px] font-bold tracking-[0.2em] text-[#888888] mb-2 uppercase">
           {{ playerStore.activeLibraryTab === '设置' ? 'SYSTEM & PREFERENCES' : 'INDEX — VOL. 01' }}
         </p>
-        <h1 class="font-serif italic text-5xl tracking-wide text-black">{{ mainTitle }}</h1>
+        <h1 class="font-serif italic text-5xl tracking-wide text-accent">{{ mainTitle }}</h1>
       </div>
 
       <div class="flex items-center gap-8 mb-2 transition-all duration-300" :class="!playerStore.isRightPanelOpen ? 'mr-56' : ''">
         <!-- 如果是设置页，可以隐藏搜索和过滤器，保持干净 -->
         <template v-if="playerStore.activeLibraryTab !== '设置'">
           <div class="relative group">
-            <Search class="w-4 h-4 text-[#888] absolute left-0 top-1/2 -translate-y-1/2" />
+            <Search class="w-4 h-4 text-text-muted  absolute left-0 top-1/2 -translate-y-1/2" />
             <input 
               type="text" 
               v-model="playerStore.searchQuery"
               placeholder="SEARCH..." 
-              class="pl-8 pr-4 py-2 w-[240px] bg-transparent border-b border-[#dcdad1] focus:border-black text-xs tracking-widest focus:outline-none transition-colors placeholder-[#a0a0a0] uppercase"
+              class="pl-8 pr-4 py-2 w-[240px] bg-transparent border-b border-border-color  focus:border-black text-xs tracking-widest focus:outline-none transition-colors placeholder-[#a0a0a0] uppercase"
             />
           </div>
-          <div class="flex items-center gap-4 text-[#888]">
-            <button class="hover:text-black transition-colors"><Filter class="w-4 h-4 stroke-[1.5]" /></button>
-            <button class="hover:text-black transition-colors"><List class="w-4 h-4 stroke-[1.5]" /></button>
-            <button class="hover:text-black transition-colors"><LayoutGrid class="w-4 h-4 stroke-[1.5]" /></button>
+          <div class="flex items-center gap-4 text-text-muted ">
+            <button class="hover:text-accent  transition-colors"><Filter class="w-4 h-4 stroke-[1.5]" /></button>
+            <button class="hover:text-accent  transition-colors"><List class="w-4 h-4 stroke-[1.5]" /></button>
+            <button class="hover:text-accent  transition-colors"><LayoutGrid class="w-4 h-4 stroke-[1.5]" /></button>
           </div>
         </template>
       </div>

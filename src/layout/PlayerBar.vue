@@ -14,8 +14,8 @@ import {
   Plus
 } from 'lucide-vue-next';
 import { computed, ref, onMounted, onUnmounted } from 'vue';
-import { usePlayerStore } from '../../stores/player';
-import { getArtworkUrl } from '../../utils';
+import { usePlayerStore } from '../stores/player';
+import { getArtworkUrl } from '../utils';
 
 const playerStore = usePlayerStore();
 
@@ -100,7 +100,7 @@ onUnmounted(() => {
         <div v-else class="absolute inset-0 opacity-20" style="background-image: radial-gradient(circle, #000 1px, transparent 1px); background-size: 4px 4px;"></div>
       </div>
       <div class="flex-1 min-w-0 flex flex-col justify-center">
-        <h3 class="font-serif italic font-semibold text-black text-lg truncate mb-0.5">{{ playerStore.currentTrack?.title || 'Lumo Music' }}</h3>
+        <h3 class="font-serif italic font-semibold text-accent text-lg truncate mb-0.5">{{ playerStore.currentTrack?.title || 'Lumo Music' }}</h3>
         <p class="text-[10px] text-[#555] font-bold tracking-widest uppercase truncate">{{ playerStore.currentTrack?.artist || 'Ready to play' }}</p>
       </div>
       
@@ -108,28 +108,28 @@ onUnmounted(() => {
       <div v-if="playerStore.currentTrack" class="flex items-center gap-2.5 shrink-0 pr-2 relative">
         <button 
           @click="playerStore.toggleFavorite(playerStore.currentTrack.id)"
-          class="transition-colors hover:text-black"
-          :class="playerStore.currentTrack.isFavorite ? 'text-[#d25050]' : 'text-[#a0a0a0]'"
+          class="transition-colors hover:text-accent "
+          :class="playerStore.currentTrack.isFavorite ? 'text-[#d25050]' : 'text-text-muted'"
           title="收藏"
         >
           <Heart class="w-4 h-4 stroke-[1.5]" :class="{ 'fill-[#d25050]': playerStore.currentTrack.isFavorite }" />
         </button>
         <button 
           @click="togglePlaylistMenu($event)"
-          class="text-[#a0a0a0] hover:text-black transition-colors"
+          class="text-text-muted hover:text-accent  transition-colors"
           title="添加到歌单"
         >
           <Plus class="w-4 h-4 stroke-[1.5]" />
         </button>
         
         <!-- 添加到歌单浮层 -->
-        <div v-if="isPlaylistMenuOpen" class="absolute left-[-60px] bottom-8 bg-white border border-[#eae8e1] shadow-lg rounded-sm py-1 z-[999] min-w-[120px]" @click.stop>
-          <p class="text-[9px] font-bold text-[#a0a0a0] px-3 py-1 border-b border-[#eae8e1] tracking-wider uppercase">添加至歌单</p>
+        <div v-if="isPlaylistMenuOpen" class="absolute left-[-60px] bottom-8 bg-bg-base border border-border-color shadow-lg rounded-sm py-1 z-[999] min-w-[120px]" @click.stop>
+          <p class="text-[9px] font-bold text-text-muted px-3 py-1 border-b border-border-color tracking-wider uppercase">添加至歌单</p>
           <button
             v-for="playlist in playerStore.playlists"
             :key="playlist.id"
             @click="addToPlaylist(playlist.id)"
-            class="w-full text-left px-3 py-1.5 text-[11px] hover:bg-black/5 truncate block text-black font-medium"
+            class="w-full text-left px-3 py-1.5 text-[11px] hover:bg-black/5 truncate block text-accent font-medium"
           >
             {{ playlist.name }}
           </button>
@@ -142,36 +142,36 @@ onUnmounted(() => {
       <div class="flex items-center gap-10 mb-4">
         <!-- 合并后的单播放模式按钮 -->
         <button 
-          class="transition-colors text-black"
+          class="transition-colors text-accent"
           @click="cyclePlayMode"
           title="切换播放模式"
         >
-          <Repeat v-if="playerStore.playMode === 'normal'" class="w-4 h-4 stroke-[1.5] text-[#a0a0a0]" />
-          <Repeat v-else-if="playerStore.playMode === 'repeat'" class="w-4 h-4 stroke-[1.5] text-black" />
-          <Repeat1 v-else-if="playerStore.playMode === 'repeat-one'" class="w-4 h-4 stroke-[1.5] text-black" />
-          <Shuffle v-else-if="playerStore.playMode === 'shuffle'" class="w-4 h-4 stroke-[1.5] text-black" />
+          <Repeat v-if="playerStore.playMode === 'normal'" class="w-4 h-4 stroke-[1.5] text-text-muted" />
+          <Repeat v-else-if="playerStore.playMode === 'repeat'" class="w-4 h-4 stroke-[1.5] text-accent" />
+          <Repeat1 v-else-if="playerStore.playMode === 'repeat-one'" class="w-4 h-4 stroke-[1.5] text-accent" />
+          <Shuffle v-else-if="playerStore.playMode === 'shuffle'" class="w-4 h-4 stroke-[1.5] text-accent" />
         </button>
 
-        <button @click="playerStore.prevTrack" class="text-black hover:opacity-70 transition-opacity"><SkipBack class="w-5 h-5 fill-current" /></button>
+        <button @click="playerStore.prevTrack" class="text-accent hover:opacity-70 transition-opacity"><SkipBack class="w-5 h-5 fill-current" /></button>
         
         <button 
           @click="playerStore.togglePlay"
-          class="w-8 h-8 flex items-center justify-center text-black hover:opacity-70 transition-opacity"
+          class="w-8 h-8 flex items-center justify-center text-accent hover:opacity-70 transition-opacity"
         >
           <Pause v-if="playerStore.isPlaying" class="w-6 h-6 fill-current" />
           <Play v-else class="w-6 h-6 fill-current ml-1" />
         </button>
 
-        <button @click="playerStore.nextTrack(false)" class="text-black hover:opacity-70 transition-opacity"><SkipForward class="w-5 h-5 fill-current" /></button>
+        <button @click="playerStore.nextTrack(false)" class="text-accent hover:opacity-70 transition-opacity"><SkipForward class="w-5 h-5 fill-current" /></button>
         
         <!-- 保持布局占位，可选择性隐藏或放置其他控制 -->
         <div class="w-4 h-4"></div>
       </div>
       
-      <div class="w-full flex items-center gap-6 text-[10px] text-[#888] font-bold tracking-widest">
+      <div class="w-full flex items-center gap-6 text-[10px] text-text-muted  font-bold tracking-widest">
         <span>{{ formatTimeMs(playerStore.progressMs) }}</span>
         <div class="flex-1 h-[10px] flex items-center relative group cursor-pointer" @click="handleProgressClick">
-          <div class="w-full h-px bg-[#dcdad1] relative pointer-events-none">
+          <div class="w-full h-px bg-bg-active relative pointer-events-none">
             <div 
               class="absolute left-0 top-0 h-full bg-black transition-all duration-300 ease-linear"
               :style="{ width: progressPercent + '%' }"
@@ -187,11 +187,11 @@ onUnmounted(() => {
     </div>
 
     <!-- Right: Volume & Actions -->
-    <div class="flex items-center justify-end gap-8 w-[300px] text-[#888]">
+    <div class="flex items-center justify-end gap-8 w-[300px] text-text-muted ">
       <div class="flex items-center gap-4 w-32 group cursor-pointer" @click="handleVolumeClick">
-        <Volume2 class="w-4 h-4 stroke-[1.5] group-hover:text-black transition-colors" />
+        <Volume2 class="w-4 h-4 stroke-[1.5] group-hover:text-accent  transition-colors" />
         <div class="flex-1 h-[10px] flex items-center relative pointer-events-none">
-          <div class="w-full h-px bg-[#dcdad1] relative">
+          <div class="w-full h-px bg-bg-active relative">
             <div class="absolute left-0 top-0 h-full bg-[#555] transition-all duration-150" :style="{ width: playerStore.volume + '%' }"></div>
           </div>
         </div>
@@ -200,11 +200,11 @@ onUnmounted(() => {
       <button 
         @click="playerStore.isRightPanelOpen = !playerStore.isRightPanelOpen" 
         class="transition-colors"
-        :class="playerStore.isRightPanelOpen ? 'text-black' : 'hover:text-black'"
+        :class="playerStore.isRightPanelOpen ? 'text-accent' : 'hover:text-accent '"
       >
         <ListMusic class="w-4 h-4 stroke-[1.5]" />
       </button>
-      <button class="hover:text-black transition-colors"><SlidersHorizontal class="w-4 h-4 stroke-[1.5]" /></button>
+      <button class="hover:text-accent  transition-colors"><SlidersHorizontal class="w-4 h-4 stroke-[1.5]" /></button>
     </div>
   </footer>
 </template>

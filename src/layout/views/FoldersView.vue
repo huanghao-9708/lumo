@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref, onUnmounted, computed } from 'vue';
-import { usePlayerStore } from '../../../stores/player';
-import { useVirtualList } from '../../../composables/useVirtualList';
+import { usePlayerStore } from '../../stores/player';
+import { useVirtualList } from '../../composables/useVirtualList';
 import { Folder, FileAudio, ChevronRight, CornerLeftUp, Play, Plus } from 'lucide-vue-next';
 
 const playerStore = usePlayerStore();
@@ -77,7 +77,7 @@ const scrollContainer = ref<HTMLElement | null>(null);
 // 第一项（index 0）固定为"返回上一级"按钮（仅当有面包屑时存在）。
 interface VRow {
   kind: 'back' | 'entry';
-  entry?: import('../../../stores/player').FolderEntry;
+  entry?: import('../../stores/player').FolderEntry;
 }
 
 const hasBackButton = computed(() => playerStore.folderBreadcrumbs.length > 0);
@@ -124,9 +124,9 @@ onUnmounted(() => {
     <!-- Source Selector & Breadcrumbs -->
     <div class="mb-6 shrink-0 flex flex-col gap-4">
       <div class="flex items-center gap-4">
-        <span class="text-xs tracking-widest text-[#a0a0a0] font-bold uppercase">来源:</span>
+        <span class="text-xs tracking-widest text-text-muted font-bold uppercase">来源:</span>
         <select
-          class="bg-transparent border border-[#dcdad1] text-xs py-1 px-2 rounded outline-none focus:border-black cursor-pointer"
+          class="bg-transparent border border-border-color  text-xs py-1 px-2 rounded outline-none focus:border-black cursor-pointer"
           :value="playerStore.activeFolderSourceId || ''"
           @change="handleSourceChange"
         >
@@ -136,10 +136,10 @@ onUnmounted(() => {
         </select>
       </div>
 
-      <div class="flex items-center gap-2 text-sm text-[#777] overflow-x-auto custom-scrollbar pb-2 whitespace-nowrap">
+      <div class="flex items-center gap-2 text-sm text-text-muted overflow-x-auto custom-scrollbar pb-2 whitespace-nowrap">
         <button
           @click="() => playerStore.activeFolderSourceId && playerStore.fetchFolderContents(playerStore.activeFolderSourceId!)"
-          class="hover:text-black transition-colors font-medium cursor-pointer shrink-0"
+          class="hover:text-accent  transition-colors font-medium cursor-pointer shrink-0"
         >
           根目录
         </button>
@@ -147,8 +147,8 @@ onUnmounted(() => {
           <ChevronRight class="w-4 h-4 text-[#dcdad1] shrink-0" />
           <button
             @click="playerStore.fetchFolderContents(playerStore.activeFolderSourceId!, path)"
-            class="hover:text-black transition-colors shrink-0"
-            :class="index === playerStore.folderBreadcrumbs.length - 1 ? 'text-black font-semibold' : ''"
+            class="hover:text-accent  transition-colors shrink-0"
+            :class="index === playerStore.folderBreadcrumbs.length - 1 ? 'text-accent font-semibold' : ''"
           >
             {{ path.split(/\\|\//).pop() || path }}
           </button>
@@ -162,11 +162,11 @@ onUnmounted(() => {
       class="flex-1 overflow-y-auto custom-scrollbar pr-4 pb-32"
       @scroll="handleScroll"
     >
-      <div v-if="playerStore.isFetchingFolder && playerStore.currentFolderContents.length === 0" class="py-12 text-center text-[#a0a0a0] text-sm tracking-widest animate-pulse">
+      <div v-if="playerStore.isFetchingFolder && playerStore.currentFolderContents.length === 0" class="py-12 text-center text-text-muted text-sm tracking-widest animate-pulse">
         读取文件夹中...
       </div>
 
-      <div v-else-if="playerStore.currentFolderContents.length === 0 && !hasBackButton" class="py-12 text-center text-[#a0a0a0] text-sm tracking-widest">
+      <div v-else-if="playerStore.currentFolderContents.length === 0 && !hasBackButton" class="py-12 text-center text-text-muted text-sm tracking-widest">
         此文件夹为空
       </div>
 
@@ -193,7 +193,7 @@ onUnmounted(() => {
                 class="w-full flex items-center gap-4 py-3 px-4 rounded-lg hover:bg-black/[0.03] transition-colors group text-left"
               >
                 <div class="w-10 h-10 flex items-center justify-center bg-[#f0eee9] rounded-md shrink-0">
-                  <CornerLeftUp class="w-5 h-5 text-[#888] group-hover:text-black transition-colors" />
+                  <CornerLeftUp class="w-5 h-5 text-text-muted  group-hover:text-accent  transition-colors" />
                 </div>
                 <span class="text-sm font-medium tracking-wide">返回上一级</span>
               </button>
@@ -208,24 +208,24 @@ onUnmounted(() => {
               >
                 <button @click="openFolder(item.data.entry!.path)" class="flex items-center gap-4 flex-1 text-left">
                   <div class="w-10 h-10 flex items-center justify-center bg-[#f0eee9] rounded-md shrink-0">
-                    <Folder class="w-5 h-5 text-[#888] group-hover:text-black transition-colors" />
+                    <Folder class="w-5 h-5 text-text-muted  group-hover:text-accent  transition-colors" />
                   </div>
                   <span class="text-sm font-medium tracking-wide truncate flex-1">{{ item.data.entry!.name }}</span>
                 </button>
 
                 <div class="relative shrink-0 ml-4 flex items-center">
-                  <button @click.stop="openPlaylistMenu(item.data.entry!.path)" class="text-[#ccc] opacity-0 group-hover:opacity-100 hover:text-black transition-opacity p-2" title="添加文件夹下所有歌曲至歌单">
+                  <button @click.stop="openPlaylistMenu(item.data.entry!.path)" class="text-text-muted opacity-0 group-hover:opacity-100 hover:text-accent  transition-opacity p-2" title="添加文件夹下所有歌曲至歌单">
                     <Plus class="w-4 h-4 stroke-[1.5]" />
                   </button>
 
                   <!-- Playlist menu -->
-                  <div v-if="activeMenuFolderPath === item.data.entry!.path" class="absolute right-0 top-full mt-1 bg-white border border-[#e8e6df] shadow-sm z-50 py-1 min-w-[120px] rounded-sm">
-                    <div v-if="playerStore.playlists.length === 0" class="px-3 py-1.5 text-xs text-[#a0a0a0] whitespace-nowrap">暂无自建歌单</div>
+                  <div v-if="activeMenuFolderPath === item.data.entry!.path" class="absolute right-0 top-full mt-1 bg-bg-base border border-[#e8e6df] shadow-sm z-50 py-1 min-w-[120px] rounded-sm">
+                    <div v-if="playerStore.playlists.length === 0" class="px-3 py-1.5 text-xs text-text-muted whitespace-nowrap">暂无自建歌单</div>
                     <button
                       v-for="pl in playerStore.playlists"
                       :key="pl.id"
                       @click.stop="addFolderToPlaylist(pl.id, item.data.entry!.path)"
-                      class="block w-full text-left px-3 py-1.5 text-[11px] font-medium text-[#555] hover:text-black hover:bg-black/5 transition-colors whitespace-nowrap truncate tracking-wider"
+                      class="block w-full text-left px-3 py-1.5 text-[11px] font-medium text-[#555] hover:text-accent  hover:bg-black/5 transition-colors whitespace-nowrap truncate tracking-wider"
                     >
                       {{ pl.name }}
                     </button>
@@ -240,10 +240,10 @@ onUnmounted(() => {
               >
                 <div class="flex items-center gap-4 flex-1 min-w-0">
                   <div
-                    class="w-10 h-10 rounded-md overflow-hidden bg-[#eae8e1] shrink-0 relative cursor-pointer flex items-center justify-center"
+                    class="w-10 h-10 rounded-md overflow-hidden bg-bg-panel  shrink-0 relative cursor-pointer flex items-center justify-center"
                     @click="item.data.entry!.track ? playTrack(item.data.entry!.track) : null"
                   >
-                    <FileAudio class="w-5 h-5 text-[#888]" />
+                    <FileAudio class="w-5 h-5 text-text-muted " />
 
                     <div class="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
                       <Play class="w-4 h-4 text-white fill-white" />
@@ -251,7 +251,7 @@ onUnmounted(() => {
                   </div>
 
                   <div class="flex-1 min-w-0 flex flex-col justify-center">
-                    <h4 class="text-sm font-medium text-black truncate cursor-pointer hover:underline" @click="item.data.entry!.track ? playTrack(item.data.entry!.track) : null">
+                    <h4 class="text-sm font-medium text-accent truncate cursor-pointer hover:underline" @click="item.data.entry!.track ? playTrack(item.data.entry!.track) : null">
                       {{ item.data.entry!.track?.title || item.data.entry!.name }}
                     </h4>
                     <p class="text-xs text-[#888888] truncate mt-0.5">
@@ -260,8 +260,8 @@ onUnmounted(() => {
                   </div>
                 </div>
 
-                <div class="flex items-center gap-6 shrink-0 text-xs text-[#a0a0a0] tracking-widest pl-4">
-                  <span v-if="item.data.entry!.track?.format" class="font-medium bg-[#eae8e1] px-2 py-0.5 rounded">{{ item.data.entry!.track.format }}</span>
+                <div class="flex items-center gap-6 shrink-0 text-xs text-text-muted tracking-widest pl-4">
+                  <span v-if="item.data.entry!.track?.format" class="font-medium bg-bg-panel  px-2 py-0.5 rounded">{{ item.data.entry!.track.format }}</span>
                   <span class="w-12 text-right">{{ item.data.entry!.track?.duration || '--:--' }}</span>
                 </div>
               </div>
@@ -271,7 +271,7 @@ onUnmounted(() => {
       </ul>
 
       <!-- 增量加载指示器 -->
-      <div v-if="playerStore.isFetchingFolder && playerStore.currentFolderContents.length > 0" class="py-4 text-center text-[#a0a0a0] text-xs tracking-widest animate-pulse">
+      <div v-if="playerStore.isFetchingFolder && playerStore.currentFolderContents.length > 0" class="py-4 text-center text-text-muted text-xs tracking-widest animate-pulse">
         加载更多...
       </div>
     </div>

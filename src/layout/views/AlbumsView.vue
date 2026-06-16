@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { usePlayerStore } from '../../../stores/player';
+import { usePlayerStore } from '../../stores/player';
 import { onMounted, ref, computed, onUnmounted } from 'vue';
-import type { Album } from '../../../stores/player';
+import type { Album } from '../../stores/player';
 import ArtworkImage from '../components/ArtworkImage.vue';
-import { getArtworkUrl } from '../../../utils';
-import { prefetchArtworks } from '../../../utils/artworkCache';
+import { getArtworkUrl } from '../../utils';
+import { prefetchArtworks } from '../../utils/artworkCache';
 
 const playerStore = usePlayerStore();
 
@@ -179,7 +179,7 @@ onUnmounted(() => {
 <template>
   <div class="flex-1 flex flex-col min-h-0">
     <!-- 加载中 -->
-    <div v-if="playerStore.isLoadingAlbums && playerStore.albums.length === 0" class="flex-1 flex flex-col items-center justify-center py-20 text-[#a0a0a0] tracking-[0.25em] text-xs">
+    <div v-if="playerStore.isLoadingAlbums && playerStore.albums.length === 0" class="flex-1 flex flex-col items-center justify-center py-20 text-text-muted tracking-[0.25em] text-xs">
       <span class="animate-pulse">LOADING METADATA...</span>
     </div>
 
@@ -190,8 +190,8 @@ onUnmounted(() => {
 
     <!-- 空状态 -->
     <div v-else-if="playerStore.albums.length === 0" class="flex-1 flex flex-col items-center justify-center py-20">
-      <p class="font-serif italic text-2xl text-black/60 mb-4">暂无专辑</p>
-      <p class="text-xs text-[#a0a0a0] tracking-widest max-w-sm text-center leading-relaxed">
+      <p class="font-serif italic text-2xl text-accent/60 mb-4">暂无专辑</p>
+      <p class="text-xs text-text-muted tracking-widest max-w-sm text-center leading-relaxed">
         未检测到您的专辑信息。请确保本地音乐目录中含有音频文件并已完成扫描。
       </p>
     </div>
@@ -235,10 +235,10 @@ onUnmounted(() => {
 
               <!-- 专辑信息（字号略缩，避免 4 列下文字挤占） -->
               <div class="flex flex-col gap-0.5">
-                <h3 class="font-serif italic font-semibold text-base text-black truncate leading-tight">{{ item.data.title }}</h3>
+                <h3 class="font-serif italic font-semibold text-base text-accent truncate leading-tight">{{ item.data.title }}</h3>
                 <div class="flex items-center justify-between gap-2">
-                  <p class="text-[11px] font-medium text-[#777] truncate">{{ item.data.artist_name || 'Unknown Artist' }}</p>
-                  <span class="text-[9px] tracking-widest text-[#a0a0a0] shrink-0">{{ item.data.track_count }} TRACKS</span>
+                  <p class="text-[11px] font-medium text-text-muted truncate">{{ item.data.artist_name || 'Unknown Artist' }}</p>
+                  <span class="text-[9px] tracking-widest text-text-muted shrink-0">{{ item.data.track_count }} TRACKS</span>
                 </div>
               </div>
             </div>

@@ -1,22 +1,75 @@
 @import "tailwindcss";
 
+/* 默认主题 (Light) */
+:root {
+  --bg-base: #ffffff;
+  --bg-panel: #f9fafb;
+  --bg-active: #f3f4f6;
+  --text-main: #333333;
+  --text-muted: #9ca3af;
+  --border-color: #f3f4f6;
+  --accent-color: #f58220;
+}
+
+/* 默认主题 (Dark) */
+:root.dark {
+  --bg-base: #121212;
+  --bg-panel: #1e1e1e;
+  --bg-active: #2a2a2a;
+  --text-main: #f3f4f6;
+  --text-muted: #6b7280;
+  --border-color: #333333;
+  --accent-color: #f58220;
+}
+
+/* 极简主题 (Light) */
+:root.theme-simple {
+  --bg-base: #fdfcf9;
+  --bg-panel: #eae8e1;
+  --bg-active: #dcdad1;
+  --text-main: #1a1a1a;
+  --text-muted: #888888;
+  --border-color: #eae8e1;
+  --accent-color: #1a1a1a;
+}
+
+/* 极简主题 (Dark) */
+:root.theme-simple.dark {
+  --bg-base: #1a1a1a;
+  --bg-panel: #333333;
+  --bg-active: #444444;
+  --text-main: #fdfcf9;
+  --text-muted: #aaaaaa;
+  --border-color: #333333;
+  --accent-color: #fdfcf9;
+}
+
 @theme {
   --font-sans: "Outfit", "Inter", "PingFang SC", "Microsoft YaHei", sans-serif;
   --font-serif: "Playfair Display", "Noto Serif SC", "Source Han Serif SC", serif;
   --color-brand-orange: #f58220;
   --color-brand-orange-light: #f7a055;
   --color-brand-orange-bg: #fff3e0;
+  
+  --color-bg-base: var(--bg-base);
+  --color-bg-panel: var(--bg-panel);
+  --color-bg-active: var(--bg-active);
+  --color-text-main: var(--text-main);
+  --color-text-muted: var(--text-muted);
+  --color-border-color: var(--border-color);
+  --color-accent: var(--accent-color);
 }
 
 body {
   font-family: var(--font-sans);
-  background-color: #ffffff;
-  color: #333333;
+  background-color: var(--bg-base);
+  color: var(--text-main);
   margin: 0;
   min-height: 100vh;
   overflow-x: hidden;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  transition: background-color 0.3s ease, color 0.3s ease;
 }
 
 /* Custom Scrollbar for a cleaner look */

@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { onMounted, ref, onUnmounted, watch, computed } from 'vue';
 import { Heart, AudioLines, Plus, Play } from 'lucide-vue-next';
-import { usePlayerStore } from '../../../stores/player';
-import type { Track } from '../../../stores/player';
+import { usePlayerStore } from '../../stores/player';
+import type { Track } from '../../stores/player';
 
 const playerStore = usePlayerStore();
 const activeMenuTrackId = ref<number | null>(null);
@@ -117,7 +117,7 @@ onUnmounted(() => {
 <template>
   <div class="flex-1 flex flex-col min-h-0">
     <!-- 加载中 -->
-    <div v-if="playerStore.isLoadingTracks && playerStore.tracks.length === 0" class="flex-1 flex flex-col items-center justify-center py-20 text-[#a0a0a0] tracking-[0.25em] text-xs">
+    <div v-if="playerStore.isLoadingTracks && playerStore.tracks.length === 0" class="flex-1 flex flex-col items-center justify-center py-20 text-text-muted tracking-[0.25em] text-xs">
       <span class="animate-pulse">LOADING METADATA...</span>
     </div>
 
@@ -128,8 +128,8 @@ onUnmounted(() => {
 
     <!-- 空状态 -->
     <div v-else-if="playerStore.tracks.length === 0" class="flex-1 flex flex-col items-center justify-center py-20">
-      <p class="font-serif italic text-2xl text-black/60 mb-4">库中尚无音乐</p>
-      <p class="text-xs text-[#a0a0a0] tracking-widest max-w-sm text-center leading-relaxed">
+      <p class="font-serif italic text-2xl text-accent/60 mb-4">库中尚无音乐</p>
+      <p class="text-xs text-text-muted tracking-widest max-w-sm text-center leading-relaxed">
         暂未检测到本地音频文件，请在底部的 [设置] 页面中添加您的音乐文件夹并开始扫描。
       </p>
     </div>
@@ -148,7 +148,7 @@ onUnmounted(() => {
       </div>
 
       <!-- Table Header -->
-      <div class="flex items-center text-[10px] font-bold tracking-[0.15em] text-[#888] uppercase pb-4 mb-4 border-b border-black shrink-0 relative z-10">
+      <div class="flex items-center text-[10px] font-bold tracking-[0.15em] text-text-muted  uppercase pb-4 mb-4 border-b border-black shrink-0 relative z-10">
         <div class="w-16 text-center">序号</div>
         <div class="flex-[2] pl-2">标题</div>
         <div class="flex-[1.5]">艺人</div>
@@ -175,9 +175,9 @@ onUnmounted(() => {
               class="flex items-center text-[13px] py-4 border-b border-[#f0eee6]/50 group transition-colors duration-200 cursor-pointer hover:bg-black/5"
               :style="{ height: ROW_HEIGHT + 'px' }"
             >
-              <div class="w-16 text-center text-[#888]">
+              <div class="w-16 text-center text-text-muted ">
                 <template v-if="playerStore.currentTrack?.id === item.data.id && playerStore.isPlaying">
-                  <AudioLines class="w-4 h-4 mx-auto stroke-[1.5] text-black animate-pulse" />
+                  <AudioLines class="w-4 h-4 mx-auto stroke-[1.5] text-accent animate-pulse" />
                 </template>
                 <template v-else>
                   {{ String(item.index + 1).padStart(2, '0') }}
@@ -187,21 +187,21 @@ onUnmounted(() => {
                 <Heart
                   class="w-3.5 h-3.5 transition-colors stroke-[1.5]"
                   :class="[
-                    item.data.isFavorite ? 'text-black fill-current' : 'text-[#ccc] opacity-0 group-hover:opacity-100 hover:text-black'
+                    item.data.isFavorite ? 'text-accent fill-current' : 'text-text-muted opacity-0 group-hover:opacity-100 hover:text-accent '
                   ]"
                   @click.stop="playerStore.toggleFavorite(item.data.id)"
                 />
                 <div class="relative flex items-center">
-                  <button @click.stop="openPlaylistMenu(item.data.id)" class="text-[#ccc] opacity-0 group-hover:opacity-100 hover:text-black transition-opacity" title="添加到歌单">
+                  <button @click.stop="openPlaylistMenu(item.data.id)" class="text-text-muted opacity-0 group-hover:opacity-100 hover:text-accent  transition-opacity" title="添加到歌单">
                     <Plus class="w-3.5 h-3.5 stroke-[1.5]" />
                   </button>
-                  <div v-if="activeMenuTrackId === item.data.id" class="absolute left-6 top-0 bg-white border border-[#e8e6df] shadow-sm z-50 py-1 min-w-[120px] rounded-sm">
-                    <div v-if="playerStore.playlists.length === 0" class="px-3 py-1.5 text-xs text-[#a0a0a0] whitespace-nowrap">暂无自建歌单</div>
+                  <div v-if="activeMenuTrackId === item.data.id" class="absolute left-6 top-0 bg-bg-base border border-[#e8e6df] shadow-sm z-50 py-1 min-w-[120px] rounded-sm">
+                    <div v-if="playerStore.playlists.length === 0" class="px-3 py-1.5 text-xs text-text-muted whitespace-nowrap">暂无自建歌单</div>
                     <button
                       v-for="pl in playerStore.playlists"
                       :key="pl.id"
                       @click.stop="addToPlaylist(pl.id, item.data.id)"
-                      class="block w-full text-left px-3 py-1.5 text-[11px] font-medium text-[#555] hover:text-black hover:bg-black/5 transition-colors whitespace-nowrap truncate tracking-wider"
+                      class="block w-full text-left px-3 py-1.5 text-[11px] font-medium text-[#555] hover:text-accent  hover:bg-black/5 transition-colors whitespace-nowrap truncate tracking-wider"
                     >
                       {{ pl.name }}
                     </button>
@@ -209,12 +209,12 @@ onUnmounted(() => {
                 </div>
                 <span
                   class="truncate"
-                  :class="playerStore.currentTrack?.id === item.data.id ? 'font-serif italic font-semibold text-[16px] text-black' : 'text-[#333] font-medium'"
+                  :class="playerStore.currentTrack?.id === item.data.id ? 'font-serif italic font-semibold text-[16px] text-accent' : 'text-text-main  font-medium'"
                 >{{ item.data.title }}</span>
               </div>
               <div class="flex-[1.5] truncate pr-4 text-[#555]">{{ item.data.artist }}</div>
-              <div class="flex-[2] truncate pr-4 text-[#777] italic">{{ item.data.album }}</div>
-              <div class="w-20 text-right pr-4 text-[#888]">{{ item.data.duration }}</div>
+              <div class="flex-[2] truncate pr-4 text-text-muted italic">{{ item.data.album }}</div>
+              <div class="w-20 text-right pr-4 text-text-muted ">{{ item.data.duration }}</div>
               <div class="w-24 pl-4 text-left text-[11px] text-[#aaa] tracking-wider">{{ item.data.format }}</div>
             </div>
           </div>
@@ -222,10 +222,10 @@ onUnmounted(() => {
       </div>
 
       <!-- Footer Stats -->
-      <div class="mt-4 pt-6 border-t border-[#e8e6df] text-[10px] font-bold tracking-[0.2em] text-[#888] shrink-0 relative z-10 flex items-center justify-between uppercase">
+      <div class="mt-4 pt-6 border-t border-[#e8e6df] text-[10px] font-bold tracking-[0.2em] text-text-muted  shrink-0 relative z-10 flex items-center justify-between uppercase">
         <span>{{ playerStore.tracks.length }} 首歌曲</span>
         <div class="flex items-center gap-4">
-          <div class="w-12 h-px bg-[#dcdad1]"></div>
+          <div class="w-12 h-px bg-bg-active"></div>
           <span>本地归档</span>
         </div>
       </div>

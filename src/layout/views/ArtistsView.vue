@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { usePlayerStore } from '../../../stores/player';
+import { usePlayerStore } from '../../stores/player';
 import { onMounted, ref, computed } from 'vue';
-import type { Artist } from '../../../stores/player';
+import type { Artist } from '../../stores/player';
 
 const playerStore = usePlayerStore();
 
@@ -71,7 +71,7 @@ onMounted(() => {
 <template>
   <div class="flex-1 flex flex-col min-h-0">
     <!-- 加载中 -->
-    <div v-if="playerStore.isLoadingArtists && playerStore.artists.length === 0" class="flex-1 flex flex-col items-center justify-center py-20 text-[#a0a0a0] tracking-[0.25em] text-xs">
+    <div v-if="playerStore.isLoadingArtists && playerStore.artists.length === 0" class="flex-1 flex flex-col items-center justify-center py-20 text-text-muted tracking-[0.25em] text-xs">
       <span class="animate-pulse">LOADING METADATA...</span>
     </div>
 
@@ -82,8 +82,8 @@ onMounted(() => {
 
     <!-- 空状态 -->
     <div v-else-if="playerStore.artists.length === 0" class="flex-1 flex flex-col items-center justify-center py-20">
-      <p class="font-serif italic text-2xl text-black/60 mb-4">暂无艺人</p>
-      <p class="text-xs text-[#a0a0a0] tracking-widest max-w-sm text-center leading-relaxed">
+      <p class="font-serif italic text-2xl text-accent/60 mb-4">暂无艺人</p>
+      <p class="text-xs text-text-muted tracking-widest max-w-sm text-center leading-relaxed">
         未检测到艺人列表。请确保本地音乐目录中含有音频文件并已完成扫描。
       </p>
     </div>
@@ -106,7 +106,7 @@ onMounted(() => {
               :style="{ height: ROW_HEIGHT + 'px' }"
             >
               <div class="flex items-center gap-8">
-                <span class="text-[10px] font-bold tracking-widest text-[#a0a0a0] w-6 text-right">
+                <span class="text-[10px] font-bold tracking-widest text-text-muted w-6 text-right">
                   {{ String(item.index + 1).padStart(2, '0') }}
                 </span>
                 <div class="w-16 h-16 rounded-full overflow-hidden bg-[#e8e6df] shrink-0">
@@ -115,9 +115,9 @@ onMounted(() => {
                     :class="item.data.avatarColor"
                   ></div>
                 </div>
-                <h3 class="font-serif italic text-3xl text-black group-hover:translate-x-2 transition-transform duration-300">{{ item.data.name }}</h3>
+                <h3 class="font-serif italic text-3xl text-accent group-hover:translate-x-2 transition-transform duration-300">{{ item.data.name }}</h3>
               </div>
-              <div class="text-[10px] font-bold tracking-[0.2em] text-[#888] uppercase">
+              <div class="text-[10px] font-bold tracking-[0.2em] text-text-muted  uppercase">
                 {{ item.data.track_count }} 首歌曲
               </div>
             </div>
