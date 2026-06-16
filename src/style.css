@@ -44,9 +44,54 @@
   --accent-color: #fdfcf9;
 }
 
+/* TE 工业风 (Light) */
+:root.theme-te {
+  --bg-base: #ececec;
+  --bg-panel: #e2e2e2;
+  --bg-active: #000000;
+  --text-main: #000000;
+  --text-muted: #666666;
+  --border-color: #000000;
+  --accent-color: #000000;
+}
+
+/* TE 工业风 (Dark) */
+:root.theme-te.dark {
+  --bg-base: #111111;
+  --bg-panel: #1a1a1a;
+  --bg-active: #ffffff;
+  --text-main: #ffffff;
+  --text-muted: #aaaaaa;
+  --border-color: #ffffff;
+  --accent-color: #ffffff;
+}
+
+/* 现代优雅风 (Modern - Light) */
+:root.theme-modern {
+  --bg-base: #f4f2ee;
+  --bg-panel: #ebe7e0;
+  --bg-active: #e2ded5;
+  --text-main: #2b2b2b;
+  --text-muted: #6b6b6b;
+  --border-color: #e5e2db;
+  --accent-color: #f58220;
+}
+
+/* 现代优雅风 (Modern - Dark) */
+:root.theme-modern.dark {
+  --bg-base: #1a1a1a;
+  --bg-panel: #242424;
+  --bg-active: #333333;
+  --text-main: #eaeaea;
+  --text-muted: #888888;
+  --border-color: #333333;
+  --accent-color: #f58220;
+}
+
 @theme {
   --font-sans: "Outfit", "Inter", "PingFang SC", "Microsoft YaHei", sans-serif;
   --font-serif: "Playfair Display", "Noto Serif SC", "Source Han Serif SC", serif;
+  --font-mono: "JetBrains Mono", "Space Mono", "SF Mono", "Roboto Mono", monospace;
   --color-brand-orange: #f58220;
   --color-brand-orange-light: #f7a055;
   --color-brand-orange-bg: #fff3e0;

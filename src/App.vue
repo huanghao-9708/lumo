@@ -137,6 +137,20 @@ const close = () => appWindow.close();
                       : 'text-text-muted hover:bg-bg-panel'">
               高级沉浸 (Advanced)
             </button>
+            <button @click="uiStore.setActiveTheme('theme-te')"
+                    class="w-full text-left px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors font-mono"
+                    :class="uiStore.activeTheme === 'theme-te'
+                      ? 'bg-bg-active text-accent'
+                      : 'text-text-muted hover:bg-bg-panel'">
+              TE 工业风 (Teenage)
+            </button>
+            <button @click="uiStore.setActiveTheme('theme-modern')"
+                    class="w-full text-left px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors"
+                    :class="uiStore.activeTheme === 'theme-modern'
+                      ? 'bg-bg-active text-accent'
+                      : 'text-text-muted hover:bg-bg-panel'">
+              现代优雅 (Modern)
+            </button>
           </div>
         </div>
       </transition>
