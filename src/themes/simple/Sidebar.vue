@@ -10,21 +10,15 @@ import {
   ListMusic,
   Plus,
   Settings,
-  SunMoon,
   ChevronDown,
   Trash2,
   Folder,
 } from 'lucide-vue-next';
 import { onMounted } from 'vue';
 import { usePlayerStore } from '../../stores/player';
-import { useUiStore } from '../../stores/ui';
+import ThemeControls from '../../components/ThemeControls.vue';
 
 const playerStore = usePlayerStore();
-const uiStore = useUiStore();
-
-const toggleTheme = () => {
-  uiStore.toggleDarkMode();
-};
 
 const confirmDeletePlaylist = async (playlist: any) => {
   if (confirm(`确定要删除歌单“${playlist.name}”吗？`)) {
@@ -177,7 +171,7 @@ onMounted(() => {
       </div>
     </div>
 
-    <!-- Bottom Actions -->
+    <!-- Bottom Actions: 设置 + 主题切换（统一放在设置按钮旁） -->
     <div class="mt-8 flex items-center gap-6 text-[#aaaaaa] relative z-10">
       <button 
         @click="playerStore.activeLibraryTab = '设置'" 
@@ -186,9 +180,7 @@ onMounted(() => {
       >
         <Settings class="w-[18px] h-[18px] stroke-[1.5]" />
       </button>
-      <button @click="toggleTheme" class="hover:text-accent  transition-colors" title="切换 UI 主题">
-        <SunMoon class="w-[18px] h-[18px] stroke-[1.5]" />
-      </button>
+      <ThemeControls :size="18" />
     </div>
   </aside>
 </template>

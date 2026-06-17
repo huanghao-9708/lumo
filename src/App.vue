@@ -1,13 +1,10 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, computed } from 'vue';
+import { onMounted, onUnmounted, computed } from 'vue';
 import { useUiStore } from './stores/ui';
 import { usePlayerStore } from './stores/player';
-import { Minus, Square, X, Sun, Moon, Palette, ChevronDown } from 'lucide-vue-next';
+import { Minus, Square, X } from 'lucide-vue-next';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { themes } from './themes';
-
-const isUiDropdownOpen = ref(false);
-const closeDropdown = () => setTimeout(() => isUiDropdownOpen.value = false, 200);
 
 const uiStore = useUiStore();
 const playerStore = usePlayerStore();
@@ -91,71 +88,8 @@ const close = () => appWindow.close();
   <!-- 动态装配的主题核心布局 -->
   <component :is="ActiveLayout" />
 
-  <!-- 全局窗口控制和 UI 切换按钮 -->
+  <!-- 全局窗口控制按钮（主题切换 / 夜间模式 / UI 切换已统一移入各主题侧边栏的设置按钮旁） -->
   <div class="fixed top-0 right-0 h-10 flex items-center px-4 gap-3 z-50 select-none pointer-events-none text-text-muted">
-    
-    <!-- Theme Toggle -->
-    <button @click="uiStore.toggleDarkMode()" 
-            class="pointer-events-auto w-7 h-7 flex items-center justify-center rounded-lg transition-all duration-200 hover:text-text-main hover:bg-bg-active"
-            title="切换主题">
-      <Sun v-if="uiStore.isDarkMode" class="w-3.5 h-3.5" />
-      <Moon v-else class="w-3.5 h-3.5" />
-    </button>
-
-    <!-- UI Selection Dropdown -->
-    <div class="pointer-events-auto relative">
-      <button @click="isUiDropdownOpen = !isUiDropdownOpen"
-              @blur="closeDropdown()"
-              class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all duration-200 text-[12px] hover:text-text-main hover:bg-bg-active">
-        <Palette class="w-3.5 h-3.5" />
-        <span class="font-medium tracking-wide">UI</span>
-        <ChevronDown class="w-3 h-3 transition-transform duration-200" :class="isUiDropdownOpen ? 'rotate-180' : ''" />
-      </button>
-
-      <!-- Dropdown Menu -->
-      <transition 
-        enter-active-class="transition duration-200 ease-out"
-        enter-from-class="transform scale-95 opacity-0"
-        enter-to-class="transform scale-100 opacity-100"
-        leave-active-class="transition duration-150 ease-in"
-        leave-from-class="transform scale-100 opacity-100"
-        leave-to-class="transform scale-95 opacity-0">
-        <div v-if="isUiDropdownOpen" 
-             class="absolute right-0 mt-1.5 w-36 rounded-xl shadow-lg border overflow-hidden backdrop-blur-md bg-bg-base/95 border-border-color">
-          <div class="p-1 flex flex-col gap-0.5">
-            <button @click="uiStore.setActiveTheme('theme-simple')"
-                    class="w-full text-left px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors"
-                    :class="uiStore.activeTheme === 'theme-simple'
-                      ? 'bg-bg-active text-accent'
-                      : 'text-text-muted hover:bg-bg-panel'">
-              极简视图 (Simple)
-            </button>
-            <button @click="uiStore.setActiveTheme('theme-advanced')"
-                    class="w-full text-left px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors"
-                    :class="uiStore.activeTheme === 'theme-advanced'
-                      ? 'bg-bg-active text-accent'
-                      : 'text-text-muted hover:bg-bg-panel'">
-              高级沉浸 (Advanced)
-            </button>
-            <button @click="uiStore.setActiveTheme('theme-te')"
-                    class="w-full text-left px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors font-mono"
-                    :class="uiStore.activeTheme === 'theme-te'
-                      ? 'bg-bg-active text-accent'
-                      : 'text-text-muted hover:bg-bg-panel'">
-              TE 工业风 (Teenage)
-            </button>
-            <button @click="uiStore.setActiveTheme('theme-modern')"
-                    class="w-full text-left px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors"
-                    :class="uiStore.activeTheme === 'theme-modern'
-                      ? 'bg-bg-active text-accent'
-                      : 'text-text-muted hover:bg-bg-panel'">
-              现代优雅 (Modern)
-            </button>
-          </div>
-        </div>
-      </transition>
-    </div>
-
     <!-- 竖向分割线 -->
     <div class="w-px h-4 transition-colors duration-300 bg-border-color"></div>
 

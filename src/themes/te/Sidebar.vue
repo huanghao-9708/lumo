@@ -4,6 +4,7 @@ import {
   FolderOpen, Server, HardDrive
 } from 'lucide-vue-next';
 import { usePlayerStore } from '../../stores/player';
+import ThemeControls from '../../components/ThemeControls.vue';
 
 const playerStore = usePlayerStore();
 
@@ -105,7 +106,7 @@ const libraryItems = [
 
     </div>
 
-    <!-- Footer Settings -->
+    <!-- Footer Settings + Theme Controls -->
     <div class="h-16 shrink-0 flex items-center gap-6 px-6 border-t border-border-color">
       <button 
         @click="playerStore.activeLibraryTab = '设置'" 
@@ -114,6 +115,7 @@ const libraryItems = [
       >
         <Settings class="w-5 h-5 stroke-[1.5]" />
       </button>
+      <ThemeControls variant="mono" :size="18" />
     </div>
   </aside>
 </template>

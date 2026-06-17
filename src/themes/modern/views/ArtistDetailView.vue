@@ -1,19 +1,15 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue';
-import { Heart, AudioLines, Play, Plus } from 'lucide-vue-next';
+import { ref, onMounted, onUnmounted, computed } from 'vue';
+import { Heart, AudioLines, Play, Plus, ArrowLeft } from 'lucide-vue-next';
 import { usePlayerStore } from '../../../stores/player';
-import { getArtworkUrl } from '../../../utils';
+import ArtworkImage from '../components/ArtworkImage.vue';
 
 const playerStore = usePlayerStore();
 
 const activeMenuTrackId = ref<number | null>(null);
 
 const openPlaylistMenu = (trackId: number) => {
-  if (activeMenuTrackId.value === trackId) {
-    activeMenuTrackId.value = null;
-  } else {
-    activeMenuTrackId.value = trackId;
-  }
+  activeMenuTrackId.value = activeMenuTrackId.value === trackId ? null : trackId;
 };
 
 const addToPlaylist = (playlistId: number, trackId: number) => {
@@ -21,18 +17,12 @@ const addToPlaylist = (playlistId: number, trackId: number) => {
   activeMenuTrackId.value = null;
 };
 
-const closeMenu = () => {
-  activeMenuTrackId.value = null;
-};
+const closeMenu = () => { activeMenuTrackId.value = null; };
 
-onMounted(() => {
-  window.addEventListener('click', closeMenu);
-});
+onMounted(() => window.addEventListener('click', closeMenu));
+onUnmounted(() => window.removeEventListener('click', closeMenu));
 
-onUnmounted(() => {
-  window.removeEventListener('click', closeMenu);
-});
-
+const goBack = () => playerStore.goBack();
 const goToAlbum = (albumId: number) => {
   playerStore.activeAlbumId = albumId;
   playerStore.activeLibraryTab = '专辑详情';
@@ -50,167 +40,206 @@ const handleScroll = (e: Event) => {
     }
   }
 };
+
+// 艺人名首字符（大头像占位字母）
+const initialOf = (name: string) => (name?.trim()?.[0] || '?').toUpperCase();
+
+const albumColumnCount = computed(() => {
+  // 简化：依据已加载专辑数量与容器宽度选列数，由 grid 的 minmax 兜底
+  return 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5';
+});
 </script>
 
 <template>
   <div class="flex-1 flex flex-col min-h-0 relative z-10">
     <div v-if="playerStore.currentArtistDetails" class="flex-1 flex flex-col h-full overflow-hidden">
-      <!-- 艺人头 (巨型 Typography) -->
-      <div class="flex flex-col mb-20 shrink-0 relative">
-        <h2 class="text-[10px] font-bold tracking-[0.3em] text-text-muted mb-8 uppercase z-10">Artist</h2>
-        
-        <div class="relative z-10">
-          <h1 class="font-serif italic text-[100px] leading-[0.85] tracking-tight text-accent mb-10 break-words mix-blend-multiply">
-            {{ playerStore.currentArtistDetails.name }}
-          </h1>
-        </div>
+      <!-- 返回按钮 -->
+      <button
+        @click="goBack"
+        class="flex items-center gap-2 text-text-muted hover:text-text-main transition-colors mb-6 w-fit text-[12px] tracking-wide"
+      >
+        <ArrowLeft class="w-4 h-4 stroke-[1.5]" />
+        <span>返回</span>
+      </button>
 
-        <div class="flex items-center gap-6 mt-4 z-10 border-t border-black pt-6 max-w-md">
-          <div class="flex items-center gap-8">
-            <button 
-              @click="activeTab = 'tracks'"
-              class="text-[12px] tracking-[0.1em] uppercase transition-all duration-300"
-              :class="activeTab === 'tracks' ? 'text-accent font-bold border-b-2 border-black pb-1' : 'text-text-muted  font-medium hover:text-accent '"
-            >
-              TRACKS 
-              <span class="text-[10px] ml-1">{{ playerStore.currentArtistDetails.stats?.track_count || 0 }}</span>
-            </button>
-            
-            <button 
-              @click="activeTab = 'albums'"
-              class="text-[12px] tracking-[0.1em] uppercase transition-all duration-300"
-              :class="activeTab === 'albums' ? 'text-accent font-bold border-b-2 border-black pb-1' : 'text-text-muted  font-medium hover:text-accent '"
-            >
-              ALBUMS 
-              <span class="text-[10px] ml-1">{{ playerStore.currentArtistDetails.stats?.album_count || 0 }}</span>
-            </button>
+      <!-- 艺人头：大圆形头像 + 现代排版 -->
+      <div class="flex flex-col md:flex-row md:items-center gap-8 mb-8 shrink-0">
+        <div class="relative shrink-0">
+          <div
+            class="w-40 h-40 rounded-full bg-gradient-to-br flex items-center justify-center shadow-2xl overflow-hidden"
+            :class="playerStore.currentArtistDetails.avatarColor"
+          >
+            <span class="text-6xl font-bold text-white/90 select-none">{{ initialOf(playerStore.currentArtistDetails.name) }}</span>
           </div>
         </div>
-
-        <!-- 装饰性背景文字，错位放大 -->
-        <div class="absolute -top-10 -right-10 pointer-events-none select-none overflow-hidden w-full h-full flex justify-end opacity-[0.03]">
-          <h1 class="font-serif italic text-[200px] leading-none whitespace-nowrap">
-            {{ playerStore.currentArtistDetails.name }}
-          </h1>
+        <div class="flex flex-col min-w-0">
+          <div class="flex items-center gap-2 mb-2">
+            <span class="text-[11px] font-bold tracking-[0.25em] text-text-muted uppercase">Artist</span>
+            <span class="w-1 h-1 rounded-full bg-accent"></span>
+            <span class="text-[11px] font-bold tracking-[0.25em] text-accent uppercase">Verified</span>
+          </div>
+          <h1 class="font-bold text-5xl md:text-6xl text-text-main mb-3 leading-tight truncate">{{ playerStore.currentArtistDetails.name }}</h1>
+          <p class="text-[13px] text-text-muted">
+            {{ playerStore.currentArtistDetails.stats?.track_count || 0 }} 首歌曲
+            <span class="mx-2">·</span>
+            {{ playerStore.currentArtistDetails.stats?.album_count || 0 }} 张专辑
+          </p>
         </div>
       </div>
 
+      <!-- Tab 切换 -->
+      <div class="flex items-center gap-2 mb-4 shrink-0 border-b border-border-color">
+        <button
+          @click="activeTab = 'tracks'"
+          class="px-4 py-2.5 text-[13px] font-semibold transition-all relative"
+          :class="activeTab === 'tracks' ? 'text-text-main' : 'text-text-muted hover:text-text-main'"
+        >
+          歌曲
+          <span class="ml-1 text-[10px] text-text-muted font-normal">{{ playerStore.currentArtistDetails.stats?.track_count || 0 }}</span>
+          <div v-if="activeTab === 'tracks'" class="absolute bottom-0 left-0 right-0 h-0.5 bg-accent rounded-full"></div>
+        </button>
+        <button
+          @click="activeTab = 'albums'"
+          class="px-4 py-2.5 text-[13px] font-semibold transition-all relative"
+          :class="activeTab === 'albums' ? 'text-text-main' : 'text-text-muted hover:text-text-main'"
+        >
+          专辑
+          <span class="ml-1 text-[10px] text-text-muted font-normal">{{ playerStore.currentArtistDetails.stats?.album_count || 0 }}</span>
+          <div v-if="activeTab === 'albums'" class="absolute bottom-0 left-0 right-0 h-0.5 bg-accent rounded-full"></div>
+        </button>
+      </div>
+
       <!-- 下部分：滚动区域 -->
-      <div class="flex-1 overflow-y-auto custom-scrollbar pr-4 pb-10" @scroll="handleScroll">
-        
+      <div class="flex-1 overflow-y-auto custom-scrollbar pr-2 pb-10" @scroll="handleScroll">
+
         <!-- 歌曲列表 -->
         <section v-if="activeTab === 'tracks'">
-          <div class="flex items-center justify-between mb-4 border-b border-[#e8e6df] pb-2">
-            <h3 class="text-[10px] font-bold tracking-[0.2em] text-text-muted uppercase">热门曲目</h3>
-            <button 
+          <div class="flex items-center justify-between mb-4">
+            <h3 class="text-[12px] font-bold tracking-wide text-text-muted uppercase">热门曲目</h3>
+            <button
               v-if="playerStore.currentArtistDetails.tracks.length > 0"
-              @click="playerStore.playQueue(playerStore.currentArtistDetails.tracks, 0)" 
-              class="flex items-center gap-2 bg-black text-white px-4 py-1.5 hover:bg-black/80 transition-all group rounded-sm shadow-sm"
+              @click="playerStore.playQueue(playerStore.currentArtistDetails.tracks, 0)"
+              class="flex items-center gap-2 bg-accent text-white px-5 py-2 rounded-full hover:scale-105 hover:shadow-lg active:scale-95 transition-all font-medium text-[12px] shadow-md"
             >
-              <Play class="w-3 h-3 fill-current text-white" />
-              <span class="text-[10px] font-bold tracking-[0.2em] uppercase">播放全部</span>
+              <Play class="w-3.5 h-3.5 fill-current" />
+              <span>播放全部</span>
             </button>
           </div>
+
+          <!-- 表头 -->
+          <div class="flex items-center px-4 py-2 text-[10px] font-bold tracking-[0.2em] text-text-muted uppercase border-b border-border-color">
+            <span class="w-8 text-center">#</span>
+            <span class="flex-[3] pl-4">标题</span>
+            <span class="flex-[2] pl-4">专辑</span>
+            <span class="w-16 text-right pr-2">时长</span>
+            <span class="w-8"></span>
+          </div>
+
           <div class="flex flex-col">
-            <div 
-              v-for="(song, index) in playerStore.currentArtistDetails.tracks" 
+            <div
+              v-for="(song, index) in playerStore.currentArtistDetails.tracks"
               :key="song.id"
               @dblclick="playerStore.playQueue(playerStore.currentArtistDetails.tracks, index)"
-              class="flex items-center text-[13px] py-4 border-b border-[#f0eee6]/60 group transition-colors duration-200 cursor-pointer hover:bg-[#faf9f5]"
+              class="flex items-center px-4 text-[13px] group transition-colors duration-150 cursor-pointer rounded-lg hover:bg-bg-active/50"
+              :class="playerStore.currentTrack?.id === song.id ? 'bg-accent/10' : ''"
             >
-              <div class="w-12 text-left text-text-muted font-medium relative">
+              <div class="w-8 text-center text-text-muted font-medium relative shrink-0 py-3">
                 <template v-if="playerStore.currentTrack?.id === song.id && playerStore.isPlaying">
-                  <AudioLines class="w-4 h-4 stroke-[1.5] text-accent animate-pulse" />
+                  <AudioLines class="w-4 h-4 mx-auto stroke-[1.5] text-accent animate-pulse" />
                 </template>
                 <template v-else>
-                  <span class="group-hover:opacity-0 transition-opacity duration-200">{{ String(index + 1).padStart(2, '0') }}</span>
-                  <Play class="w-3.5 h-3.5 absolute top-1/2 left-0 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 text-accent fill-current" />
+                  <span class="group-hover:opacity-0 transition-opacity">{{ index + 1 }}</span>
+                  <Play class="w-3.5 h-3.5 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity text-accent fill-current" />
                 </template>
               </div>
-              <div class="flex-[3] flex items-center gap-4">
-                <Heart 
-                  class="w-3.5 h-3.5 transition-colors stroke-[1.5]" 
-                  :class="[
-                    song.isFavorite ? 'text-accent fill-current' : 'text-text-muted opacity-0 group-hover:opacity-100 hover:text-accent '
-                  ]"
-                  @click.stop="playerStore.toggleFavorite(song.id)"
-                />
-                <div class="relative flex items-center">
-                  <button @click.stop="openPlaylistMenu(song.id)" class="text-text-muted opacity-0 group-hover:opacity-100 hover:text-accent  transition-opacity" title="添加到歌单">
-                    <Plus class="w-3.5 h-3.5 stroke-[1.5]" />
-                  </button>
-                  <div v-if="activeMenuTrackId === song.id" class="absolute left-6 top-0 bg-bg-base border border-[#e8e6df] shadow-sm z-50 py-1 min-w-[120px] rounded-sm">
-                    <div v-if="playerStore.playlists.length === 0" class="px-3 py-1.5 text-xs text-text-muted whitespace-nowrap">暂无自建歌单</div>
-                    <button 
-                      v-for="pl in playerStore.playlists" 
-                      :key="pl.id"
-                      @click.stop="addToPlaylist(pl.id, song.id)"
-                      class="block w-full text-left px-3 py-1.5 text-[11px] font-medium text-[#555] hover:text-accent  hover:bg-black/5 transition-colors whitespace-nowrap truncate tracking-wider"
-                    >
-                      {{ pl.name }}
-                    </button>
-                  </div>
-                </div>
-                <span 
-                  class="truncate" 
-                  :class="playerStore.currentTrack?.id === song.id ? 'font-serif italic font-semibold text-[16px] text-accent' : 'text-text-main  font-medium'"
+              <div class="flex-[3] pl-4 flex items-center min-w-0 py-3">
+                <span
+                  class="truncate"
+                  :class="playerStore.currentTrack?.id === song.id ? 'text-accent font-semibold' : 'text-text-main font-medium'"
                 >{{ song.title }}</span>
               </div>
-              <div class="flex-[2] truncate pr-4 text-text-muted italic">{{ song.album }}</div>
-              <div class="w-16 text-right pr-4 text-text-muted ">{{ song.duration }}</div>
+              <div class="flex-[2] pl-4 truncate text-text-muted py-3">{{ song.album }}</div>
+              <div class="w-16 text-right pr-2 text-text-muted font-mono text-[12px] py-3">{{ song.duration }}</div>
+              <div class="w-8 flex items-center justify-end gap-2 py-3 shrink-0">
+                <button
+                  @click.stop="openPlaylistMenu(song.id)"
+                  class="text-text-muted opacity-0 group-hover:opacity-100 hover:text-accent transition-opacity relative"
+                  title="添加到歌单"
+                >
+                  <Plus class="w-4 h-4 stroke-[1.5]" />
+                </button>
+                <Heart
+                  class="w-4 h-4 transition-colors stroke-[1.5] cursor-pointer"
+                  :class="song.isFavorite ? 'text-accent fill-current' : 'text-text-muted opacity-0 group-hover:opacity-100 hover:text-accent'"
+                  @click.stop="playerStore.toggleFavorite(song.id)"
+                />
+
+                <!-- 添加到歌单菜单 -->
+                <div v-if="activeMenuTrackId === song.id" class="absolute right-8 top-full mt-1 bg-bg-base border border-border-color shadow-xl z-50 py-1 min-w-[140px] rounded-lg overflow-hidden">
+                  <div v-if="playerStore.playlists.length === 0" class="px-3 py-2 text-[11px] text-text-muted whitespace-nowrap">暂无自建歌单</div>
+                  <button
+                    v-for="pl in playerStore.playlists"
+                    :key="pl.id"
+                    @click.stop="addToPlaylist(pl.id, song.id)"
+                    class="block w-full text-left px-3 py-1.5 text-[12px] text-text-main hover:bg-bg-active hover:text-accent transition-colors whitespace-nowrap truncate"
+                  >
+                    {{ pl.name }}
+                  </button>
+                </div>
+              </div>
             </div>
+          </div>
+
+          <div v-if="playerStore.currentArtistDetails.isLoadingTracks" class="text-center text-text-muted py-8">
+            <div class="w-6 h-6 border-2 border-accent/20 border-t-accent rounded-full animate-spin mx-auto"></div>
           </div>
         </section>
 
         <!-- 专辑墙 -->
         <section v-if="activeTab === 'albums'">
-          <h3 class="text-[10px] font-bold tracking-[0.2em] text-text-muted mb-6 uppercase border-b border-[#e8e6df] pb-2">所有专辑</h3>
-          <div class="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8">
-            <div 
-              v-for="album in playerStore.currentArtistDetails.albums" 
+          <h3 class="text-[12px] font-bold tracking-wide text-text-muted uppercase mb-4">所有专辑</h3>
+          <div :class="['grid', 'gap-6', albumColumnCount]">
+            <div
+              v-for="album in playerStore.currentArtistDetails.albums"
               :key="album.id"
               @click="goToAlbum(album.id)"
               class="group cursor-pointer flex flex-col"
             >
-              <div class="relative aspect-square w-full mb-4 overflow-hidden bg-[#e8e6df] shadow-sm">
-                <img 
-                  v-if="album.cover_artwork_id"
-                  :src="getArtworkUrl(album.cover_artwork_id)"
-                  class="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-700 ease-out"
+              <div class="relative aspect-square w-full mb-3 overflow-hidden rounded-2xl bg-bg-panel shadow-sm group-hover:shadow-xl transition-all duration-300">
+                <ArtworkImage
+                  :artwork-id="album.cover_artwork_id"
+                  :fallback-color="album.coverColor"
+                  img-class="group-hover:scale-110 transition-transform duration-500 ease-out"
                 />
-                <div 
-                  v-else
-                  class="absolute inset-0 bg-[#e8e6df] group-hover:scale-105 transition-transform duration-700 ease-out"
-                ></div>
-                <div class="absolute inset-0 bg-black/0 group-hover:bg-black/5 transition-colors duration-300"></div>
+                <div class="absolute inset-0 bg-gradient-to-t from-black/30 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none rounded-2xl"></div>
+                <div class="absolute right-3 bottom-3 opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-300">
+                  <div class="w-10 h-10 rounded-full bg-accent shadow-lg flex items-center justify-center">
+                    <svg class="w-4 h-4 text-white ml-0.5" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                  </div>
+                </div>
               </div>
-              <div class="flex flex-col gap-1">
-                <h4 class="font-serif italic font-semibold text-base text-accent truncate">{{ album.title }}</h4>
-                <span class="text-[10px] tracking-widest text-text-muted">{{ album.year }}</span>
+              <div class="flex flex-col gap-1 px-1">
+                <h4 class="font-semibold text-[13px] text-text-main truncate group-hover:text-accent transition-colors leading-tight">{{ album.title }}</h4>
+                <span class="text-[11px] text-text-muted">{{ album.year }}</span>
               </div>
             </div>
           </div>
-          
-          <div v-if="playerStore.currentArtistDetails.isLoadingAlbums" class="text-center text-text-muted  py-8 text-xs tracking-widest uppercase">
-            Loading...
+
+          <div v-if="playerStore.currentArtistDetails.isLoadingAlbums" class="text-center text-text-muted py-8">
+            <div class="w-6 h-6 border-2 border-accent/20 border-t-accent rounded-full animate-spin mx-auto"></div>
           </div>
         </section>
-
-        <!-- 加载动画给Tracks -->
-        <div v-if="activeTab === 'tracks' && playerStore.currentArtistDetails.isLoadingTracks" class="text-center text-text-muted  py-8 text-xs tracking-widest uppercase">
-          Loading...
-        </div>
       </div>
     </div>
-    <div v-else class="flex-1 flex items-center justify-center text-text-muted ">
+    <div v-else class="flex-1 flex items-center justify-center text-text-muted text-sm">
       未找到艺人信息
     </div>
   </div>
 </template>
 
 <style scoped>
-.custom-scrollbar::-webkit-scrollbar { width: 4px; }
+.custom-scrollbar::-webkit-scrollbar { width: 6px; }
 .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
 .custom-scrollbar::-webkit-scrollbar-thumb { background-color: transparent; border-radius: 10px; }
-.custom-scrollbar:hover::-webkit-scrollbar-thumb { background-color: #dcdad1; }
+.custom-scrollbar:hover::-webkit-scrollbar-thumb { background-color: var(--border-color); }
 </style>
