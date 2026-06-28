@@ -11,8 +11,149 @@ use services::playback::PlaybackManager;
 use crate::commands::playback::PlaybackState;
 use tracing_subscriber;
 use std::sync::Mutex;
+use std::sync::{Condvar, Mutex as StdMutex};
 use std::path::PathBuf;
 use tauri::Manager;
+use crate::db::DbPool;
+
+/// 简易计数信号量:限制 `lumo://artwork` 协议的并发处理数。
+///
+/// 背景:Windows WebView2 下,自定义 scheme 的 HTTP 请求与 IPC invoke 共享
+/// WebView2 的消息/网络线程池。前端一次滚动会触发 30+ 个封面请求,把线程池
+/// 占满,导致 `library_get_albums` 的 invoke 排队 1-2s(后端 SQL 仅 0.4ms)。
+///
+/// 限流到 4 并发后,封面请求排队等待,给 invoke 留出线程余量,彻底消除卡顿。
+/// 排队在独立线程上发生(Tauri 用线程池处理 URI scheme),不会阻塞 invoke。
+struct CountingSemaphore {
+    count: StdMutex<usize>,
+    condvar: Condvar,
+    max: usize,
+}
+
+impl CountingSemaphore {
+    const fn new(max: usize) -> Self {
+        Self {
+            count: StdMutex::new(0),
+            condvar: Condvar::new(),
+            max,
+        }
+    }
+
+    /// 获取一个许可。若当前并发已达上限,会阻塞当前线程直到有许可释放。
+    /// 返回的 RAII guard 在 drop 时自动释放许可,确保即使提前 return 也不会泄漏。
+    fn acquire(&self) -> SemaphoreGuard<'_> {
+        let mut count = self.count.lock().unwrap();
+        while *count >= self.max {
+            count = self.condvar.wait(count).unwrap();
+        }
+        *count += 1;
+        SemaphoreGuard { sem: self }
+    }
+}
+
+/// 信号量许可 guard,drop 时自动 release。
+struct SemaphoreGuard<'a> {
+    sem: &'a CountingSemaphore,
+}
+
+impl Drop for SemaphoreGuard<'_> {
+    fn drop(&mut self) {
+        let mut count = self.sem.count.lock().unwrap();
+        *count -= 1;
+        self.sem.condvar.notify_one();
+    }
+}
+
+/// 全局封面请求限流器:最多同时处理 4 个 `lumo://artwork` 请求。
+/// 4 这个值是经验值:既保证封面加载吞吐(4 路并行),又给 IPC invoke 留足通道。
+static ARTWORK_SEMAPHORE: CountingSemaphore = CountingSemaphore::new(4);
+
+/// 后台异步回填 artwork 缩略图。
+///
+/// 在应用启动后 spawn 的独立线程里执行,不阻塞 UI。
+/// 遍历所有 `thumbnail_blob IS NULL` 的 artwork 记录,读取原图文件生成 200x200 缩略图。
+/// 期间前端正常使用 `lumo://` 协议加载封面(有 semaphore 限流保护),
+/// 回填完成后 emit `artwork-backfill-complete` 事件,前端收到后重新拉取专辑列表。
+///
+/// 节流策略:每处理 10 张暂停 50ms,给 lumo:// 协议处理器和 IPC 通道留出 CPU/IO 余量。
+/// 不节流的话 674 张图片密集处理会吃满 CPU,反而让前端更卡。
+fn backfill_artwork_thumbnails(app: tauri::AppHandle, pool: &DbPool) {
+    use rusqlite::params;
+    use tauri::Emitter;
+
+    // 1. 查询所有需要回填的记录(快速持锁,只读 id + path)
+    let rows: Vec<(i64, String)> = {
+        let conn = match pool.get() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!("[回填] 获取数据库连接失败: {}", e);
+                return;
+            }
+        };
+        let mut stmt = match conn.prepare("SELECT id, cache_path FROM artwork WHERE thumbnail_blob IS NULL") {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!("[回填] 准备查询失败: {}", e);
+                return;
+            }
+        };
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        });
+        match rows {
+            Ok(r) => r.filter_map(Result::ok).collect(),
+            Err(e) => {
+                tracing::error!("[回填] 查询失败: {}", e);
+                return;
+            }
+        }
+    };
+
+    let total = rows.len();
+    if total == 0 {
+        tracing::info!("[回填] 无需回填，所有 artwork 已有缩略图");
+        let _ = app.emit("artwork-backfill-complete", ());
+        return;
+    }
+    tracing::info!("[回填] 发现 {} 条 artwork 记录待生成缩略图，后台异步执行中...", total);
+
+    // 2. 逐条处理:读原图 → 生成缩略图 → UPDATE
+    // 每处理 10 张暂停 50ms,避免吃满 CPU 导致前端卡顿
+    let mut done = 0usize;
+    let mut failed = 0usize;
+    for (i, (id, cache_path)) in rows.iter().enumerate() {
+        let thumb = std::fs::read(&cache_path)
+            .ok()
+            .and_then(|data| crate::services::library::LibraryService::generate_thumbnail(&data));
+
+        if let Some(blob) = thumb {
+            if let Ok(conn) = pool.get() {
+                let _ = conn.execute(
+                    "UPDATE artwork SET thumbnail_blob = ?1 WHERE id = ?2",
+                    params![blob, id],
+                );
+            }
+            done += 1;
+        } else {
+            failed += 1;
+            tracing::warn!("[回填] artwork id={} 无法生成缩略图（路径={}）", id, cache_path);
+        }
+
+        // 每 10 张暂停 50ms,给系统喘息空间
+        if (i + 1) % 10 == 0 {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+
+        // 每 100 条报告一次进度
+        if (done + failed) % 100 == 0 {
+            tracing::info!("[回填] 进度：{}/{}（成功 {}，失败 {}）", done + failed, total, done, failed);
+        }
+    }
+
+    tracing::info!("[回填] 完成：成功 {}，失败 {}，总计 {}", done, failed, total);
+    // 通知前端回填完成,前端重新拉取专辑列表以获取内联缩略图
+    let _ = app.emit("artwork-backfill-complete", ());
+}
 
 /// 把 Unix 秒数格式化为 HTTP-date（IMF-fixdate）格式，
 /// 用于 `Last-Modified` / `Date` 响应头。
@@ -69,6 +210,19 @@ pub fn run() {
             let db_path = app_dir.join("lumo.sqlite");
 
             let pool = init_db(db_path).expect("Failed to initialize database");
+
+            // 后台异步回填 artwork 缩略图（V4 迁移只标记版本号，实际回填在这里执行）。
+            // 674 张图片用 Triangle 滤镜约需 15-40s，放后台线程不阻塞应用启动。
+            // 期间前端用 lumo:// 协议加载封面（有 semaphore 限流保护），
+            // 回填完成后 emit artwork-backfill-complete 事件，前端收到后重新拉取专辑列表。
+            {
+                let pool_clone = pool.clone();
+                let app_handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    backfill_artwork_thumbnails(app_handle, &pool_clone);
+                });
+            }
+
             app.manage(DbState {
                 db: pool,
             });
@@ -100,6 +254,9 @@ pub fn run() {
             let artwork_id = uri_without_query.trim_end_matches('/').split('/').last().unwrap_or("").parse::<i64>().unwrap_or(0);
 
             if artwork_id > 0 {
+                // 限流:最多 4 个封面请求同时处理,其余排队等待。
+                // guard 在作用域结束(含所有 return)时自动释放,不会泄漏。
+                let _guard = ARTWORK_SEMAPHORE.acquire();
                 use tauri::Manager;
                 // 解析 If-None-Match 头（锁外做，省得在锁内多一次字符串操作）
                 let headers = request.headers();
@@ -200,9 +357,11 @@ pub fn run() {
             crate::commands::scanner::source_remove,
             crate::commands::library::library_get_tracks,
             crate::commands::library::library_get_albums,
+            crate::commands::library::library_get_album_count,
             crate::commands::library::library_get_artists,
             crate::commands::library::library_get_album_tracks,
             crate::commands::library::library_get_artist_albums,
+            crate::commands::library::library_get_artist_album_count,
             crate::commands::library::library_get_artist_tracks,
             crate::commands::library::library_get_artist_stats,
             crate::commands::playback::playback_play,

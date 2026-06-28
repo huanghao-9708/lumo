@@ -35,6 +35,13 @@ pub fn library_get_albums(db_state: State<'_, DbState>, limit: u32, offset: u32,
 }
 
 #[tauri::command]
+pub fn library_get_album_count(db_state: State<'_, DbState>, search_keyword: Option<String>) -> Result<i64, AppError> {
+    let _trace = ipc_trace!("library_get_album_count");
+    let conn = db_state.db.get()?;
+    crate::repositories::album_repo::AlbumRepo::get_album_count(&conn, search_keyword).map_err(|e| e.into())
+}
+
+#[tauri::command]
 pub fn library_get_artists(db_state: State<'_, DbState>, limit: u32, offset: u32, search_keyword: Option<String>) -> Result<Vec<ArtistDTO>, AppError> {
     let _trace = ipc_trace!("library_get_artists");
     let conn = db_state.db.get()?;
@@ -53,6 +60,13 @@ pub fn library_get_artist_albums(db_state: State<'_, DbState>, artist_id: i64, l
     let _trace = ipc_trace!("library_get_artist_albums");
     let conn = db_state.db.get()?;
     crate::repositories::artist_repo::ArtistRepo::get_artist_albums(&conn, artist_id, limit, offset).map_err(|e| e.into())
+}
+
+#[tauri::command]
+pub fn library_get_artist_album_count(db_state: State<'_, DbState>, artist_id: i64) -> Result<i64, AppError> {
+    let _trace = ipc_trace!("library_get_artist_album_count");
+    let conn = db_state.db.get()?;
+    crate::repositories::artist_repo::ArtistRepo::get_artist_album_count(&conn, artist_id).map_err(|e| e.into())
 }
 
 #[tauri::command]

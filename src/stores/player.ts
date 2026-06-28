@@ -3,7 +3,7 @@ import { ref, computed, watch, shallowRef } from "vue";
 import { listen } from '@tauri-apps/api/event';
 
 import {
-  libraryGetTracks, libraryGetAlbums, libraryGetArtists, libraryGetAlbumTracks, libraryGetArtistAlbums, libraryGetArtistTracks, libraryGetArtistStats,
+  libraryGetTracks, libraryGetAlbums, libraryGetAlbumCount, libraryGetArtists, libraryGetAlbumTracks, libraryGetArtistAlbums, libraryGetArtistAlbumCount, libraryGetArtistTracks, libraryGetArtistStats,
   libraryCreatePlaylist, libraryGetPlaylists, libraryAddToPlaylist, libraryGetPlaylistTracks, libraryDeletePlaylist, libraryRemovePlaylistItem, libraryAddFolderToPlaylist,
   libraryToggleFavorite, libraryRecordPlay, libraryGetRecentlyPlayed, libraryGetFavoriteTracks, librarySavePlayQueue, libraryGetPlayQueue,
   libraryGetFolderContents
@@ -17,7 +17,7 @@ import {
 
 
 // ================= 后端 DTO 接口（与 Rust 端 models.rs 保持一致） =================
-import type { TrackDTO, AlbumDTO, ArtistDTO, PlaylistDTOBackend } from '../api/types';
+import type { TrackDTO, ArtistDTO, PlaylistDTOBackend } from '../api/types';
 
 // ================= 前端展示模型 =================
 
@@ -49,6 +49,10 @@ export interface Album {
   year: number;
   coverColor: string;
   cover_artwork_id?: number | null;
+  /** 200x200 缩略图的 base64 data URL。
+   *  有值时前端直接用 <img src> 渲染，不再走 lumo://artwork 协议。
+   *  无值时 fallback 到 ArtworkImage 组件（走原协议）。 */
+  cover_thumb?: string | null;
   artist_name?: string | null;
   track_count?: number;
 }
@@ -147,7 +151,6 @@ export const usePlayerStore = defineStore("player", () => {
 
   const currentTrackFileInfo = ref<any>(null);
   const isErrorTracks = ref(false);
-  const isErrorAlbums = ref(false);
   const isErrorArtists = ref(false);
   const hasLoadedCurrentFile = ref(false);
 
@@ -525,47 +528,41 @@ const albums = shallowRef<Album[]>([]);
     }
   }
 
-  const albumsLimit = 50;
-  let albumsOffset = 0;
-  const hasMoreAlbums = ref(true);
+  // ============ 专辑分页（15张/页 = 5列×3行）============
+  // 放弃无限下拉+虚拟滚动方案,改为传统分页。
+  // 原因：674 张专辑的下拉加载每次都要等 50 张返回+渲染,
+  // 且封面加载会持续挤占 IPC 通道导致卡顿 1-3s。
+  // 分页每次只加载 15 张,渲染开销和 IPC 压力都降到最低。
+  const albumsPageSize = 15;
+  const albumsCurrentPage = ref(1);
+  const albumsTotalCount = ref(0);
   const isLoadingAlbums = ref(false);
+  const isErrorAlbums = ref(false);
+
+  // 总页数 = ceil(总数 / 每页大小),总数从后端 count 接口获取
+  const albumsTotalPages = computed(() => {
+    if (albumsTotalCount.value === 0) return 1;
+    return Math.ceil(albumsTotalCount.value / albumsPageSize);
+  });
 
   async function fetchAlbums(reset: boolean = false) {
-    // ===== [诊断日志] 临时性能分析，问题定位后可移除 =====
-    const t0 = performance.now();
-    const tag = reset ? '[RESET]' : '[MORE]';
-
     if (reset) {
-      albums.value = [];
-      albumsOffset = 0;
-      hasMoreAlbums.value = true;
+      albumsCurrentPage.value = 1;
     }
-    if (!hasMoreAlbums.value || isLoadingAlbums.value) {
-      console.log(`%c[PERF] fetchAlbums ${tag} SKIPPED (loading=${isLoadingAlbums.value} hasMore=${hasMoreAlbums.value})`, 'color:#888');
-      return;
-    }
+    if (isLoadingAlbums.value) return;
     isLoadingAlbums.value = true;
     try {
       isErrorAlbums.value = false;
-      const t_invoke_start = performance.now();
-      // [诊断] 用 MessageChannel 测量主线程阻塞。
-      // postMessage 是宏任务，正常情况下 ~4ms 内会被处理。
-      // 如果 invoke 期间主线程被滚动事件/响应式更新占满，这个回调会被严重延迟。
-      let mt_latency = -1;
-      const mtPostedAt = performance.now();
-      const ch = new MessageChannel();
-      ch.port2.onmessage = () => { mt_latency = performance.now() - mtPostedAt; };
-      ch.port1.postMessage(null);
+      // 并行拉取当前页数据 + 总数(只在 reset 或首次加载时拉总数,避免每次翻页都查)
+      const offset = (albumsCurrentPage.value - 1) * albumsPageSize;
+      const needCount = reset || albumsTotalCount.value === 0;
 
-      const result: AlbumDTO[] = await libraryGetAlbums(
-          albumsLimit,
-          albumsOffset,
-          searchQuery.value || undefined
-      );
-      const t_invoke_end = performance.now();
-      if (result.length < albumsLimit) {
-        hasMoreAlbums.value = false;
-      }
+      const fetchList = libraryGetAlbums(albumsPageSize, offset, searchQuery.value || undefined);
+      const fetchCount = needCount ? libraryGetAlbumCount(searchQuery.value || undefined) : Promise.resolve(albumsTotalCount.value);
+
+      const [result, count] = await Promise.all([fetchList, fetchCount]);
+      albumsTotalCount.value = count;
+
       const newAlbums: Album[] = result.map((a) => ({
         id: a.id,
         title: a.title,
@@ -573,26 +570,33 @@ const albums = shallowRef<Album[]>([]);
         year: (a as any).release_year || new Date().getFullYear(),
         coverColor: getDeterministicColor(a.title || 'Unknown'),
         cover_artwork_id: a.cover_artwork_id,
+        cover_thumb: a.cover_thumbnail_base64,
         artist_name: a.artist_name,
         track_count: a.track_count
       }));
-      // [验证] shallowRef 下 push 不会触发响应，必须整体替换
-      albums.value = [...albums.value, ...newAlbums];
-      albumsOffset += result.length;
-      const t_done = performance.now();
-      console.log(
-        `%c[PERF] fetchAlbums ${tag} offset=${albumsOffset - result.length} returned=${result.length} | ` +
-        `invoke=${Math.round(t_invoke_end - t_invoke_start)}ms ` +
-        `(后端耗时见 Rust 日志) | map+push=${Math.round(t_done - t_invoke_end)}ms | total=${Math.round(t_done - t0)}ms | ` +
-        `main_thread_idle=${Math.round(mt_latency)}ms (主线程空闲延迟，>50ms 说明被阻塞)`,
-        'color:#08c'
-      );
+      albums.value = newAlbums;
     } catch (e) {
       console.error(e);
       isErrorAlbums.value = true;
     } finally {
       isLoadingAlbums.value = false;
     }
+  }
+
+  async function goToAlbumsPage(page: number) {
+    if (page < 1 || page > albumsTotalPages.value || isLoadingAlbums.value) return;
+    albumsCurrentPage.value = page;
+    await fetchAlbums(false);
+  }
+
+  function nextAlbumsPage() {
+    if (albumsCurrentPage.value >= albumsTotalPages.value) return;
+    goToAlbumsPage(albumsCurrentPage.value + 1);
+  }
+
+  function prevAlbumsPage() {
+    if (albumsCurrentPage.value <= 1) return;
+    goToAlbumsPage(albumsCurrentPage.value - 1);
   }
 
   const artistsLimit = 50;
@@ -806,15 +810,24 @@ const albums = shallowRef<Album[]>([]);
     }
   };
 
+  // 艺人详情页专辑分页（与专辑页保持一致：15张/页 = 5列×3行）
+  const ARTIST_ALBUMS_PAGE_SIZE = 15;
+
   const fetchArtistAlbums = async (artistId: number, isLoadMore = false) => {
     if (!currentArtistDetailsData.value) return;
-    if (isLoadMore && (!currentArtistDetailsData.value.hasMoreAlbums || currentArtistDetailsData.value.isLoadingAlbums)) return;
+    if (currentArtistDetailsData.value.isLoadingAlbums) return;
 
     currentArtistDetailsData.value.isLoadingAlbums = true;
     try {
-      const limit = 20;
-      const offset = currentArtistDetailsData.value.albumsOffset;
-      const albumsResult: AlbumDTO[] = await libraryGetArtistAlbums(artistId, limit, offset);
+      const page = currentArtistDetailsData.value.albumsCurrentPage || 1;
+      const offset = (page - 1) * ARTIST_ALBUMS_PAGE_SIZE;
+      const needCount = isLoadMore === false || currentArtistDetailsData.value.albumsTotalCount === 0;
+
+      const fetchList = libraryGetArtistAlbums(artistId, ARTIST_ALBUMS_PAGE_SIZE, offset);
+      const fetchCount = needCount ? libraryGetArtistAlbumCount(artistId) : Promise.resolve(currentArtistDetailsData.value.albumsTotalCount || 0);
+
+      const [albumsResult, count] = await Promise.all([fetchList, fetchCount]);
+      currentArtistDetailsData.value.albumsTotalCount = count;
 
       const artistAlbums: Album[] = albumsResult.map(a => ({
         id: a.id,
@@ -823,23 +836,41 @@ const albums = shallowRef<Album[]>([]);
         year: (a as any).release_year || new Date().getFullYear(),
         coverColor: getDeterministicColor(a.title || 'Unknown'),
         cover_artwork_id: a.cover_artwork_id,
+        cover_thumb: a.cover_thumbnail_base64,
         artist_name: a.artist_name,
         track_count: a.track_count
       }));
 
-      if (isLoadMore) {
-        currentArtistDetailsData.value.albums.push(...artistAlbums);
-      } else {
-        currentArtistDetailsData.value.albums = artistAlbums;
-      }
-      currentArtistDetailsData.value.albumsOffset += artistAlbums.length;
-      currentArtistDetailsData.value.hasMoreAlbums = artistAlbums.length === limit;
+      currentArtistDetailsData.value.albums = artistAlbums;
+      currentArtistDetailsData.value.albumsTotalPages = count > 0 ? Math.ceil(count / ARTIST_ALBUMS_PAGE_SIZE) : 1;
+      currentArtistDetailsData.value.hasMoreAlbums = albumsResult.length === ARTIST_ALBUMS_PAGE_SIZE;
     } catch(e) {
       console.error(e);
     } finally {
       currentArtistDetailsData.value.isLoadingAlbums = false;
     }
   };
+
+  async function goToArtistAlbumsPage(page: number) {
+    if (!currentArtistDetailsData.value || !activeArtistId.value) return;
+    if (page < 1 || page > (currentArtistDetailsData.value.albumsTotalPages || 1)) return;
+    currentArtistDetailsData.value.albumsCurrentPage = page;
+    await fetchArtistAlbums(activeArtistId.value, false);
+  }
+
+  function nextArtistAlbumsPage() {
+    if (!currentArtistDetailsData.value) return;
+    const cur = currentArtistDetailsData.value.albumsCurrentPage || 1;
+    if (cur >= (currentArtistDetailsData.value.albumsTotalPages || 1)) return;
+    goToArtistAlbumsPage(cur + 1);
+  }
+
+  function prevArtistAlbumsPage() {
+    if (!currentArtistDetailsData.value) return;
+    const cur = currentArtistDetailsData.value.albumsCurrentPage || 1;
+    if (cur <= 1) return;
+    goToArtistAlbumsPage(cur - 1);
+  }
 
   watch(activeArtistId, async (newId) => {
     if (newId) {
@@ -852,6 +883,9 @@ const albums = shallowRef<Album[]>([]);
         albums: [],
         tracksOffset: 0,
         albumsOffset: 0,
+        albumsCurrentPage: 1,
+        albumsTotalCount: 0,
+        albumsTotalPages: 1,
         hasMoreTracks: true,
         hasMoreAlbums: true,
         isLoadingTracks: false,
@@ -1271,6 +1305,14 @@ const albums = shallowRef<Album[]>([]);
     await fetchArtists(true);
   });
 
+  // 监听后端 artwork 缩略图回填完成事件。
+  // 回填在应用启动后后台执行（674 张图片约 20-40s），
+  // 完成后重新拉取专辑列表,让前端拿到内联 base64 缩略图,不再走 lumo:// 协议。
+  listen('artwork-backfill-complete', async () => {
+    console.log('[artwork-backfill-complete] 缩略图回填完成，重新拉取专辑列表');
+    await fetchAlbums(true);
+  });
+
   return {
     isPlaying,
     volume,
@@ -1350,5 +1392,17 @@ const albums = shallowRef<Album[]>([]);
     restoreSession,
     deletePlaylist,
     removeTrackFromPlaylist,
+    // 专辑分页
+    albumsCurrentPage,
+    albumsTotalPages,
+    albumsTotalCount,
+    albumsPageSize,
+    nextAlbumsPage,
+    prevAlbumsPage,
+    goToAlbumsPage,
+    // 艺人详情页专辑分页
+    nextArtistAlbumsPage,
+    prevArtistAlbumsPage,
+    goToArtistAlbumsPage,
   };
 });

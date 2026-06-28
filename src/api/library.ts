@@ -16,6 +16,10 @@ export function libraryGetAlbums(limit: number, offset: number, searchKeyword?: 
   return invoke('library_get_albums', { limit, offset, searchKeyword });
 }
 
+export function libraryGetAlbumCount(searchKeyword?: string): Promise<number> {
+  return invoke('library_get_album_count', { searchKeyword });
+}
+
 export function libraryGetArtists(limit: number, offset: number, searchKeyword?: string): Promise<ArtistDTO[]> {
   return invoke('library_get_artists', { limit, offset, searchKeyword });
 }
@@ -26,6 +30,10 @@ export function libraryGetAlbumTracks(albumId: number): Promise<TrackDTO[]> {
 
 export function libraryGetArtistAlbums(artistId: number, limit: number, offset: number): Promise<AlbumDTO[]> {
   return invoke('library_get_artist_albums', { artistId, limit, offset });
+}
+
+export function libraryGetArtistAlbumCount(artistId: number): Promise<number> {
+  return invoke('library_get_artist_album_count', { artistId });
 }
 
 export function libraryGetArtistTracks(artistId: number, limit: number, offset: number): Promise<TrackDTO[]> {

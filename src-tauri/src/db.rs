@@ -382,6 +382,32 @@ fn apply_migrations(conn: &Connection) -> Result<()> {
         tracing::info!("数据库迁移：已升级至 V2（冗余统计字段 + 覆盖索引）");
     }
 
+    // ===== V3: artwork 表加缩略图字段 =====
+    // 背景：网格视图每张专辑都要发 lumo://artwork 请求拉原图（几百 KB），
+    // 30+ 并发请求挤占 IPC 通道导致 invoke 卡顿 1-2s。
+    // 现在扫描时额外生成 200x200 JPEG 缩略图（~5-10KB）存入 BLOB，
+    // library_get_albums 一次性内联返回 base64，彻底消灭 N+1 封面请求。
+    // 已有库需重新扫描才会填充缩略图；未填充时前端 fallback 到 lumo:// 协议。
+    if current < 3 {
+        conn.execute_batch("ALTER TABLE artwork ADD COLUMN thumbnail_blob BLOB;")?;
+        conn.execute_batch("ALTER TABLE artwork ADD COLUMN thumbnail_mime TEXT NOT NULL DEFAULT 'image/jpeg';")?;
+        mark_migration_applied(conn, 3)?;
+        current = 3;
+        tracing::info!("数据库迁移：已升级至 V3（artwork 表加缩略图 BLOB 字段）");
+    }
+
+    // ===== V4: artwork 缩略图回填标记 =====
+    // 背景：V3 加了 thumbnail_blob 字段,但老库的记录全是 NULL。
+    // 最初版本在迁移里同步回填,但 674 张图片逐张 fs::read + Lanczos3 缩放
+    // 要 60-130 秒,把应用启动完全卡死。
+    // 现在改成：迁移只标记版本号,实际回填在 lib.rs setup 末尾 spawn 后台线程异步执行。
+    // 应用立即启动,回填在后台慢慢跑,期间前端用 lumo:// 协议(有 semaphore 限流保护)。
+    if current < 4 {
+        mark_migration_applied(conn, 4)?;
+        current = 4;
+        tracing::info!("数据库迁移：已升级至 V4（缩略图回填标记，实际回填在后台异步执行）");
+    }
+
     let _ = current; // 当前版本号，未来可用于日志/诊断
     Ok(())
 }

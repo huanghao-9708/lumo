@@ -173,6 +173,11 @@ pub struct AlbumDTO {
     pub cover_artwork_id: Option<i64>,
     /// 该专辑下包含的歌曲总数
     pub track_count: i64,
+    /// 200x200 JPEG 缩略图的 base64 data URL（若有）。
+    /// 前端可直接用作 `<img src>`，无需再发 `lumo://artwork` 请求。
+    /// 仅当扫描期已生成缩略图时才有值；否则为 None，前端 fallback 到原协议。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cover_thumbnail_base64: Option<String>,
 }
 
 /// 传输给前端的艺人数据传输对象

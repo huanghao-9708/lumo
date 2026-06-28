@@ -51,15 +51,34 @@ impl ArtistRepo {
             Ok(result)
         }
 
+    pub fn get_artist_album_count(conn: &Connection, artist_id: i64) -> rusqlite::Result<i64> {
+        let mut stmt = conn.prepare("
+            SELECT COUNT(*) FROM (
+                SELECT al.id
+                FROM albums al
+                WHERE al.album_artist_id = ?1
+                   OR al.id IN (
+                       SELECT DISTINCT t.album_id
+                       FROM track_artists ta JOIN tracks t ON ta.track_id = t.id
+                       WHERE ta.artist_id = ?1 AND t.album_id IS NOT NULL
+                   )
+                GROUP BY al.id
+            )
+        ")?;
+        let count: i64 = stmt.query_row(rusqlite::params![artist_id], |row| row.get(0))?;
+        Ok(count)
+    }
+
     pub fn get_artist_albums(conn: &Connection, artist_id: i64, limit: u32, offset: u32) -> rusqlite::Result<Vec<AlbumDTO>> {
             // 直接读 albums.track_count 冗余字段，去掉子查询和 GROUP BY。
             // 注意 DISTINCT + JOIN track_artists 会让同一专辑出现多次，仍需 GROUP BY al.id 去重，
             // 但因为不再 COUNT(t.id)，分组本身极快（不需扫描 track_artists 的全部行）。
             let mut stmt = conn.prepare("
                 SELECT
-                    al.id, al.title, ar.name AS artist_name, al.cover_artwork_id, al.track_count
+                    al.id, al.title, ar.name AS artist_name, al.cover_artwork_id, al.track_count, aw.thumbnail_blob
                 FROM albums al
                 LEFT JOIN artists ar ON al.album_artist_id = ar.id
+                LEFT JOIN artwork aw ON al.cover_artwork_id = aw.id
                 WHERE al.album_artist_id = ?1
                    OR al.id IN (
                        SELECT DISTINCT t.album_id
@@ -71,12 +90,18 @@ impl ArtistRepo {
                 LIMIT ?2 OFFSET ?3
             ")?;
             let rows = stmt.query_map(rusqlite::params![artist_id, limit, offset], |row| {
+                let thumb: Option<Vec<u8>> = row.get(5)?;
+                let cover_thumbnail_base64 = thumb.map(|b| {
+                    use base64::{engine::general_purpose, Engine as _};
+                    format!("data:image/jpeg;base64,{}", general_purpose::STANDARD.encode(&b))
+                });
                 Ok(AlbumDTO {
                     id: row.get(0)?,
                     title: row.get(1)?,
                     artist_name: row.get(2)?,
                     cover_artwork_id: row.get(3)?,
                     track_count: row.get(4)?,
+                    cover_thumbnail_base64,
                 })
             })?;
             let mut result = Vec::new();

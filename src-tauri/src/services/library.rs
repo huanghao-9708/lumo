@@ -282,12 +282,28 @@ impl LibraryService {
         hasher.update(picture_data);
         let hash = hex::encode(hasher.finalize());
 
-        // 同一张封面若已存在，直接复用其 ID
+        // 同一张封面若已存在，直接复用其 ID。
+        // 但如果该记录的 thumbnail_blob 是 NULL（老数据 / V4 回填失败），
+        // 补生成一次缩略图并 UPDATE，确保后续扫描能逐步修复缺失的缩略图。
         if let Some(id) = conn.query_row(
             "SELECT id FROM artwork WHERE content_hash = ?1",
             params![hash],
             |row| row.get(0),
         ).optional()? {
+            // 检查 thumbnail_blob 是否需要补生成
+            let needs_thumb: Option<Option<Vec<u8>>> = conn.query_row(
+                "SELECT thumbnail_blob FROM artwork WHERE id = ?1",
+                params![id],
+                |row| row.get::<_, Option<Vec<u8>>>(0),
+            ).ok();
+            if let Some(None) = needs_thumb {
+                if let Some(blob) = Self::generate_thumbnail(picture_data) {
+                    let _ = conn.execute(
+                        "UPDATE artwork SET thumbnail_blob = ?1 WHERE id = ?2",
+                        params![blob, id],
+                    );
+                }
+            }
             return Ok(Some(id));
         }
 
@@ -309,10 +325,38 @@ impl LibraryService {
             let _ = fs::write(&cache_path, picture_data);
         }
 
+        // 生成 200x200 JPEG 缩略图，存入 BLOB 供 library_get_albums 内联返回。
+        // 这一步是消灭 N+1 封面请求的关键：网格视图不再需要逐个请求 lumo://artwork。
+        let thumbnail_blob = Self::generate_thumbnail(picture_data);
+
         conn.execute(
-            "INSERT INTO artwork (cache_path, mime_type, content_hash) VALUES (?1, ?2, ?3)",
-            params![cache_path.to_string_lossy().to_string(), metadata.picture_mime, hash],
+            "INSERT INTO artwork (cache_path, mime_type, content_hash, thumbnail_blob) VALUES (?1, ?2, ?3, ?4)",
+            params![cache_path.to_string_lossy().to_string(), metadata.picture_mime, hash, thumbnail_blob],
         )?;
         Ok(Some(conn.last_insert_rowid()))
+    }
+
+    /// 从原始图片字节生成 200x200 JPEG 缩略图（cover 模式：等比缩放后居中裁剪）。
+    /// 失败时返回 None，不影响扫描流程（只是该封面没有内联缩略图，前端 fallback 到协议）。
+    /// 设为 pub 是因为 db.rs 的 V4 迁移需要调用它来回填已有记录。
+    ///
+    /// 滤镜选择 Triangle(bilinear) 而非 Lanczos3：
+    /// - Lanczos3 质量最高但极慢(每张 100-200ms),674 张要 60-130s
+    /// - Triangle 质量足够(200x200 缩略图肉眼几乎无差别),快 3-5 倍(每张 20-50ms)
+    /// - 缩略图本身就是为了网格视图小尺寸显示,不需要印刷级质量
+    pub fn generate_thumbnail(image_data: &[u8]) -> Option<Vec<u8>> {
+        use image::imageops::FilterType;
+
+        // 解码原图（支持 JPEG / PNG / GIF / WebP 等，取决于 image crate 的 features）
+        let img = image::load_from_memory(image_data).ok()?;
+
+        // resize_to_fill：等比缩放到刚好覆盖 200x200，然后居中裁剪多余部分
+        let thumb = img.resize_to_fill(200, 200, FilterType::Triangle);
+
+        // 编码为 JPEG（质量 80，平衡文件大小 ~5-10KB 和视觉质量）
+        let mut buf = Vec::new();
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 80);
+        encoder.encode_image(&thumb).ok()?;
+        Some(buf)
     }
 }
