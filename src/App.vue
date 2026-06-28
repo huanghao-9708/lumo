@@ -1,23 +1,17 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, computed } from 'vue';
-import { useUiStore } from './stores/ui';
+import { onMounted, onUnmounted } from 'vue';
 import { usePlayerStore } from './stores/player';
-import { Minus, Square, X } from 'lucide-vue-next';
+import { useUiStore } from './stores/ui';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { themes } from './themes';
 
-const uiStore = useUiStore();
+import SidebarLeft from './components/layout/SidebarLeft.vue';
+import TopBar from './components/layout/TopBar.vue';
+import MainContent from './components/layout/MainContent.vue';
+import SidebarRight from './components/layout/SidebarRight.vue';
+import BottomPlayer from './components/layout/BottomPlayer.vue';
+
 const playerStore = usePlayerStore();
-
-// 计算当前主题的动态 Layout
-const ActiveLayout = computed(() => {
-  const theme = themes[uiStore.activeTheme];
-  if (theme && theme.components.Layout) {
-    return theme.components.Layout;
-  }
-  // Fallback to simple layout
-  return themes['theme-simple'].components.Layout;
-});
+const uiStore = useUiStore();
 
 // 键盘快捷键监听
 const handleGlobalKeyDown = (e: KeyboardEvent) => {
@@ -77,37 +71,51 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener('keydown', handleGlobalKeyDown);
 });
-
-const appWindow = getCurrentWindow();
-const minimize = () => appWindow.minimize();
-const toggleMaximize = () => appWindow.toggleMaximize();
-const close = () => appWindow.close();
 </script>
 
 <template>
-  <!-- 动态装配的主题核心布局 -->
-  <component :is="ActiveLayout" />
+  <!-- Global Workspace -->
+  <div class="h-screen w-screen flex flex-col bg-bg-canvas text-text-primary overflow-hidden font-sans">
+    
+    <!-- Top Area -->
+    <div class="flex-1 flex overflow-hidden">
+      
+      <!-- Region 01: Sidebar (w: 240px) -->
+      <SidebarLeft />
+      
+      <!-- Divider A (Sidebar ↓ Content/TopBar) -->
+      <div class="w-px h-full bg-border-color shrink-0"></div>
 
-  <!-- 全局窗口控制按钮（主题切换 / 夜间模式 / UI 切换已统一移入各主题侧边栏的设置按钮旁） -->
-  <div class="fixed top-0 right-0 h-10 flex items-center px-4 gap-3 z-50 select-none pointer-events-none text-text-muted">
-    <!-- 竖向分割线 -->
-    <div class="w-px h-4 transition-colors duration-300 bg-border-color"></div>
+      <!-- Right Side Container -->
+      <div class="flex-1 flex flex-col min-w-0">
+        
+        <!-- Region 02: Top Bar (h: 60px) -->
+        <TopBar />
+        
+        <!-- Divider B (Top Bar ↓ Content) -->
+        <div class="h-px w-full bg-border-color shrink-0"></div>
 
-    <!-- 窗口控制按钮 -->
-    <div class="flex items-center gap-1.5">
-      <button @click="minimize" class="pointer-events-auto w-7 h-7 flex items-center justify-center rounded-lg transition-all duration-200 hover:text-text-main hover:bg-bg-active"
-        title="最小化">
-        <Minus class="w-3.5 h-3.5" />
-      </button>
-      <button @click="toggleMaximize" class="pointer-events-auto w-7 h-7 flex items-center justify-center rounded-lg transition-all duration-200 hover:text-text-main hover:bg-bg-active"
-        title="最大化">
-        <Square class="w-3 h-3" />
-      </button>
-      <button @click="close" class="pointer-events-auto w-7 h-7 flex items-center justify-center rounded-lg transition-all duration-200 hover:text-red-600 hover:bg-red-50 -900/30 -400"
-        title="关闭">
-        <X class="w-3.5 h-3.5" />
-      </button>
+        <!-- Content & Inspector Container -->
+        <div class="flex-1 flex overflow-hidden">
+          
+          <!-- Region 03: Content Area (flex-1) -->
+          <MainContent />
+
+          <!-- Divider C (Content ↓ Inspector) -->
+          <div class="w-px h-full bg-border-color shrink-0" v-if="uiStore.isRightSidebarVisible"></div>
+
+          <!-- Region 04: Inspector Panel (w: 360px) -->
+          <SidebarRight />
+        </div>
+      </div>
     </div>
+
+    <!-- Divider D (Playback ↓ Workspace) -->
+    <div class="h-px w-full bg-border-color shrink-0"></div>
+
+    <!-- Region 05: Playback Bar (h: 110px) -->
+    <BottomPlayer />
+
   </div>
 </template>
 

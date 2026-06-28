@@ -1,123 +1,70 @@
 @import "tailwindcss";
 
-/* 默认主题 (Light) */
 :root {
-  --bg-base: #ffffff;
-  --bg-panel: #f9fafb;
-  --bg-active: #f3f4f6;
-  --text-main: #333333;
-  --text-muted: #9ca3af;
-  --border-color: #f3f4f6;
-  --accent-color: #f58220;
-}
-
-/* 默认主题 (Dark) */
-:root.dark {
-  --bg-base: #121212;
-  --bg-panel: #1e1e1e;
-  --bg-active: #2a2a2a;
-  --text-main: #f3f4f6;
-  --text-muted: #6b7280;
-  --border-color: #333333;
-  --accent-color: #f58220;
-}
-
-/* 极简主题 (Light) */
-:root.theme-simple {
-  --bg-base: #fdfcf9;
-  --bg-panel: #eae8e1;
-  --bg-active: #dcdad1;
-  --text-main: #1a1a1a;
-  --text-muted: #888888;
-  --border-color: #eae8e1;
-  --accent-color: #1a1a1a;
-}
-
-/* 极简主题 (Dark) */
-:root.theme-simple.dark {
-  --bg-base: #1a1a1a;
-  --bg-panel: #333333;
-  --bg-active: #444444;
-  --text-main: #fdfcf9;
-  --text-muted: #aaaaaa;
-  --border-color: #333333;
-  --accent-color: #fdfcf9;
-}
-
-/* TE 工业风 (Light) */
-:root.theme-te {
-  --bg-base: #ececec;
-  --bg-panel: #e2e2e2;
-  --bg-active: #000000;
-  --text-main: #000000;
-  --text-muted: #666666;
-  --border-color: #000000;
-  --accent-color: #000000;
-}
-
-/* TE 工业风 (Dark) */
-:root.theme-te.dark {
-  --bg-base: #111111;
-  --bg-panel: #1a1a1a;
-  --bg-active: #ffffff;
-  --text-main: #ffffff;
-  --text-muted: #aaaaaa;
-  --border-color: #ffffff;
-  --accent-color: #ffffff;
-}
-
-/* 现代优雅风 (Modern - Light) */
-:root.theme-modern {
-  --bg-base: #f4f2ee;
-  --bg-panel: #ebe7e0;
-  --bg-active: #e2ded5;
-  --text-main: #2b2b2b;
-  --text-muted: #6b6b6b;
-  --border-color: #e5e2db;
-  --accent-color: #f58220;
-}
-
-/* 现代优雅风 (Modern - Dark) */
-:root.theme-modern.dark {
-  --bg-base: #1a1a1a;
-  --bg-panel: #242424;
-  --bg-active: #333333;
-  --text-main: #eaeaea;
-  --text-muted: #888888;
-  --border-color: #333333;
-  --accent-color: #f58220;
+  /* LDL v1.0 Backgrounds */
+  --bg-canvas: #F7F5F1;
+  --bg-content: #FBFAF7;
+  --bg-active: rgba(226, 138, 35, 0.1);
+  --bg-hover: rgba(0, 0, 0, 0.04);
+  
+  /* LDL v1.0 Component Colors */
+  --btn-hover: #F1EFE9;
+  --list-hover: #F5F2EB;
+  --list-selected: #F0ECE4;
+  
+  /* LDL v1.0 Text */
+  --text-primary: #111111;
+  --text-secondary: #5F5F5F;
+  --text-muted: #8B8B8B;
+  --text-disabled: #BDBDBD;
+  --text-inverse: #FFFFFF;
+  
+  /* LDL v1.0 Divider */
+  --border-color: rgba(232, 229, 222, 0.7);
+  --border-solid: #E8E5DE;
+  
+  /* LDL v1.0 Accent */
+  --brand-orange: #E28A23;
 }
 
 @theme {
-  --font-sans: "Outfit", "Inter", "PingFang SC", "Microsoft YaHei", sans-serif;
-  --font-serif: "Playfair Display", "Noto Serif SC", "Source Han Serif SC", serif;
-  --font-mono: "JetBrains Mono", "Space Mono", "SF Mono", "Roboto Mono", monospace;
-  --color-brand-orange: #f58220;
-  --color-brand-orange-light: #f7a055;
-  --color-brand-orange-bg: #fff3e0;
+  --font-sans: "Inter", "SF Pro Display", "Helvetica Now", "MiSans", "HarmonyOS Sans", "OPPOSans", sans-serif;
+  --font-mono: "IBM Plex Mono", "JetBrains Mono", monospace;
   
-  --color-bg-base: var(--bg-base);
-  --color-bg-panel: var(--bg-panel);
+  --color-brand-orange: var(--brand-orange);
+  
+  --color-bg-canvas: var(--bg-canvas);
+  --color-bg-content: var(--bg-content);
   --color-bg-active: var(--bg-active);
-  --color-text-main: var(--text-main);
+  --color-bg-hover: var(--bg-hover);
+  
+  --color-btn-hover: var(--btn-hover);
+  --color-list-hover: var(--list-hover);
+  --color-list-selected: var(--list-selected);
+  
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
   --color-text-muted: var(--text-muted);
+  --color-text-disabled: var(--text-disabled);
+  --color-text-inverse: var(--text-inverse);
+  
   --color-border-color: var(--border-color);
-  --color-accent: var(--accent-color);
+  --color-border-solid: var(--border-solid);
 }
 
 body {
   font-family: var(--font-sans);
-  background-color: var(--bg-base);
-  color: var(--text-main);
+  background-color: var(--bg-canvas);
+  color: var(--text-primary);
   margin: 0;
   min-height: 100vh;
-  overflow-x: hidden;
+  line-height: 1.5; /* 150% from LDL */
+  overflow: hidden; /* App is a fixed window size, no global scroll */
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  transition: background-color 0.3s ease, color 0.3s ease;
 }
 
-/* Custom Scrollbar for a cleaner look */
+/* Custom Scrollbar */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -126,11 +73,11 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #e5e7eb;
+  background: #d1d0cb;
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #d1d5db;
+  background: #b5b4af;
 }
 
 /* Base utility classes for smooth interactions */
@@ -152,3 +99,4 @@ body {
 button, input, a, .cursor-pointer, [style*="cursor: pointer"] {
   -webkit-app-region: no-drag;
 }
+
