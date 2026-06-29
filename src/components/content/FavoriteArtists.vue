@@ -70,6 +70,10 @@ function toggleFav(artistId: number, e: Event) {
       </div>
     </div>
 
+    <!-- Footer -->
+    </div>
+
+    <!-- Footer Status（固定在底部） -->
     <FooterStatus v-if="artists.length > 0" :count="`${artists.length.toLocaleString()} 位艺术家`" />
   </div>
 </template>

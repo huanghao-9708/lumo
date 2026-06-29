@@ -128,8 +128,10 @@ function toggleFav(trackId: number, e: Event) {
         </div>
       </div>
 
-      <!-- Footer Status -->
-      <FooterStatus v-if="tracks.length > 0" :count="`${tracks.length.toLocaleString()} 首歌曲`" :hint="totalDurationText" />
+      <!-- Footer -->
     </div>
+
+    <!-- Footer Status（固定在底部） -->
+    <FooterStatus v-if="tracks.length > 0" :count="`${tracks.length.toLocaleString()} 首歌曲`" :hint="totalDurationText" />
   </div>
 </template>

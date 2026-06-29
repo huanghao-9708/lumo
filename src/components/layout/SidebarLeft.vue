@@ -121,7 +121,16 @@ function selectPlaylist(id: number) {
 
       <!-- PLAYLISTS -->
       <div>
-        <h2 class="px-3 text-[10px] font-semibold text-text-muted mb-2 uppercase tracking-widest">Playlists</h2>
+        <div class="flex items-center justify-between px-3 mb-2">
+          <h2 class="text-[10px] font-semibold text-text-muted uppercase tracking-widest">Playlists</h2>
+          <button
+            class="w-5 h-5 rounded-[4px] flex items-center justify-center text-text-muted hover:text-text-primary hover:bg-list-hover transition-colors-smooth"
+            @click="playerStore.isCreatePlaylistModalOpen = true"
+            title="新建播放列表"
+          >
+            <Plus class="w-[14px] h-[14px]" />
+          </button>
+        </div>
 
         <ul class="space-y-[2px]">
           <li v-if="playerStore.playlists.length === 0">
@@ -140,17 +149,6 @@ function selectPlaylist(id: number) {
               <List class="w-[16px] h-[16px] mr-3 text-text-muted flex-shrink-0" />
               <span class="text-[13px] flex-1 truncate">{{ pl.name }}</span>
               <span class="text-[11px] font-mono text-text-muted tabular-nums">{{ pl.count }}</span>
-            </a>
-          </li>
-
-          <li class="mt-3">
-            <a
-              href="#"
-              class="flex items-center px-3 py-[7px] rounded-[6px] text-text-muted hover:bg-list-hover hover:text-text-primary transition-colors-smooth"
-              @click.prevent="playerStore.isCreatePlaylistModalOpen = true"
-            >
-              <Plus class="w-[16px] h-[16px] mr-3 flex-shrink-0" />
-              <span class="text-[13px] flex-1">新建播放列表</span>
             </a>
           </li>
         </ul>

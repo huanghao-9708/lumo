@@ -70,7 +70,7 @@ onMounted(() => {
         playerStore.fetchAlbums(false);
       }
     },
-    { root: gridContainer.value, rootMargin: '200px' }
+    { root: gridContainer.value, rootMargin: '400px' }
   );
   if (sentinelRef.value) {
     observer.observe(sentinelRef.value);
@@ -168,10 +168,11 @@ onBeforeUnmount(() => {
         <span class="text-[11px]">已显示全部 {{ totalCount.toLocaleString() }} 张专辑</span>
       </div>
 
-      <!-- Footer Status -->
+      <!-- Footer -->
+      </div>
+
+      <!-- Footer Status（固定在底部） -->
       <FooterStatus :count="`${totalCount.toLocaleString()} 张专辑`" />
 
     </div>
-
-  </div>
 </template>

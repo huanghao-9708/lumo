@@ -149,7 +149,7 @@ const { totalHeight, offsetY, visibleItems } = useVirtualList({
 function onListScroll() {
   const el = scrollContainer.value;
   if (!el) return;
-  if (el.scrollTop + el.clientHeight >= el.scrollHeight - 200) {
+  if (el.scrollTop + el.clientHeight >= el.scrollHeight - 400) {
     if (playerStore.hasMoreTracks && !playerStore.isLoadingTracks) {
       playerStore.fetchTracks();
     }
@@ -366,9 +366,11 @@ onMounted(() => {
             <span class="text-[11px]">加载更多…</span>
           </div>
 
-          <!-- Footer Status -->
-          <FooterStatus v-if="playerStore.tracks.length > 0" :count="`${trackCount.toLocaleString()} 首歌曲`" />
+        </div>
 
+        <!-- 底部统计（固定在底部） -->
+        <div v-if="playerStore.tracks.length > 0" class="flex-shrink-0 px-8 py-4 border-t border-border-color text-[11px] text-text-muted font-mono bg-bg-content">
+          {{ trackCount.toLocaleString() }} 首歌曲
         </div>
       </template>
 

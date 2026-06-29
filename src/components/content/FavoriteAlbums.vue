@@ -81,6 +81,10 @@ function toggleFav(album: Album, e: Event) {
       </div>
     </div>
 
+    <!-- Footer -->
+    </div>
+
+    <!-- Footer Status（固定在底部） -->
     <FooterStatus v-if="albums.length > 0" :count="`${albums.length.toLocaleString()} 张专辑`" />
   </div>
 </template>
