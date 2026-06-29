@@ -781,7 +781,24 @@ const albums = shallowRef<Album[]>([]);
 
   watch(activeAlbumId, async (newId) => {
     if (newId) {
-       const album = albums.value.find(a => a.id === newId);
+       let album = albums.value.find(a => a.id === newId);
+       if (!album && currentArtistDetailsData.value?.albums) {
+         album = currentArtistDetailsData.value.albums.find((a: any) => a.id === newId);
+       }
+       // 兜底：如果也找不到，从已加载的 tracks 里第一首推断专辑信息
+       if (!album) {
+         const loadedTracks = currentAlbumDetailsData.value?.tracks ?? [];
+         if (loadedTracks.length > 0) {
+           album = {
+             id: newId,
+             title: loadedTracks[0].album,
+             artist: loadedTracks[0].artist,
+             cover_artwork_id: loadedTracks[0].cover_artwork_id,
+             coverColor: loadedTracks[0].coverColor,
+             track_count: loadedTracks.length,
+           } as any;
+         }
+       }
        if (album) {
          try {
            const result: TrackDTO[] = await libraryGetAlbumTracks(newId);

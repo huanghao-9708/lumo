@@ -23,7 +23,7 @@ const albumGrid = computed<Album[]>(() => {
     artist: a.artist_name || '未知艺人',
     coverColor: a.coverColor || 'from-gray-500 to-gray-700',
     cover_artwork_id: a.cover_artwork_id ?? null,
-    cover_thumb: a.cover_thumbnail_base64 || null,
+    cover_thumb: a.cover_thumb || null,
     artist_name: a.artist_name,
     track_count: a.track_count,
   }));
