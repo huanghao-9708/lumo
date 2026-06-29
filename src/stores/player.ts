@@ -528,36 +528,26 @@ const albums = shallowRef<Album[]>([]);
     }
   }
 
-  // ============ 专辑分页（15张/页 = 5列×3行）============
-  // 放弃无限下拉+虚拟滚动方案,改为传统分页。
-  // 原因：674 张专辑的下拉加载每次都要等 50 张返回+渲染,
-  // 且封面加载会持续挤占 IPC 通道导致卡顿 1-3s。
-  // 分页每次只加载 15 张,渲染开销和 IPC 压力都降到最低。
-  const albumsPageSize = 15;
-  const albumsCurrentPage = ref(1);
+  // ============ 专辑无限滚动（30张/页，IntersectionObserver 触发加载）============
+  const albumsPageSize = 30;
+  let albumsOffset = 0;
   const albumsTotalCount = ref(0);
   const isLoadingAlbums = ref(false);
   const isErrorAlbums = ref(false);
-
-  // 总页数 = ceil(总数 / 每页大小),总数从后端 count 接口获取
-  const albumsTotalPages = computed(() => {
-    if (albumsTotalCount.value === 0) return 1;
-    return Math.ceil(albumsTotalCount.value / albumsPageSize);
-  });
+  const hasMoreAlbums = ref(true);
 
   async function fetchAlbums(reset: boolean = false) {
     if (reset) {
-      albumsCurrentPage.value = 1;
+      albumsOffset = 0;
+      hasMoreAlbums.value = true;
     }
-    if (isLoadingAlbums.value) return;
+    if (!hasMoreAlbums.value || isLoadingAlbums.value) return;
     isLoadingAlbums.value = true;
     try {
       isErrorAlbums.value = false;
-      // 并行拉取当前页数据 + 总数(只在 reset 或首次加载时拉总数,避免每次翻页都查)
-      const offset = (albumsCurrentPage.value - 1) * albumsPageSize;
       const needCount = reset || albumsTotalCount.value === 0;
 
-      const fetchList = libraryGetAlbums(albumsPageSize, offset, searchQuery.value || undefined);
+      const fetchList = libraryGetAlbums(albumsPageSize, albumsOffset, searchQuery.value || undefined);
       const fetchCount = needCount ? libraryGetAlbumCount(searchQuery.value || undefined) : Promise.resolve(albumsTotalCount.value);
 
       const [result, count] = await Promise.all([fetchList, fetchCount]);
@@ -567,36 +557,27 @@ const albums = shallowRef<Album[]>([]);
         id: a.id,
         title: a.title,
         artist: a.artist_name || '未知艺人',
-        year: (a as any).release_year || new Date().getFullYear(),
+        year: a.release_year || new Date().getFullYear(),
         coverColor: getDeterministicColor(a.title || 'Unknown'),
         cover_artwork_id: a.cover_artwork_id,
         cover_thumb: a.cover_thumbnail_base64,
         artist_name: a.artist_name,
         track_count: a.track_count
       }));
-      albums.value = newAlbums;
+
+      if (reset) {
+        albums.value = newAlbums;
+      } else {
+        albums.value = [...albums.value, ...newAlbums];
+      }
+      albumsOffset += result.length;
+      hasMoreAlbums.value = result.length >= albumsPageSize;
     } catch (e) {
       console.error(e);
       isErrorAlbums.value = true;
     } finally {
       isLoadingAlbums.value = false;
     }
-  }
-
-  async function goToAlbumsPage(page: number) {
-    if (page < 1 || page > albumsTotalPages.value || isLoadingAlbums.value) return;
-    albumsCurrentPage.value = page;
-    await fetchAlbums(false);
-  }
-
-  function nextAlbumsPage() {
-    if (albumsCurrentPage.value >= albumsTotalPages.value) return;
-    goToAlbumsPage(albumsCurrentPage.value + 1);
-  }
-
-  function prevAlbumsPage() {
-    if (albumsCurrentPage.value <= 1) return;
-    goToAlbumsPage(albumsCurrentPage.value - 1);
   }
 
   const artistsLimit = 50;
@@ -833,7 +814,7 @@ const albums = shallowRef<Album[]>([]);
         id: a.id,
         title: a.title,
         artist: a.artist_name || '未知艺人',
-        year: (a as any).release_year || new Date().getFullYear(),
+        year: a.release_year || new Date().getFullYear(),
         coverColor: getDeterministicColor(a.title || 'Unknown'),
         cover_artwork_id: a.cover_artwork_id,
         cover_thumb: a.cover_thumbnail_base64,
@@ -1393,14 +1374,9 @@ const albums = shallowRef<Album[]>([]);
     restoreSession,
     deletePlaylist,
     removeTrackFromPlaylist,
-    // 专辑分页
-    albumsCurrentPage,
-    albumsTotalPages,
+    // 专辑无限滚动
     albumsTotalCount,
-    albumsPageSize,
-    nextAlbumsPage,
-    prevAlbumsPage,
-    goToAlbumsPage,
+    hasMoreAlbums,
     // 艺人详情页专辑分页
     nextArtistAlbumsPage,
     prevArtistAlbumsPage,

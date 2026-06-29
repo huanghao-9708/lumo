@@ -3,8 +3,10 @@ import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import {
   Search, Play, List, LayoutGrid, MoreHorizontal, Heart, Loader2, Music,
 } from 'lucide-vue-next';
-import { usePlayerStore } from '../../stores/player';
+import { usePlayerStore, type Album } from '../../stores/player';
 import { useVirtualList } from '../../composables/useVirtualList';
+import AlbumGrid from '../content/AlbumGrid.vue';
+import AlbumDetail from '../content/AlbumDetail.vue';
 
 const playerStore = usePlayerStore();
 
@@ -18,7 +20,8 @@ function onSearchInput() {
   if (searchTimer) clearTimeout(searchTimer);
   searchTimer = setTimeout(() => {
     playerStore.searchQuery = searchInput.value;
-    playerStore.fetchTracks(true);
+    // 根据当前 tab 拉取对应数据
+    loadForCurrentTab();
   }, 250);
 }
 onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
@@ -44,13 +47,25 @@ const metaText = computed(() => {
   return `${n.toLocaleString()} 首歌曲`;
 });
 
-/* ============ 是否为「轨道列表」视图（表格） ============ */
+/* ============ 视图分支判定 ============ */
+
+// 专辑网格视图（无 activeAlbumId 时）
+const isAlbumGridView = computed(() => {
+  return playerStore.activeLibraryTab === '专辑' && !playerStore.activeAlbumId;
+});
+
+// 专辑详情视图（有 activeAlbumId 时）
+const isAlbumDetailView = computed(() => {
+  return playerStore.activeLibraryTab === '专辑' && !!playerStore.activeAlbumId;
+});
+
+// 轨道表格视图
 const isTracksView = computed(() => {
   return ['全部歌曲', '最近播放', '收藏', '播放列表'].includes(playerStore.activeLibraryTab)
     || playerStore.activePlaylistId !== null;
 });
 
-/* ============ 当前播放判定 ============ */
+/* ============ 轨道列表相关 ============ */
 function isPlayingTrack(trackId: number): boolean {
   const t = playerStore.currentTrack;
   return !!t && t.id === trackId;
@@ -86,193 +101,223 @@ function onListScroll() {
   }
 }
 
+/* ============ 专辑选择 / 返回 ============ */
+function onAlbumSelect(album: Album) {
+  playerStore.activeAlbumId = album.id;
+}
+
+function onAlbumDetailBack() {
+  playerStore.activeAlbumId = null;
+}
+
 /* ============ Tab 切换时重新拉取数据 ============ */
 function loadForCurrentTab() {
   const tab = playerStore.activeLibraryTab;
   if (tab === '最近播放') playerStore.fetchRecentlyPlayed();
   else if (tab === '收藏') playerStore.fetchFavoriteTracks();
+  else if (tab === '专辑') playerStore.fetchAlbums(true);
   else playerStore.fetchTracks(true);
 }
 watch(() => playerStore.activeLibraryTab, loadForCurrentTab);
 
 onMounted(() => {
   // 仅在还没有数据时首次拉取，避免覆盖 restoreSession 的状态
-  if (playerStore.tracks.length === 0) loadForCurrentTab();
+  if (playerStore.tracks.length === 0 && playerStore.albums.length === 0) {
+    loadForCurrentTab();
+  }
 });
 </script>
 
 <template>
   <div class="flex-1 flex flex-col bg-bg-content overflow-hidden select-none min-w-0">
 
-    <!-- Header -->
-    <div class="px-8 pt-8 pb-0 flex-shrink-0" data-tauri-drag-region>
-      <div class="flex items-end justify-between mb-2">
-        <div>
-          <!-- LDL Page Title = 42px -->
-          <h1 class="text-[42px] font-bold text-text-primary tracking-tight leading-none mb-2">{{ pageTitle }}</h1>
-          <p class="text-[12px] text-text-muted leading-relaxed font-mono">{{ metaText }}</p>
+    <!-- ============ 专辑详情视图（独占整个 Content Area） ============ -->
+    <template v-if="isAlbumDetailView">
+      <AlbumDetail
+        :album-id="playerStore.activeAlbumId"
+        @back="onAlbumDetailBack"
+      />
+    </template>
+
+    <!-- ============ 其他视图（共享 Header + Toolbar） ============ -->
+    <template v-else>
+
+      <!-- Header -->
+      <div class="px-8 pt-8 pb-0 flex-shrink-0" data-tauri-drag-region>
+        <div class="flex items-end justify-between mb-2">
+          <div>
+            <!-- LDL Page Title = 42px -->
+            <h1 class="text-[32px] font-bold text-text-primary tracking-tight leading-none mb-2">{{ pageTitle }}</h1>
+            <p class="text-[12px] text-text-muted leading-relaxed font-mono">{{ metaText }}</p>
+          </div>
         </div>
       </div>
-    </div>
 
-    <!-- Page Toolbar（LDL Region 03：搜索 / 筛选 / 排序 / 视图切换） -->
-    <div class="px-8 py-3 flex items-center gap-3 flex-shrink-0">
-      <div class="relative flex-1 max-w-[280px]">
-        <Search class="w-[14px] h-[14px] text-text-muted absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-        <input
-          v-model="searchInput"
-          @input="onSearchInput"
-          type="text"
-          placeholder="搜索歌曲、艺术家、专辑…"
-          class="w-full h-[32px] pl-8 pr-3 text-[12px] bg-bg-canvas border border-border-color rounded-[8px] text-text-primary placeholder:text-text-muted transition-colors-smooth focus:border-brand-orange/50"
-        />
+      <!-- Page Toolbar -->
+      <div class="px-8 py-3 flex items-center gap-3 flex-shrink-0">
+        <div class="relative flex-1 max-w-[280px]">
+          <Search class="w-[14px] h-[14px] text-text-muted absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+          <input
+            v-model="searchInput"
+            @input="onSearchInput"
+            type="text"
+            placeholder="搜索歌曲、艺术家、专辑…"
+            class="w-full h-[32px] pl-8 pr-3 text-[12px] bg-bg-canvas border border-border-color rounded-[8px] text-text-primary placeholder:text-text-muted transition-colors-smooth focus:border-brand-orange/50"
+          />
+        </div>
+
+        <div class="flex-1"></div>
+
+        <!-- 视图切换（仅轨道视图有用） -->
+        <div v-if="isTracksView" class="flex items-center gap-0 bg-bg-canvas border border-border-color rounded-[8px] p-[2px]">
+          <button
+            class="w-7 h-7 flex items-center justify-center rounded-[6px] transition-colors-smooth"
+            :class="viewMode === 'list' ? 'bg-list-selected text-text-primary' : 'text-text-muted hover:text-text-primary'"
+            @click="viewMode = 'list'"
+            title="列表视图"
+          >
+            <List class="w-[14px] h-[14px]" />
+          </button>
+          <button
+            class="w-7 h-7 flex items-center justify-center rounded-[6px] transition-colors-smooth"
+            :class="viewMode === 'grid' ? 'bg-list-selected text-text-primary' : 'text-text-muted hover:text-text-primary'"
+            @click="viewMode = 'grid'"
+            title="网格视图"
+          >
+            <LayoutGrid class="w-[14px] h-[14px]" />
+          </button>
+        </div>
       </div>
 
-      <div class="flex-1"></div>
+      <!-- ============ 专辑网格视图 ============ -->
+      <AlbumGrid
+        v-if="isAlbumGridView"
+        @select="onAlbumSelect"
+      />
 
-      <!-- 视图切换 -->
-      <div class="flex items-center gap-0 bg-bg-canvas border border-border-color rounded-[8px] p-[2px]">
-        <button
-          class="w-7 h-7 flex items-center justify-center rounded-[6px] transition-colors-smooth"
-          :class="viewMode === 'list' ? 'bg-list-selected text-text-primary' : 'text-text-muted hover:text-text-primary'"
-          @click="viewMode = 'list'"
-          title="列表视图"
-        >
-          <List class="w-[14px] h-[14px]" />
-        </button>
-        <button
-          class="w-7 h-7 flex items-center justify-center rounded-[6px] transition-colors-smooth"
-          :class="viewMode === 'grid' ? 'bg-list-selected text-text-primary' : 'text-text-muted hover:text-text-primary'"
-          @click="viewMode = 'grid'"
-          title="网格视图"
-        >
-          <LayoutGrid class="w-[14px] h-[14px]" />
-        </button>
-      </div>
-    </div>
+      <!-- ============ 轨道表格视图 ============ -->
+      <template v-else-if="isTracksView">
+        <div ref="scrollContainer" class="flex-1 overflow-y-auto px-8" @scroll="onListScroll">
 
-    <!-- ============ 轨道表格视图 ============ -->
-    <template v-if="isTracksView">
-      <div ref="scrollContainer" class="flex-1 overflow-y-auto px-8" @scroll="onListScroll">
+          <!-- 表头（sticky） -->
+          <div class="flex items-center text-[10px] text-text-muted uppercase tracking-wider py-2 border-b border-border-color sticky top-0 bg-bg-content z-10">
+            <div class="w-10 text-center shrink-0">#</div>
+            <div class="w-8 shrink-0"></div>
+            <div class="flex-[2] min-w-0 pl-1">标题</div>
+            <div class="flex-[1.5] min-w-0 hidden md:block">艺术家</div>
+            <div class="flex-[1.5] min-w-0 hidden lg:block">专辑</div>
+            <div class="w-[56px] text-right shrink-0 hidden xl:block">时长</div>
+            <div class="w-[50px] text-center shrink-0 hidden xl:block">格式</div>
+            <div class="w-8 shrink-0"></div>
+          </div>
 
-        <!-- 表头（sticky） -->
-        <div class="flex items-center text-[10px] text-text-muted uppercase tracking-wider py-2 border-b border-border-color sticky top-0 bg-bg-content z-10">
-          <div class="w-10 text-center shrink-0">#</div>
-          <div class="w-8 shrink-0"></div>
-          <div class="flex-[2] min-w-0 pl-1">标题</div>
-          <div class="flex-[1.5] min-w-0 hidden md:block">艺术家</div>
-          <div class="flex-[1.5] min-w-0 hidden lg:block">专辑</div>
-          <div class="w-[56px] text-right shrink-0 hidden xl:block">时长</div>
-          <div class="w-[50px] text-center shrink-0 hidden xl:block">格式</div>
-          <div class="w-8 shrink-0"></div>
-        </div>
+          <!-- 加载态（首次） -->
+          <div v-if="playerStore.isLoadingTracks && playerStore.tracks.length === 0" class="flex flex-col items-center justify-center py-20 gap-3 text-text-muted">
+            <Loader2 class="w-5 h-5 animate-spin text-brand-orange" />
+            <span class="text-[12px]">加载中…</span>
+          </div>
 
-        <!-- 加载态（首次） -->
-        <div v-if="playerStore.isLoadingTracks && playerStore.tracks.length === 0" class="flex flex-col items-center justify-center py-20 gap-3 text-text-muted">
-          <Loader2 class="w-5 h-5 animate-spin text-brand-orange" />
-          <span class="text-[12px]">加载中…</span>
-        </div>
+          <!-- 空态 -->
+          <div v-else-if="playerStore.tracks.length === 0" class="flex flex-col items-center justify-center py-20 gap-3 text-text-muted">
+            <Music class="w-8 h-8 text-text-disabled" />
+            <span class="text-[12px]">没有找到歌曲</span>
+          </div>
 
-        <!-- 空态 -->
-        <div v-else-if="playerStore.tracks.length === 0" class="flex flex-col items-center justify-center py-20 gap-3 text-text-muted">
-          <Music class="w-8 h-8 text-text-disabled" />
-          <span class="text-[12px]">没有找到歌曲</span>
-        </div>
+          <!-- 错误态 -->
+          <div v-else-if="playerStore.isErrorTracks" class="flex flex-col items-center justify-center py-20 gap-3 text-text-muted">
+            <span class="text-[12px]">加载失败，请稍后重试</span>
+          </div>
 
-        <!-- 错误态 -->
-        <div v-else-if="playerStore.isErrorTracks" class="flex flex-col items-center justify-center py-20 gap-3 text-text-muted">
-          <span class="text-[12px]">加载失败，请稍后重试</span>
-        </div>
+          <!-- 虚拟列表 -->
+          <div v-else :style="{ height: totalHeight + 'px', position: 'relative' }">
+            <div :style="{ transform: `translateY(${offsetY}px)` }">
+              <div
+                v-for="{ index, data: song } in visibleItems"
+                :key="song.id"
+                class="flex items-center hover:bg-list-hover transition-colors-smooth group cursor-pointer relative"
+                :style="{ height: ROW_HEIGHT + 'px' }"
+                :class="{
+                  'playing-row bg-list-selected': isPlayingTrack(song.id),
+                }"
+                @dblclick="playSong(index)"
+              >
+                <!-- 序号 / 播放图标 -->
+                <div class="w-10 text-center shrink-0 text-[12px] font-mono">
+                  <span v-if="isPlayingTrack(song.id)" class="text-brand-orange inline-flex items-center justify-center">
+                    <Loader2 v-if="playerStore.isPlaying" class="w-[14px] h-[14px] animate-spin" />
+                    <Play v-else class="w-[12px] h-[12px] fill-current" />
+                  </span>
+                  <template v-else>
+                    <span class="text-text-muted group-hover:hidden tabular-nums">{{ String(index + 1).padStart(2, '0') }}</span>
+                    <Play class="w-[12px] h-[12px] fill-current mx-auto hidden group-hover:block text-text-secondary" />
+                  </template>
+                </div>
 
-        <!-- 虚拟列表 -->
-        <div v-else :style="{ height: totalHeight + 'px', position: 'relative' }">
-          <div :style="{ transform: `translateY(${offsetY}px)` }">
-            <div
-              v-for="{ index, data: song } in visibleItems"
-              :key="song.id"
-              class="flex items-center hover:bg-list-hover transition-colors-smooth group cursor-pointer relative"
-              :style="{ height: ROW_HEIGHT + 'px' }"
-              :class="{
-                'playing-row bg-list-selected': isPlayingTrack(song.id),
-              }"
-              @dblclick="playSong(index)"
-            >
-              <!-- 序号 / 播放图标 -->
-              <div class="w-10 text-center shrink-0 text-[12px] font-mono">
-                <span v-if="isPlayingTrack(song.id)" class="text-brand-orange inline-flex items-center justify-center">
-                  <Loader2 v-if="playerStore.isPlaying" class="w-[14px] h-[14px] animate-spin" />
-                  <Play v-else class="w-[12px] h-[12px] fill-current" />
-                </span>
-                <template v-else>
-                  <span class="text-text-muted group-hover:hidden tabular-nums">{{ String(index + 1).padStart(2, '0') }}</span>
-                  <Play class="w-[12px] h-[12px] fill-current mx-auto hidden group-hover:block text-text-secondary" />
-                </template>
-              </div>
+                <!-- 收藏 -->
+                <div class="w-8 shrink-0 flex items-center justify-center">
+                  <Heart
+                    v-if="song.isFavorite"
+                    class="w-[14px] h-[14px] text-brand-orange fill-current cursor-pointer"
+                    @click="toggleFav(song.id, $event)"
+                  />
+                  <Heart
+                    v-else
+                    class="w-[14px] h-[14px] text-text-disabled opacity-0 group-hover:opacity-60 transition-opacity hover:!opacity-100 hover:!text-brand-orange cursor-pointer"
+                    @click="toggleFav(song.id, $event)"
+                  />
+                </div>
 
-              <!-- 收藏 -->
-              <div class="w-8 shrink-0 flex items-center justify-center">
-                <Heart
-                  v-if="song.isFavorite"
-                  class="w-[14px] h-[14px] text-brand-orange fill-current cursor-pointer"
-                  @click="toggleFav(song.id, $event)"
-                />
-                <Heart
-                  v-else
-                  class="w-[14px] h-[14px] text-text-disabled opacity-0 group-hover:opacity-60 transition-opacity hover:!opacity-100 hover:!text-brand-orange cursor-pointer"
-                  @click="toggleFav(song.id, $event)"
-                />
-              </div>
+                <!-- 标题 -->
+                <div class="flex-[2] min-w-0 pl-1">
+                  <span class="text-[13px] truncate block" :class="isPlayingTrack(song.id) ? 'text-brand-orange font-semibold' : 'text-text-primary font-medium'">
+                    {{ song.title }}
+                  </span>
+                </div>
 
-              <!-- 标题 -->
-              <div class="flex-[2] min-w-0 pl-1">
-                <span class="text-[13px] truncate block" :class="isPlayingTrack(song.id) ? 'text-brand-orange font-semibold' : 'text-text-primary font-medium'">
-                  {{ song.title }}
-                </span>
-              </div>
+                <!-- 艺术家 -->
+                <div class="flex-[1.5] min-w-0 hidden md:block text-[13px] text-text-secondary truncate">{{ song.artist }}</div>
 
-              <!-- 艺术家 -->
-              <div class="flex-[1.5] min-w-0 hidden md:block text-[13px] text-text-secondary truncate">{{ song.artist }}</div>
+                <!-- 专辑（非斜体） -->
+                <div class="flex-[1.5] min-w-0 hidden lg:block text-[13px] text-text-secondary truncate">{{ song.album }}</div>
 
-              <!-- 专辑（非斜体） -->
-              <div class="flex-[1.5] min-w-0 hidden lg:block text-[13px] text-text-secondary truncate">{{ song.album }}</div>
+                <!-- 时长 -->
+                <div class="w-[56px] text-right shrink-0 hidden xl:block text-[12px] font-mono text-text-muted tabular-nums">{{ song.duration }}</div>
 
-              <!-- 时长 -->
-              <div class="w-[56px] text-right shrink-0 hidden xl:block text-[12px] font-mono text-text-muted tabular-nums">{{ song.duration }}</div>
+                <!-- 格式 -->
+                <div class="w-[50px] text-center shrink-0 hidden xl:block">
+                  <span class="text-[10px] font-mono text-text-muted uppercase">{{ song.format }}</span>
+                </div>
 
-              <!-- 格式 -->
-              <div class="w-[50px] text-center shrink-0 hidden xl:block">
-                <span class="text-[10px] font-mono text-text-muted uppercase">{{ song.format }}</span>
-              </div>
-
-              <!-- more -->
-              <div class="w-8 shrink-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                <MoreHorizontal class="w-4 h-4 text-text-muted" />
+                <!-- more -->
+                <div class="w-8 shrink-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                  <MoreHorizontal class="w-4 h-4 text-text-muted" />
+                </div>
               </div>
             </div>
           </div>
-        </div>
 
-        <!-- 增量加载指示 -->
-        <div v-if="playerStore.isLoadingTracks && playerStore.tracks.length > 0" class="flex items-center justify-center py-4 text-text-muted">
-          <Loader2 class="w-3.5 h-3.5 animate-spin mr-2" />
-          <span class="text-[11px]">加载更多…</span>
-        </div>
+          <!-- 增量加载指示 -->
+          <div v-if="playerStore.isLoadingTracks && playerStore.tracks.length > 0" class="flex items-center justify-center py-4 text-text-muted">
+            <Loader2 class="w-3.5 h-3.5 animate-spin mr-2" />
+            <span class="text-[11px]">加载更多…</span>
+          </div>
 
-        <!-- Footer Status -->
-        <div v-if="playerStore.tracks.length > 0" class="flex items-center justify-between py-4 border-t border-border-color mt-2 text-[11px] text-text-muted font-mono">
-          <span>{{ trackCount.toLocaleString() }} 首歌曲</span>
-          <span>双击播放</span>
-        </div>
+          <!-- Footer Status -->
+          <div v-if="playerStore.tracks.length > 0" class="flex items-center justify-between py-4 border-t border-border-color mt-2 text-[11px] text-text-muted font-mono">
+            <span>{{ trackCount.toLocaleString() }} 首歌曲</span>
+            <span>双击播放</span>
+          </div>
 
+        </div>
+      </template>
+
+      <!-- ============ 占位：艺术家等未实现视图 ============ -->
+      <div v-else class="flex-1 flex flex-col items-center justify-center gap-3 text-text-muted px-8">
+        <LayoutGrid class="w-8 h-8 text-text-disabled" />
+        <p class="text-[13px]">{{ pageTitle }}视图</p>
+        <p class="text-[11px] text-text-muted/70">该页面的视图将在后续迭代中接入。</p>
       </div>
+
     </template>
-
-    <!-- ============ 占位：专辑 / 艺术家等非轨道视图 ============ -->
-    <div v-else class="flex-1 flex flex-col items-center justify-center gap-3 text-text-muted px-8">
-      <LayoutGrid class="w-8 h-8 text-text-disabled" />
-      <p class="text-[13px]">{{ pageTitle }}视图</p>
-      <p class="text-[11px] text-text-muted/70">该页面的网格视图将在后续迭代中接入。</p>
-    </div>
-
   </div>
 </template>
