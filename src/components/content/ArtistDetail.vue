@@ -60,6 +60,7 @@ function toggleFav(trackId: number, e: Event) {
 }
 
 function selectAlbum(albumId: number) {
+  playerStore.activeLibraryTab = '专辑';
   playerStore.activeAlbumId = albumId;
 }
 
@@ -218,13 +219,13 @@ function getColorClass(color: string): string {
               class="group cursor-pointer"
               @click="selectAlbum(album.id)"
             >
-              <div
-                class="w-full aspect-square rounded-[10px] mb-3 overflow-hidden flex-shrink-0 bg-gradient-to-br flex items-center justify-center"
-                :class="getColorClass(album.coverColor)"
-              >
-                <img v-if="album.cover_thumb" :src="album.cover_thumb" class="w-full h-full object-cover" alt="cover" />
-                <Disc3 v-else class="w-10 h-10 text-white/60" />
-                <div class="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors-smooth rounded-[10px]"></div>
+          <div
+            class="relative w-full aspect-square rounded-[10px] mb-3 overflow-hidden flex-shrink-0 bg-gradient-to-br flex items-center justify-center"
+            :class="getColorClass(album.coverColor)"
+          >
+            <img v-if="album.cover_thumb" :src="album.cover_thumb" class="w-full h-full object-cover" alt="cover" />
+            <Disc3 v-else class="w-10 h-10 text-white/60" />
+            <div class="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors-smooth rounded-[10px] pointer-events-none"></div>
               </div>
 
               <p class="text-[15px] text-text-primary font-medium truncate leading-tight mb-1">{{ album.title }}</p>
