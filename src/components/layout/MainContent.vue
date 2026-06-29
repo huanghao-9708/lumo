@@ -7,6 +7,9 @@ import { usePlayerStore, type Album } from '../../stores/player';
 import { useVirtualList } from '../../composables/useVirtualList';
 import AlbumGrid from '../content/AlbumGrid.vue';
 import AlbumDetail from '../content/AlbumDetail.vue';
+import ArtistGrid from '../content/ArtistGrid.vue';
+import ArtistDetail from '../content/ArtistDetail.vue';
+import FolderView from '../content/FolderView.vue';
 import FooterStatus from '../shared/FooterStatus.vue';
 
 const playerStore = usePlayerStore();
@@ -34,6 +37,7 @@ const pageTitle = computed(() => {
     case '收藏': return '我喜欢的音乐';
     case '专辑': return '专辑';
     case '艺术家': return '艺术家';
+    case '文件夹': return '文件夹';
     default: return '全部歌曲';
   }
 });
@@ -45,6 +49,8 @@ const trackCount = computed(() => {
 const metaText = computed(() => {
   const n = trackCount.value;
   if (playerStore.activeLibraryTab === '专辑') return `${n.toLocaleString()} 张专辑`;
+  if (playerStore.activeLibraryTab === '艺术家') return `${playerStore.artists.length.toLocaleString()} 位艺术家`;
+  if (playerStore.activeLibraryTab === '文件夹') return `${playerStore.localSources.length} 个数据源`;
   return `${n.toLocaleString()} 首歌曲`;
 });
 
@@ -64,6 +70,16 @@ const isAlbumDetailView = computed(() => {
 const isTracksView = computed(() => {
   return ['全部歌曲', '最近播放', '收藏', '播放列表'].includes(playerStore.activeLibraryTab)
     || playerStore.activePlaylistId !== null;
+});
+
+const isArtistGridView = computed(() => {
+  return playerStore.activeLibraryTab === '艺术家' && !playerStore.activeArtistId;
+});
+const isArtistDetailView = computed(() => {
+  return playerStore.activeLibraryTab === '艺术家' && !!playerStore.activeArtistId;
+});
+const isFolderView = computed(() => {
+  return playerStore.activeLibraryTab === '文件夹';
 });
 
 /* ============ 轨道列表相关 ============ */
@@ -301,12 +317,14 @@ onMounted(() => {
         </div>
       </template>
 
-      <!-- ============ 占位：艺术家等未实现视图 ============ -->
-      <div v-else class="flex-1 flex flex-col items-center justify-center gap-3 text-text-muted px-8">
-        <LayoutGrid class="w-8 h-8 text-text-disabled" />
-        <p class="text-[13px]">{{ pageTitle }}视图</p>
-        <p class="text-[11px] text-text-muted/70">该页面的视图将在后续迭代中接入。</p>
-      </div>
+      <!-- ============ 艺术家网格视图 ============ -->
+      <ArtistGrid v-if="isArtistGridView" />
+
+      <!-- ============ 艺术家详情视图 ============ -->
+      <ArtistDetail v-if="isArtistDetailView" :artist-id="playerStore.activeArtistId" />
+
+      <!-- ============ 文件夹视图 ============ -->
+      <FolderView v-if="isFolderView" />
 
     </template>
   </div>
