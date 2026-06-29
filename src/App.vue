@@ -104,15 +104,12 @@ onUnmounted(() => {
         <div class="h-px w-full bg-border-color shrink-0"></div>
 
         <!-- Content & Inspector Container -->
-        <div class="flex-1 flex overflow-hidden">
-          
+        <div class="flex-1 flex overflow-hidden relative">
+
           <!-- Region 03: Content Area (flex-1) -->
           <MainContent />
 
-          <!-- Divider C (Content ↓ Inspector) -->
-          <div class="w-px h-full bg-border-color shrink-0" v-if="uiStore.isRightSidebarVisible"></div>
-
-          <!-- Region 04: Inspector Panel (w: 360px) -->
+          <!-- Region 04: Inspector Panel (浮层，不占内容区空间) -->
           <SidebarRight />
         </div>
       </div>

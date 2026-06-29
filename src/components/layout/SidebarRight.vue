@@ -50,7 +50,7 @@ function toggleFav() {
 </script>
 
 <template>
-  <div v-if="uiStore.isRightSidebarVisible" class="hidden xl:flex w-[360px] h-full bg-bg-canvas flex-col flex-shrink-0 select-none">
+  <div v-if="uiStore.isRightSidebarVisible" class="absolute right-0 top-0 h-full w-[360px] bg-bg-canvas flex-col z-20 flex border-l border-border-color shadow-[-4px_0_16px_rgba(0,0,0,0.12)] dark:shadow-[-4px_0_16px_rgba(0,0,0,0.3)]">
 
     <!-- Top Tabs -->
     <div class="relative h-[60px] flex-shrink-0" data-tauri-drag-region>
