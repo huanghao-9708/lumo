@@ -4,6 +4,7 @@ import { Play, Loader2, Disc3 } from 'lucide-vue-next';
 import { usePlayerStore, type Album } from '../../stores/player';
 import { getArtworkUrl } from '../../utils';
 import { libraryGetAlbumTracks } from '../../api/library';
+import FooterStatus from '../shared/FooterStatus.vue';
 
 const playerStore = usePlayerStore();
 
@@ -108,7 +109,7 @@ onBeforeUnmount(() => {
       <div
         v-else
         class="grid gap-6 pb-6"
-        style="grid-template-columns: repeat(5, 1fr);"
+        style="grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));"
       >
         <div
           v-for="album in playerStore.albums"
@@ -128,13 +129,13 @@ onBeforeUnmount(() => {
               class="w-full h-full object-cover"
               loading="lazy"
             />
-            <div v-else class="w-full h-full flex items-center justify-center">
-              <div class="w-full h-full" :class="album.coverColor || 'from-gray-500 to-gray-700'"></div>
+            <div v-else class="w-full h-full flex items-center justify-center bg-bg-hover">
+              <Disc3 class="w-10 h-10 text-text-disabled" aria-hidden="true" />
             </div>
 
             <!-- 悬浮播放按钮 -->
             <div
-              class="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors-smooth flex items-center justify-center opacity-0 group-hover:opacity-100"
+              class="absolute inset-0 bg-black/0 group-hover:bg-black/20 dark:group-hover:bg-black/40 transition-colors-smooth flex items-center justify-center opacity-0 group-hover:opacity-100"
               @click.stop="playAlbum(album)"
             >
               <div class="w-10 h-10 rounded-full bg-brand-orange text-white flex items-center justify-center shadow-lg">
@@ -168,10 +169,7 @@ onBeforeUnmount(() => {
       </div>
 
       <!-- Footer Status -->
-      <div class="flex items-center justify-between py-4 border-t border-border-color mt-2 text-[11px] text-text-muted font-mono">
-        <span>{{ totalCount.toLocaleString() }} 张专辑</span>
-        <span>双击播放</span>
-      </div>
+      <FooterStatus :count="`${totalCount.toLocaleString()} 张专辑`" />
 
     </div>
 

@@ -221,7 +221,7 @@ if (typeof window !== 'undefined') {
       </div>
 
       <!-- 进度条（可拖拽） -->
-      <div class="w-full flex items-center gap-3 max-w-md">
+      <div class="w-full flex items-center gap-3 max-w-2xl">
         <span class="text-[10px] font-mono text-text-muted w-9 text-right tabular-nums">{{ currentTimeText }}</span>
         <div
           ref="progressRef"
@@ -287,7 +287,7 @@ if (typeof window !== 'undefined') {
           </div>
         </div>
 
-        <div class="flex justify-between w-14 mt-1 text-[8px] text-text-muted font-mono tabular-nums">
+          <div class="flex justify-between w-14 mt-1 text-[9px] text-text-muted font-mono tabular-nums">
           <span>0</span>
           <span class="text-text-primary font-bold">{{ playerStore.volume }}</span>
           <span>100</span>

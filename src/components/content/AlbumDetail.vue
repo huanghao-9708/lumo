@@ -1,17 +1,13 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import {
-  Play, Shuffle, Loader2, Disc3, Heart, MoreHorizontal, Clock, ArrowLeft,
+  Play, Shuffle, Loader2, Disc3, Heart, MoreHorizontal, Clock,
 } from 'lucide-vue-next';
 import { usePlayerStore, type Track } from '../../stores/player';
 import { useArtworkSrc } from '../../composables/useArtworkSrc';
 
 const props = defineProps<{
   albumId: number | null;
-}>();
-
-const emit = defineEmits<{
-  (e: 'back'): void;
 }>();
 
 const playerStore = usePlayerStore();
@@ -94,15 +90,6 @@ function toggleFav(trackId: number, e: Event) {
     <template v-else-if="album">
       <!-- 专辑头部 -->
       <div class="px-8 pt-8 pb-4 flex-shrink-0">
-        <!-- 返回按钮 -->
-        <button
-          class="flex items-center gap-1 text-[12px] text-text-muted hover:text-text-primary transition-colors-smooth mb-4"
-          @click="emit('back')"
-        >
-          <ArrowLeft class="w-3.5 h-3.5" />
-          <span>返回</span>
-        </button>
-
         <div class="flex items-start gap-8">
           <!-- 封面（~180px） -->
           <div class="w-[180px] h-[180px] rounded-[10px] overflow-hidden flex-shrink-0 bg-bg-hover flex items-center justify-center">
@@ -149,7 +136,7 @@ function toggleFav(trackId: number, e: Event) {
           <div class="w-10 text-center shrink-0">#</div>
           <div class="w-8 shrink-0"></div>
           <div class="flex-[2] min-w-0 pl-1">标题</div>
-          <div class="flex-[1.5] min-w-0 hidden md:block">艺术家</div>
+          <div class="flex-[1.5] min-w-0 hidden sm:block">艺术家</div>
           <div class="w-[56px] text-right shrink-0">
             <Clock class="w-[12px] h-[12px] inline-block" />
           </div>
@@ -206,7 +193,7 @@ function toggleFav(trackId: number, e: Event) {
           </div>
 
           <!-- 艺术家 -->
-          <div class="flex-[1.5] min-w-0 hidden md:block text-[13px] text-text-secondary truncate">{{ track.artist }}</div>
+          <div class="flex-[1.5] min-w-0 hidden sm:block text-[13px] text-text-secondary truncate">{{ track.artist }}</div>
 
           <!-- 时长 -->
           <div class="w-[56px] text-right shrink-0 text-[12px] font-mono text-text-muted tabular-nums">{{ track.duration }}</div>

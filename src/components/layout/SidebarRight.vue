@@ -87,7 +87,7 @@ function toggleFav() {
       <template v-else>
         <div class="flex-1 overflow-y-auto px-6 pt-4 pb-4 flex flex-col min-h-0">
           <!-- Album Cover -->
-          <div class="w-full aspect-square bg-bg-hover rounded-[10px] mb-4 overflow-hidden flex-shrink-0 flex items-center justify-center">
+          <div class="w-full aspect-square max-h-[40vh] bg-bg-hover rounded-[10px] mb-4 overflow-hidden flex-shrink-0 flex items-center justify-center">
             <img v-if="coverSrc" :src="coverSrc" class="w-full h-full object-cover" alt="cover" />
             <Disc3 v-else class="w-10 h-10 text-text-disabled" />
           </div>

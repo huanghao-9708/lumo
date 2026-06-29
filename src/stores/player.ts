@@ -278,11 +278,17 @@ export const usePlayerStore = defineStore("player", () => {
   }
   const historyStack = ref<HistoryState[]>([]);
   const isGoingBack = ref(false);
+  const forwardStack = ref<HistoryState[]>([]);
+  const isGoingForward = ref(false);
 
   // 监听导航状态变化以记录历史
   watch([activeLibraryTab, activeAlbumId, activeArtistId, activePlaylistId], (_newVals, oldVals) => {
     if (isGoingBack.value) {
       isGoingBack.value = false;
+      return;
+    }
+    if (isGoingForward.value) {
+      isGoingForward.value = false;
       return;
     }
     const [oldTab, oldAlbumId, oldArtistId, oldPlaylistId] = oldVals;
@@ -294,14 +300,39 @@ export const usePlayerStore = defineStore("player", () => {
         playlistId: oldPlaylistId as number | null
       });
     }
+    forwardStack.value = [];
   });
 
   const canGoBack = computed(() => historyStack.value.length > 0);
+  const canGoForward = computed(() => forwardStack.value.length > 0);
 
   function goBack() {
     if (historyStack.value.length > 0) {
+      forwardStack.value.push({
+        tab: activeLibraryTab.value,
+        albumId: activeAlbumId.value,
+        artistId: activeArtistId.value,
+        playlistId: activePlaylistId.value
+      });
       isGoingBack.value = true;
       const state = historyStack.value.pop()!;
+      activeLibraryTab.value = state.tab;
+      activeAlbumId.value = state.albumId;
+      activeArtistId.value = state.artistId;
+      activePlaylistId.value = state.playlistId;
+    }
+  }
+
+  function goForward() {
+    if (forwardStack.value.length > 0) {
+      historyStack.value.push({
+        tab: activeLibraryTab.value,
+        albumId: activeAlbumId.value,
+        artistId: activeArtistId.value,
+        playlistId: activePlaylistId.value
+      });
+      isGoingForward.value = true;
+      const state = forwardStack.value.pop()!;
       activeLibraryTab.value = state.tab;
       activeAlbumId.value = state.albumId;
       activeArtistId.value = state.artistId;
@@ -1345,7 +1376,9 @@ const albums = shallowRef<Album[]>([]);
     addFolderToPlaylist,
     searchQuery,
     canGoBack,
+    canGoForward,
     goBack,
+    goForward,
     currentTrack,
     currentAlbumDetails,
     currentArtistDetails,

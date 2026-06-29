@@ -7,6 +7,7 @@ import { usePlayerStore, type Album } from '../../stores/player';
 import { useVirtualList } from '../../composables/useVirtualList';
 import AlbumGrid from '../content/AlbumGrid.vue';
 import AlbumDetail from '../content/AlbumDetail.vue';
+import FooterStatus from '../shared/FooterStatus.vue';
 
 const playerStore = usePlayerStore();
 
@@ -106,10 +107,6 @@ function onAlbumSelect(album: Album) {
   playerStore.activeAlbumId = album.id;
 }
 
-function onAlbumDetailBack() {
-  playerStore.activeAlbumId = null;
-}
-
 /* ============ Tab 切换时重新拉取数据 ============ */
 function loadForCurrentTab() {
   const tab = playerStore.activeLibraryTab;
@@ -135,7 +132,6 @@ onMounted(() => {
     <template v-if="isAlbumDetailView">
       <AlbumDetail
         :album-id="playerStore.activeAlbumId"
-        @back="onAlbumDetailBack"
       />
     </template>
 
@@ -143,31 +139,28 @@ onMounted(() => {
     <template v-else>
 
       <!-- Header -->
-      <div class="px-8 pt-8 pb-0 flex-shrink-0" data-tauri-drag-region>
+      <div class="px-8 pt-6 pb-0 flex-shrink-0" data-tauri-drag-region>
         <div class="flex items-end justify-between mb-2">
           <div>
             <!-- LDL Page Title = 42px -->
             <h1 class="text-[32px] font-bold text-text-primary tracking-tight leading-none mb-2">{{ pageTitle }}</h1>
             <p class="text-[12px] text-text-muted leading-relaxed font-mono">{{ metaText }}</p>
           </div>
+          <div class="relative w-[240px]">
+            <Search class="w-[14px] h-[14px] text-text-muted absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <input
+              v-model="searchInput"
+              @input="onSearchInput"
+              type="text"
+              placeholder="搜索歌曲、艺术家、专辑…"
+              class="w-full h-[32px] pl-8 pr-3 text-[12px] bg-bg-canvas border border-border-color rounded-[8px] text-text-primary placeholder:text-text-muted transition-colors-smooth focus:border-brand-orange/50"
+            />
+          </div>
         </div>
       </div>
 
       <!-- Page Toolbar -->
-      <div class="px-8 py-3 flex items-center gap-3 flex-shrink-0">
-        <div class="relative flex-1 max-w-[280px]">
-          <Search class="w-[14px] h-[14px] text-text-muted absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-          <input
-            v-model="searchInput"
-            @input="onSearchInput"
-            type="text"
-            placeholder="搜索歌曲、艺术家、专辑…"
-            class="w-full h-[32px] pl-8 pr-3 text-[12px] bg-bg-canvas border border-border-color rounded-[8px] text-text-primary placeholder:text-text-muted transition-colors-smooth focus:border-brand-orange/50"
-          />
-        </div>
-
-        <div class="flex-1"></div>
-
+      <div class="px-8 py-3 flex items-center justify-end flex-shrink-0">
         <!-- 视图切换（仅轨道视图有用） -->
         <div v-if="isTracksView" class="flex items-center gap-0 bg-bg-canvas border border-border-color rounded-[8px] p-[2px]">
           <button
@@ -204,10 +197,10 @@ onMounted(() => {
             <div class="w-10 text-center shrink-0">#</div>
             <div class="w-8 shrink-0"></div>
             <div class="flex-[2] min-w-0 pl-1">标题</div>
-            <div class="flex-[1.5] min-w-0 hidden md:block">艺术家</div>
-            <div class="flex-[1.5] min-w-0 hidden lg:block">专辑</div>
-            <div class="w-[56px] text-right shrink-0 hidden xl:block">时长</div>
-            <div class="w-[50px] text-center shrink-0 hidden xl:block">格式</div>
+            <div class="flex-[1.5] min-w-0 hidden sm:block">艺术家</div>
+            <div class="flex-[1.5] min-w-0 hidden md:block">专辑</div>
+            <div class="w-[56px] text-right shrink-0 hidden lg:block">时长</div>
+            <div class="w-[50px] text-center shrink-0 hidden lg:block">格式</div>
             <div class="w-8 shrink-0"></div>
           </div>
 
@@ -275,16 +268,16 @@ onMounted(() => {
                 </div>
 
                 <!-- 艺术家 -->
-                <div class="flex-[1.5] min-w-0 hidden md:block text-[13px] text-text-secondary truncate">{{ song.artist }}</div>
+                <div class="flex-[1.5] min-w-0 hidden sm:block text-[13px] text-text-secondary truncate">{{ song.artist }}</div>
 
                 <!-- 专辑（非斜体） -->
-                <div class="flex-[1.5] min-w-0 hidden lg:block text-[13px] text-text-secondary truncate">{{ song.album }}</div>
+                <div class="flex-[1.5] min-w-0 hidden md:block text-[13px] text-text-secondary truncate">{{ song.album }}</div>
 
                 <!-- 时长 -->
-                <div class="w-[56px] text-right shrink-0 hidden xl:block text-[12px] font-mono text-text-muted tabular-nums">{{ song.duration }}</div>
+                <div class="w-[56px] text-right shrink-0 hidden lg:block text-[12px] font-mono text-text-muted tabular-nums">{{ song.duration }}</div>
 
                 <!-- 格式 -->
-                <div class="w-[50px] text-center shrink-0 hidden xl:block">
+                <div class="w-[50px] text-center shrink-0 hidden lg:block">
                   <span class="text-[10px] font-mono text-text-muted uppercase">{{ song.format }}</span>
                 </div>
 
@@ -303,10 +296,7 @@ onMounted(() => {
           </div>
 
           <!-- Footer Status -->
-          <div v-if="playerStore.tracks.length > 0" class="flex items-center justify-between py-4 border-t border-border-color mt-2 text-[11px] text-text-muted font-mono">
-            <span>{{ trackCount.toLocaleString() }} 首歌曲</span>
-            <span>双击播放</span>
-          </div>
+          <FooterStatus v-if="playerStore.tracks.length > 0" :count="`${trackCount.toLocaleString()} 首歌曲`" />
 
         </div>
       </template>
