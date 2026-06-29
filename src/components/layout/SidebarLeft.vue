@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import {
-  Activity, Disc, User, Heart, Folder, Clock, ListMusic, List, Plus,
+  Activity, Disc, User, Heart, Folder, Clock, ListMusic, List, Plus, Star,
 } from 'lucide-vue-next';
 import { usePlayerStore } from '../../stores/player';
 
@@ -15,6 +15,12 @@ const libraryNav = computed(() => [
   { key: '文件夹', label: '文件夹', icon: Folder, count: playerStore.localSources.length },
   { key: '最近播放', label: '最近播放', icon: Clock, count: null },
   { key: '播放列表', label: '播放列表', icon: ListMusic, count: playerStore.playlists.length },
+]);
+
+const favoritesNav = computed(() => [
+  { key: '喜欢的音乐', label: '喜欢的音乐', icon: Heart, count: playerStore.tracks.length > 0 ? null : null },
+  { key: '收藏的专辑', label: '收藏的专辑', icon: Disc, count: playerStore.favoriteAlbums.length },
+  { key: '收藏的歌手', label: '收藏的歌手', icon: Star, count: playerStore.favoriteArtists.length },
 ]);
 
 function isActive(key: string): boolean {
@@ -57,6 +63,37 @@ function selectPlaylist(id: number) {
 
         <ul class="space-y-[2px]">
           <li v-for="item in libraryNav" :key="item.key">
+            <a
+              href="#"
+              class="flex items-center px-3 py-[7px] rounded-[6px] transition-colors-smooth"
+              :class="isActive(item.key)
+                ? 'bg-list-selected text-text-primary'
+                : 'text-text-primary hover:bg-list-hover'"
+              @click.prevent="selectNav(item.key)"
+            >
+              <component
+                :is="item.icon"
+                class="w-[16px] h-[16px] mr-3 flex-shrink-0"
+                :class="isActive(item.key) ? 'text-brand-orange' : 'text-text-muted'"
+              />
+              <span class="text-[13px] flex-1" :class="isActive(item.key) ? 'font-medium' : ''">{{ item.label }}</span>
+              <span
+                v-if="item.count !== null && item.count > 0"
+                class="text-[11px] font-mono tabular-nums"
+                :class="isActive(item.key) ? 'text-text-secondary' : 'text-text-muted'"
+              >{{ item.count.toLocaleString() }}</span>
+              <div v-if="isActive(item.key)" class="w-[6px] h-[6px] rounded-full bg-brand-orange ml-2 flex-shrink-0"></div>
+            </a>
+          </li>
+        </ul>
+      </div>
+
+      <!-- FAVORITES -->
+      <div class="mb-6">
+        <h2 class="px-3 text-[10px] font-semibold text-text-muted mb-2 uppercase tracking-widest">Favorites</h2>
+
+        <ul class="space-y-[2px]">
+          <li v-for="item in favoritesNav" :key="item.key">
             <a
               href="#"
               class="flex items-center px-3 py-[7px] rounded-[6px] transition-colors-smooth"

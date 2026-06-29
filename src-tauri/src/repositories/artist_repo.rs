@@ -156,4 +156,39 @@ impl ArtistRepo {
             })
         }
 
+    pub fn get_favorite_artists(conn: &Connection) -> rusqlite::Result<Vec<ArtistDTO>> {
+            let mut stmt = conn.prepare("
+                SELECT
+                    ar.id, ar.name, ar.track_count
+                FROM favorite_artists fa
+                JOIN artists ar ON fa.artist_id = ar.id
+                ORDER BY fa.favorited_at DESC
+            ")?;
+            let rows = stmt.query_map([], |row| {
+                Ok(ArtistDTO {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    track_count: row.get(2)?,
+                })
+            })?;
+            let mut result = Vec::new();
+            for r in rows { result.push(r?); }
+            Ok(result)
+        }
+
+    pub fn toggle_favorite_artist(conn: &Connection, artist_id: i64, is_favorite: bool) -> rusqlite::Result<()> {
+            if is_favorite {
+                conn.execute(
+                    "INSERT OR IGNORE INTO favorite_artists (artist_id) VALUES (?1)",
+                    params![artist_id],
+                )?;
+            } else {
+                conn.execute(
+                    "DELETE FROM favorite_artists WHERE artist_id = ?1",
+                    params![artist_id],
+                )?;
+            }
+            Ok(())
+        }
+
 }

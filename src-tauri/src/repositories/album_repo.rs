@@ -108,6 +108,51 @@ impl AlbumRepo {
             Ok(result)
         }
 
+    pub fn get_favorite_albums(conn: &Connection) -> rusqlite::Result<Vec<AlbumDTO>> {
+            let mut stmt = conn.prepare("
+                SELECT
+                    al.id, al.title, ar.name AS artist_name,
+                    al.cover_artwork_id, al.track_count, aw.thumbnail_blob
+                FROM favorite_albums fa
+                JOIN albums al ON fa.album_id = al.id
+                LEFT JOIN artists ar ON al.album_artist_id = ar.id
+                LEFT JOIN artwork aw ON al.cover_artwork_id = aw.id
+                ORDER BY fa.favorited_at DESC
+            ")?;
+            let rows = stmt.query_map([], |row| {
+                let thumb: Option<Vec<u8>> = row.get(5)?;
+                let cover_thumbnail_base64 = thumb.map(|b| {
+                    format!("data:image/jpeg;base64,{}", general_purpose::STANDARD.encode(&b))
+                });
+                Ok(AlbumDTO {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    artist_name: row.get(2)?,
+                    cover_artwork_id: row.get(3)?,
+                    track_count: row.get(4)?,
+                    cover_thumbnail_base64,
+                })
+            })?;
+            let mut result = Vec::new();
+            for r in rows { result.push(r?); }
+            Ok(result)
+        }
+
+    pub fn toggle_favorite_album(conn: &Connection, album_id: i64, is_favorite: bool) -> rusqlite::Result<()> {
+            if is_favorite {
+                conn.execute(
+                    "INSERT OR IGNORE INTO favorite_albums (album_id) VALUES (?1)",
+                    params![album_id],
+                )?;
+            } else {
+                conn.execute(
+                    "DELETE FROM favorite_albums WHERE album_id = ?1",
+                    params![album_id],
+                )?;
+            }
+            Ok(())
+        }
+
     pub fn get_album_tracks(conn: &Connection, album_id: i64) -> rusqlite::Result<Vec<TrackDTO>> {
             let mut stmt = conn.prepare("
                 SELECT 

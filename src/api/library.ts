@@ -90,6 +90,22 @@ export function libraryGetFavoriteTracks(): Promise<TrackDTO[]> {
   return invoke('library_get_favorite_tracks');
 }
 
+export function libraryGetFavoriteAlbums(): Promise<AlbumDTO[]> {
+  return invoke('library_get_favorite_albums');
+}
+
+export function libraryGetFavoriteArtists(): Promise<ArtistDTO[]> {
+  return invoke('library_get_favorite_artists');
+}
+
+export function libraryToggleFavoriteAlbum(albumId: number, isFavorite: boolean): Promise<void> {
+  return invoke('library_toggle_favorite_album', { albumId, isFavorite });
+}
+
+export function libraryToggleFavoriteArtist(artistId: number, isFavorite: boolean): Promise<void> {
+  return invoke('library_toggle_favorite_artist', { artistId, isFavorite });
+}
+
 export function librarySavePlayQueue(trackIds: number[]): Promise<void> {
   return invoke('library_save_play_queue', { trackIds });
 }

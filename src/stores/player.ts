@@ -5,7 +5,7 @@ import { listen } from '@tauri-apps/api/event';
 import {
   libraryGetTracks, libraryGetAlbums, libraryGetAlbumCount, libraryGetArtists, libraryGetAlbumTracks, libraryGetArtistAlbums, libraryGetArtistAlbumCount, libraryGetArtistTracks, libraryGetArtistStats,
   libraryCreatePlaylist, libraryGetPlaylists, libraryAddToPlaylist, libraryGetPlaylistTracks, libraryDeletePlaylist, libraryRemovePlaylistItem, libraryAddFolderToPlaylist,
-  libraryToggleFavorite, libraryRecordPlay, libraryGetRecentlyPlayed, libraryGetFavoriteTracks, librarySavePlayQueue, libraryGetPlayQueue,
+  libraryToggleFavorite, libraryRecordPlay, libraryGetRecentlyPlayed, libraryGetFavoriteTracks, libraryGetFavoriteAlbums, libraryGetFavoriteArtists, libraryToggleFavoriteAlbum, libraryToggleFavoriteArtist, librarySavePlayQueue, libraryGetPlayQueue,
   libraryGetFolderContents
 , libraryGetLyrics, libraryGetTrackFileInfo } from '../api/library';
 import {
@@ -17,7 +17,7 @@ import {
 
 
 // ================= 后端 DTO 接口（与 Rust 端 models.rs 保持一致） =================
-import type { TrackDTO, ArtistDTO, PlaylistDTOBackend } from '../api/types';
+import type { TrackDTO, ArtistDTO, AlbumDTO, PlaylistDTOBackend } from '../api/types';
 
 // ================= 前端展示模型 =================
 
@@ -375,6 +375,10 @@ const albums = shallowRef<Album[]>([]);
   // 艺人数据
   const artists = ref<Artist[]>([]);
 
+  // 收藏的专辑和艺术家
+  const favoriteAlbums = ref<Album[]>([]);
+  const favoriteArtists = ref<Artist[]>([]);
+
   // 歌曲数据列表
   const tracks = ref<Track[]>([]);
 
@@ -542,6 +546,56 @@ const albums = shallowRef<Album[]>([]);
       const result: TrackDTO[] = await libraryGetFavoriteTracks();
       tracks.value = mapTrackList(result);
       hasMoreTracks.value = false;
+    } catch(e) {
+      console.error(e);
+    }
+  }
+
+  async function fetchFavoriteAlbums() {
+    try {
+      const result: AlbumDTO[] = await libraryGetFavoriteAlbums();
+      favoriteAlbums.value = result.map(a => ({
+        id: a.id,
+        title: a.title,
+        artist: a.artist_name || '未知艺人',
+        year: 0,
+        coverColor: getDeterministicColor(a.title || 'Unknown'),
+        cover_artwork_id: a.cover_artwork_id,
+        cover_thumb: a.cover_thumbnail_base64,
+        track_count: a.track_count,
+      }));
+    } catch(e) {
+      console.error(e);
+    }
+  }
+
+  async function fetchFavoriteArtists() {
+    try {
+      const result: ArtistDTO[] = await libraryGetFavoriteArtists();
+      favoriteArtists.value = result.map(a => ({
+        id: a.id,
+        name: a.name,
+        trackCount: a.track_count,
+        avatarColor: getDeterministicColor(a.name || 'Unknown'),
+      }));
+    } catch(e) {
+      console.error(e);
+    }
+  }
+
+  async function toggleFavoriteAlbum(albumId: number, isFavorite: boolean) {
+    try {
+      await libraryToggleFavoriteAlbum(albumId, isFavorite);
+      await fetchFavoriteAlbums();
+    } catch(e) {
+      console.error(e);
+    }
+  }
+
+  async function toggleFavoriteArtist(artistId: number, isFavorite: boolean) {
+    try {
+      await libraryToggleFavoriteArtist(artistId, isFavorite);
+      await fetchFavoriteArtists();
     } catch(e) {
       console.error(e);
     }
@@ -1382,6 +1436,12 @@ const albums = shallowRef<Album[]>([]);
     fetchPlaylistTracks,
     fetchRecentlyPlayed,
     fetchFavoriteTracks,
+    fetchFavoriteAlbums,
+    fetchFavoriteArtists,
+    favoriteAlbums,
+    favoriteArtists,
+    toggleFavoriteAlbum,
+    toggleFavoriteArtist,
     addToPlaylist,
     fetchSources,
     toggleFavorite,

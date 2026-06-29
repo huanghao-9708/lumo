@@ -154,6 +154,34 @@ pub fn library_get_favorite_tracks(db_state: State<'_, DbState>) -> Result<Vec<T
 }
 
 #[tauri::command]
+pub fn library_get_favorite_albums(db_state: State<'_, DbState>) -> Result<Vec<AlbumDTO>, AppError> {
+    let _trace = ipc_trace!("library_get_favorite_albums");
+    let conn = db_state.db.get()?;
+    crate::repositories::album_repo::AlbumRepo::get_favorite_albums(&conn).map_err(|e| e.into())
+}
+
+#[tauri::command]
+pub fn library_get_favorite_artists(db_state: State<'_, DbState>) -> Result<Vec<ArtistDTO>, AppError> {
+    let _trace = ipc_trace!("library_get_favorite_artists");
+    let conn = db_state.db.get()?;
+    crate::repositories::artist_repo::ArtistRepo::get_favorite_artists(&conn).map_err(|e| e.into())
+}
+
+#[tauri::command]
+pub fn library_toggle_favorite_album(db_state: State<'_, DbState>, album_id: i64, is_favorite: bool) -> Result<(), AppError> {
+    let _trace = ipc_trace!("library_toggle_favorite_album");
+    let conn = db_state.db.get()?;
+    crate::repositories::album_repo::AlbumRepo::toggle_favorite_album(&conn, album_id, is_favorite).map_err(|e| e.into())
+}
+
+#[tauri::command]
+pub fn library_toggle_favorite_artist(db_state: State<'_, DbState>, artist_id: i64, is_favorite: bool) -> Result<(), AppError> {
+    let _trace = ipc_trace!("library_toggle_favorite_artist");
+    let conn = db_state.db.get()?;
+    crate::repositories::artist_repo::ArtistRepo::toggle_favorite_artist(&conn, artist_id, is_favorite).map_err(|e| e.into())
+}
+
+#[tauri::command]
 pub fn library_get_lyrics(db_state: State<'_, DbState>, track_id: i64) -> Result<Option<String>, AppError> {
     let _trace = ipc_trace!("library_get_lyrics");
     use rusqlite::OptionalExtension;

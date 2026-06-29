@@ -10,6 +10,8 @@ import AlbumDetail from '../content/AlbumDetail.vue';
 import PlaylistDetail from '../content/PlaylistDetail.vue';
 import RecentlyPlayed from '../content/RecentlyPlayed.vue';
 import FavoritesView from '../content/FavoritesView.vue';
+import FavoriteAlbums from '../content/FavoriteAlbums.vue';
+import FavoriteArtists from '../content/FavoriteArtists.vue';
 import GlobalSearch from '../content/GlobalSearch.vue';
 import Settings from '../content/Settings.vue';
 import ArtistGrid from '../content/ArtistGrid.vue';
@@ -39,7 +41,9 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
 const pageTitle = computed(() => {
   switch (playerStore.activeLibraryTab) {
     case '最近播放': return '最近播放';
-    case '收藏': return '我喜欢的音乐';
+    case '喜欢的音乐': return '我喜欢的音乐';
+    case '收藏的专辑': return '收藏的专辑';
+    case '收藏的歌手': return '收藏的歌手';
     case '专辑': return '专辑';
     case '艺术家': return '艺术家';
     case '文件夹': return '文件夹';
@@ -58,6 +62,9 @@ const metaText = computed(() => {
   if (playerStore.activeLibraryTab === '专辑') return `${n.toLocaleString()} 张专辑`;
   if (playerStore.activeLibraryTab === '艺术家') return `${playerStore.artists.length.toLocaleString()} 位艺术家`;
   if (playerStore.activeLibraryTab === '文件夹') return `${playerStore.localSources.length} 个数据源`;
+  if (playerStore.activeLibraryTab === '喜欢的音乐') return `${playerStore.tracks.length.toLocaleString()} 首歌曲`;
+  if (playerStore.activeLibraryTab === '收藏的专辑') return `${playerStore.favoriteAlbums.length.toLocaleString()} 张专辑`;
+  if (playerStore.activeLibraryTab === '收藏的歌手') return `${playerStore.favoriteArtists.length.toLocaleString()} 位艺术家`;
   return `${n.toLocaleString()} 首歌曲`;
 });
 
@@ -99,6 +106,18 @@ const isArtistDetailView = computed(() => {
 });
 const isFolderView = computed(() => {
   return playerStore.activeLibraryTab === '文件夹';
+});
+
+const isFavoriteTracksView = computed(() => {
+  return playerStore.activeLibraryTab === '喜欢的音乐';
+});
+
+const isFavoriteAlbumsView = computed(() => {
+  return playerStore.activeLibraryTab === '收藏的专辑';
+});
+
+const isFavoriteArtistsView = computed(() => {
+  return playerStore.activeLibraryTab === '收藏的歌手';
 });
 
 /* ============ 轨道列表相关 ============ */
@@ -146,7 +165,9 @@ function onAlbumSelect(album: Album) {
 function loadForCurrentTab() {
   const tab = playerStore.activeLibraryTab;
   if (tab === '最近播放') playerStore.fetchRecentlyPlayed();
-  else if (tab === '收藏') playerStore.fetchFavoriteTracks();
+  else if (tab === '喜欢的音乐') playerStore.fetchFavoriteTracks();
+  else if (tab === '收藏的专辑') playerStore.fetchFavoriteAlbums();
+  else if (tab === '收藏的歌手') playerStore.fetchFavoriteArtists();
   else if (tab === '专辑') playerStore.fetchAlbums(true);
   else if (tab === '播放列表' && playerStore.activePlaylistId) return;
   else playerStore.fetchTracks(true);
@@ -360,8 +381,14 @@ onMounted(() => {
       <!-- ============ 最近播放视图 ============ -->
       <RecentlyPlayed v-if="isRecentlyPlayedView" />
 
-      <!-- ============ 收藏视图 ============ -->
-      <FavoritesView v-if="playerStore.activeLibraryTab === '收藏'" />
+      <!-- ============ 喜欢的音乐视图 ============ -->
+      <FavoritesView v-if="isFavoriteTracksView" />
+
+      <!-- ============ 收藏的专辑视图 ============ -->
+      <FavoriteAlbums v-if="isFavoriteAlbumsView" />
+
+      <!-- ============ 收藏的歌手视图 ============ -->
+      <FavoriteArtists v-if="isFavoriteArtistsView" />
 
     </template>
   </div>
