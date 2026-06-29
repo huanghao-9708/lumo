@@ -33,6 +33,7 @@ export interface Track {
   cover_artwork_id?: number | null;
   isFavorite: boolean;
   primary_file_id?: number | null;
+  playedAt?: string;
 }
 
 export interface Playlist {
@@ -130,6 +131,7 @@ export const usePlayerStore = defineStore("player", () => {
       cover_artwork_id: t.cover_artwork_id,
       isFavorite: t.is_favorite || false,
       primary_file_id: t.media_file_id,
+      playedAt: t.last_played_at ?? '',
     };
   }
 
@@ -162,6 +164,7 @@ export const usePlayerStore = defineStore("player", () => {
   const activeAlbumId = ref<number | null>(null);
   const activeArtistId = ref<number | null>(null);
   const activePlaylistId = ref<number | null>(null);
+  const globalSearchQuery = ref('');
 
   // 文件夹浏览状态
   const currentFolderContents = ref<FolderEntry[]>([]);
@@ -1392,6 +1395,7 @@ const albums = shallowRef<Album[]>([]);
     hasMoreFolderEntries,
     addFolderToPlaylist,
     searchQuery,
+    globalSearchQuery,
     canGoBack,
     canGoForward,
     goBack,

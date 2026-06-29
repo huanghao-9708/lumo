@@ -91,7 +91,8 @@ impl TrackRepo {
                 SELECT 
                     t.id, t.title, 
                     (SELECT GROUP_CONCAT(a.name, ', ') FROM track_artists ta JOIN artists a ON ta.artist_id = a.id WHERE ta.track_id = t.id ORDER BY ta.position) AS artist_name, 
-                    al.title AS album_title, m.duration_ms, m.file_ext, m.id AS media_file_id, ft.track_id IS NOT NULL AS is_favorite, al.cover_artwork_id
+                    al.title AS album_title, m.duration_ms, m.file_ext, m.id AS media_file_id, ft.track_id IS NOT NULL AS is_favorite, al.cover_artwork_id,
+                    t.last_played_at
                 FROM tracks t
                 LEFT JOIN albums al ON t.album_id = al.id
                 JOIN media_files m ON t.id = m.track_id
@@ -99,7 +100,20 @@ impl TrackRepo {
                 WHERE t.last_played_at IS NOT NULL
                 ORDER BY t.last_played_at DESC LIMIT ?1
             ")?;
-            let rows = stmt.query_map([limit], crate::repositories::map_track_row)?;
+            let rows = stmt.query_map([limit], |row| {
+                Ok(TrackDTO {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    artist_name: row.get(2)?,
+                    album_title: row.get(3)?,
+                    duration_ms: row.get(4)?,
+                    format: row.get(5)?,
+                    media_file_id: row.get(6)?,
+                    is_favorite: row.get(7)?,
+                    cover_artwork_id: row.get(8)?,
+                    last_played_at: row.get(9)?,
+                })
+            })?;
             let mut result = Vec::new();
             for r in rows { result.push(r?); }
             Ok(result)

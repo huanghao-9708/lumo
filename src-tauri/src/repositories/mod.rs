@@ -29,5 +29,6 @@ pub fn map_track_row(row: &rusqlite::Row) -> rusqlite::Result<TrackDTO> {
             media_file_id: row.get(6)?,
             is_favorite: row.get(7)?,
             cover_artwork_id: row.get(8)?,
+            last_played_at: None,
         })
     }

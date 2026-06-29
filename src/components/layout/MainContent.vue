@@ -7,6 +7,11 @@ import { usePlayerStore, type Album } from '../../stores/player';
 import { useVirtualList } from '../../composables/useVirtualList';
 import AlbumGrid from '../content/AlbumGrid.vue';
 import AlbumDetail from '../content/AlbumDetail.vue';
+import PlaylistDetail from '../content/PlaylistDetail.vue';
+import RecentlyPlayed from '../content/RecentlyPlayed.vue';
+import FavoritesView from '../content/FavoritesView.vue';
+import GlobalSearch from '../content/GlobalSearch.vue';
+import Settings from '../content/Settings.vue';
 import ArtistGrid from '../content/ArtistGrid.vue';
 import ArtistDetail from '../content/ArtistDetail.vue';
 import FolderView from '../content/FolderView.vue';
@@ -38,6 +43,8 @@ const pageTitle = computed(() => {
     case '专辑': return '专辑';
     case '艺术家': return '艺术家';
     case '文件夹': return '文件夹';
+    case '播放列表': return '播放列表';
+    case '设置': return '设置';
     default: return '全部歌曲';
   }
 });
@@ -66,10 +73,22 @@ const isAlbumDetailView = computed(() => {
   return playerStore.activeLibraryTab === '专辑' && !!playerStore.activeAlbumId;
 });
 
+// 歌单详情视图
+const isPlaylistDetailView = computed(() => {
+  return playerStore.activeLibraryTab === '播放列表' && !!playerStore.activePlaylistId;
+});
+
+const isRecentlyPlayedView = computed(() => {
+  return playerStore.activeLibraryTab === '最近播放';
+});
+
+const isGlobalSearchActive = computed(() => {
+  return playerStore.globalSearchQuery.trim().length > 0;
+});
+
 // 轨道表格视图
 const isTracksView = computed(() => {
-  return ['全部歌曲', '最近播放', '收藏', '播放列表'].includes(playerStore.activeLibraryTab)
-    || playerStore.activePlaylistId !== null;
+  return ['全部歌曲', '播放列表'].includes(playerStore.activeLibraryTab);
 });
 
 const isArtistGridView = computed(() => {
@@ -129,6 +148,7 @@ function loadForCurrentTab() {
   if (tab === '最近播放') playerStore.fetchRecentlyPlayed();
   else if (tab === '收藏') playerStore.fetchFavoriteTracks();
   else if (tab === '专辑') playerStore.fetchAlbums(true);
+  else if (tab === '播放列表' && playerStore.activePlaylistId) return;
   else playerStore.fetchTracks(true);
 }
 watch(() => playerStore.activeLibraryTab, loadForCurrentTab);
@@ -144,12 +164,23 @@ onMounted(() => {
 <template>
   <div class="flex-1 flex flex-col bg-bg-content overflow-hidden select-none min-w-0">
 
+    <!-- ============ 全局搜索视图（覆盖所有其他视图） ============ -->
+    <template v-if="isGlobalSearchActive">
+      <GlobalSearch />
+    </template>
+
     <!-- ============ 专辑详情视图（独占整个 Content Area） ============ -->
-    <template v-if="isAlbumDetailView">
+    <template v-else-if="isAlbumDetailView">
       <AlbumDetail
         :album-id="playerStore.activeAlbumId"
       />
     </template>
+
+    <!-- ============ 歌单详情视图 ============ -->
+    <PlaylistDetail v-else-if="isPlaylistDetailView" />
+
+    <!-- ============ 设置页 ============ -->
+    <Settings v-else-if="playerStore.activeLibraryTab === '设置'" />
 
     <!-- ============ 其他视图（共享 Header + Toolbar） ============ -->
     <template v-else>
@@ -325,6 +356,12 @@ onMounted(() => {
 
       <!-- ============ 文件夹视图 ============ -->
       <FolderView v-if="isFolderView" />
+
+      <!-- ============ 最近播放视图 ============ -->
+      <RecentlyPlayed v-if="isRecentlyPlayedView" />
+
+      <!-- ============ 收藏视图 ============ -->
+      <FavoritesView v-if="playerStore.activeLibraryTab === '收藏'" />
 
     </template>
   </div>

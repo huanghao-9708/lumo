@@ -8,6 +8,7 @@ import TopBar from './components/layout/TopBar.vue';
 import MainContent from './components/layout/MainContent.vue';
 import SidebarRight from './components/layout/SidebarRight.vue';
 import BottomPlayer from './components/layout/BottomPlayer.vue';
+import CreatePlaylistModal from './components/shared/CreatePlaylistModal.vue';
 
 const playerStore = usePlayerStore();
 const uiStore = useUiStore();
@@ -122,6 +123,8 @@ onUnmounted(() => {
 
     <!-- Region 05: Playback Bar (h: 110px) -->
     <BottomPlayer />
+
+    <CreatePlaylistModal v-if="playerStore.isCreatePlaylistModalOpen" />
 
   </div>
 </template>

@@ -8,6 +8,7 @@ export interface TrackDTO {
   media_file_id: number;
   is_favorite: boolean;
   cover_artwork_id?: number | null;
+  last_played_at?: string | null;
 }
 
 export interface AlbumDTO {

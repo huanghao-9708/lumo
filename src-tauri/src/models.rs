@@ -158,6 +158,8 @@ pub struct TrackDTO {
     pub is_favorite: bool,
     /// 封面图片 ID
     pub cover_artwork_id: Option<i64>,
+    /// 最近播放时间戳（仅最近播放查询返回）
+    pub last_played_at: Option<String>,
 }
 
 /// 传输给前端的专辑数据传输对象
