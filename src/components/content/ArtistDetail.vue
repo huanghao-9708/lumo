@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue';
 import {
-  Play, Shuffle, User, Loader2, Heart, MoreHorizontal, Clock, Disc3,
+  Play, Shuffle, User, Loader2, Heart, MoreHorizontal, Clock, Disc3, Star,
 } from 'lucide-vue-next';
 import { usePlayerStore, type Album, type Track } from '../../stores/player';
 
@@ -13,6 +13,18 @@ const playerStore = usePlayerStore();
 
 const detail = computed(() => playerStore.currentArtistDetails);
 const activeSubTab = ref<'tracks' | 'albums'>('tracks');
+
+/** 是否已收藏该歌手 */
+const isArtistFavorited = computed(() =>
+  props.artistId !== null && playerStore.favoriteArtists.some(a => a.id === props.artistId)
+);
+
+/** 切换歌手收藏 */
+function toggleArtistFav() {
+  if (props.artistId !== null) {
+    playerStore.toggleFavoriteArtist(props.artistId, !isArtistFavorited.value);
+  }
+}
 
 const albumGrid = computed<Album[]>(() => {
   const d = detail.value;
@@ -93,7 +105,17 @@ function getColorClass(color: string): string {
           </div>
 
           <div class="flex-1 min-w-0 pt-2">
-            <h1 class="text-[28px] font-bold text-text-primary tracking-tight leading-tight mb-1">{{ detail.name }}</h1>
+            <div class="flex items-center gap-3 mb-1">
+              <h1 class="text-[28px] font-bold text-text-primary tracking-tight leading-tight">{{ detail.name }}</h1>
+              <button
+                class="flex-shrink-0 transition-colors-smooth"
+                :class="isArtistFavorited ? 'text-brand-orange' : 'text-text-muted hover:text-text-primary'"
+                @click="toggleArtistFav"
+                :title="isArtistFavorited ? '取消收藏' : '收藏歌手'"
+              >
+                <Star class="w-[22px] h-[22px]" :class="isArtistFavorited ? 'fill-current' : ''" />
+              </button>
+            </div>
 
             <p class="text-[11px] text-text-muted font-mono uppercase tracking-wider mb-5">
               {{ detail.stats?.track_count ?? 0 }} TRACKS · {{ detail.stats?.album_count ?? 0 }} ALBUMS

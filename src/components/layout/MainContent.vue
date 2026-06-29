@@ -179,6 +179,9 @@ onMounted(() => {
   if (playerStore.tracks.length === 0 && playerStore.albums.length === 0) {
     loadForCurrentTab();
   }
+  // 拉取收藏列表，用于详情页收藏按钮状态
+  playerStore.fetchFavoriteAlbums();
+  playerStore.fetchFavoriteArtists();
 });
 </script>
 

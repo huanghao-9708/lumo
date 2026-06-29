@@ -14,6 +14,18 @@ const playerStore = usePlayerStore();
 
 const album = computed(() => playerStore.currentAlbumDetails);
 
+/** 是否已收藏该专辑 */
+const isAlbumFavorited = computed(() =>
+  props.albumId !== null && playerStore.favoriteAlbums.some(a => a.id === props.albumId)
+);
+
+/** 切换专辑收藏 */
+function toggleAlbumFav() {
+  if (props.albumId !== null) {
+    playerStore.toggleFavoriteAlbum(props.albumId, !isAlbumFavorited.value);
+  }
+}
+
 /** 封面 */
 const coverSrc = useArtworkSrc(() => album.value?.cover_artwork_id ?? null);
 
@@ -99,7 +111,17 @@ function toggleFav(trackId: number, e: Event) {
 
           <!-- 标题 + 元数据 + 按钮 -->
           <div class="flex-1 min-w-0 pt-2">
-            <h1 class="text-[28px] font-bold text-text-primary tracking-tight leading-tight mb-1">{{ album.title }}</h1>
+            <div class="flex items-center gap-3 mb-1">
+              <h1 class="text-[28px] font-bold text-text-primary tracking-tight leading-tight">{{ album.title }}</h1>
+              <button
+                class="flex-shrink-0 transition-colors-smooth"
+                :class="isAlbumFavorited ? 'text-brand-orange' : 'text-text-muted hover:text-text-primary'"
+                @click="toggleAlbumFav"
+                :title="isAlbumFavorited ? '取消收藏' : '收藏专辑'"
+              >
+                <Heart class="w-[22px] h-[22px]" :class="isAlbumFavorited ? 'fill-current' : ''" />
+              </button>
+            </div>
             <p class="text-[14px] text-text-secondary mb-2">{{ album.artist }}</p>
 
             <!-- 元数据行（等宽 mono） -->
