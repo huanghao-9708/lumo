@@ -1389,6 +1389,7 @@ const albums = shallowRef<Album[]>([]);
     isLoadingTracks,
     isLoadingAlbums,
     isLoadingArtists,
+    hasMoreTracks,
     restoreSession,
     deletePlaylist,
     removeTrackFromPlaylist,

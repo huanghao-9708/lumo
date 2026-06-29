@@ -1,103 +1,278 @@
 <script setup lang="ts">
-import { ref } from 'vue';
-import { Search, Filter, Play, LayoutGrid, List, MoreHorizontal, Heart } from 'lucide-vue-next';
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
+import {
+  Search, Play, List, LayoutGrid, MoreHorizontal, Heart, Loader2, Music,
+} from 'lucide-vue-next';
+import { usePlayerStore } from '../../stores/player';
+import { useVirtualList } from '../../composables/useVirtualList';
 
-const songs = ref([
-  { id: 1, title: 'Experience', artist: 'Ludovico Einaudi', album: 'Divenire', duration: '05:15', format: 'FLAC', bitrate: '24bit / 96kHz', dateAdded: '2 days ago' },
-  { id: 2, title: 'Nuvole Bianche', artist: 'Ludovico Einaudi', album: 'Una Mattina', duration: '07:48', format: 'FLAC', bitrate: '24bit / 96kHz', dateAdded: '2 days ago' },
-  { id: 3, title: 'Arrival of the Birds', artist: 'The Cinematic Orchestra', album: 'Ma Fleur', duration: '06:10', format: 'FLAC', bitrate: '24bit / 96kHz', dateAdded: '2 days ago' },
-  { id: 4, title: 'First Breath After Coma', artist: 'Explosions in the Sky', album: 'The Earth Is Not a Cold...', duration: '09:34', format: 'FLAC', bitrate: '24bit / 96kHz', dateAdded: '2 days ago' },
-  { id: 5, title: 'Elegy for Dunkirk', artist: 'Alexandre Desplat', album: 'Dunkirk (Original Motio...', duration: '06:25', format: 'FLAC', bitrate: '24bit / 96kHz', dateAdded: '2 days ago' },
-  { id: 6, title: 'Holocene', artist: 'Bon Iver', album: 'Bon Iver', duration: '05:36', format: 'FLAC', bitrate: '24bit / 96kHz', dateAdded: '2 days ago' },
-  { id: 7, title: 'Hoppipolla', artist: 'Sigur Ros', album: 'Takk...', duration: '04:28', format: 'FLAC', bitrate: '24bit / 96kHz', dateAdded: '2 days ago' },
-  { id: 8, title: 'Time', artist: 'Hans Zimmer', album: 'Inception (Music from...', duration: '04:35', format: 'FLAC', bitrate: '24bit / 96kHz', dateAdded: '2 days ago' },
-  { id: 9, title: "Comptine d'un autre ete", artist: 'Yann Tiersen', album: 'Amelie (Original Sound...', duration: '02:20', format: 'FLAC', bitrate: '24bit / 96kHz', dateAdded: '2 days ago' },
-  { id: 10, title: 'To Build a Home', artist: 'The Cinematic Orchestra', album: 'Ma Fleur', duration: '06:07', format: 'FLAC', bitrate: '24bit / 96kHz', dateAdded: '2 days ago' },
-  { id: 11, title: 'Your Hand in Mine', artist: 'Explosions in the Sky', album: 'The Earth Is Not a Cold...', duration: '08:17', format: 'FLAC', bitrate: '24bit / 96kHz', dateAdded: '2 days ago' },
-  { id: 12, title: 'Near Light', artist: 'Olafur Arnalds', album: '...and they have escap...', duration: '03:37', format: 'FLAC', bitrate: '24bit / 96kHz', dateAdded: '2 days ago' },
-  { id: 13, title: 'Says', artist: 'Nils Frahm', album: 'All Melody', duration: '05:41', format: 'FLAC', bitrate: '24bit / 96kHz', dateAdded: '2 days ago' },
-  { id: 14, title: 'The Truth That You Leave', artist: 'Olafur Arnalds', album: 'Living Room Songs', duration: '05:29', format: 'FLAC', bitrate: '24bit / 96kHz', dateAdded: '2 days ago' },
-]);
+const playerStore = usePlayerStore();
+
+/* ============ 视图状态 ============ */
+const viewMode = ref<'list' | 'grid'>('list');
+
+/* ============ 搜索 ============ */
+const searchInput = ref('');
+let searchTimer: ReturnType<typeof setTimeout> | null = null;
+function onSearchInput() {
+  if (searchTimer) clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    playerStore.searchQuery = searchInput.value;
+    playerStore.fetchTracks(true);
+  }, 250);
+}
+onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
+
+/* ============ 标题 & 元信息 ============ */
+const pageTitle = computed(() => {
+  switch (playerStore.activeLibraryTab) {
+    case '最近播放': return '最近播放';
+    case '收藏': return '我喜欢的音乐';
+    case '专辑': return '专辑';
+    case '艺术家': return '艺术家';
+    default: return '全部歌曲';
+  }
+});
+
+const trackCount = computed(() => {
+  if (playerStore.activeLibraryTab === '专辑') return playerStore.albumsTotalCount;
+  return playerStore.tracks.length;
+});
+const metaText = computed(() => {
+  const n = trackCount.value;
+  if (playerStore.activeLibraryTab === '专辑') return `${n.toLocaleString()} 张专辑`;
+  return `${n.toLocaleString()} 首歌曲`;
+});
+
+/* ============ 是否为「轨道列表」视图（表格） ============ */
+const isTracksView = computed(() => {
+  return ['全部歌曲', '最近播放', '收藏', '播放列表'].includes(playerStore.activeLibraryTab)
+    || playerStore.activePlaylistId !== null;
+});
+
+/* ============ 当前播放判定 ============ */
+function isPlayingTrack(trackId: number): boolean {
+  const t = playerStore.currentTrack;
+  return !!t && t.id === trackId;
+}
+
+function playSong(index: number) {
+  playerStore.playTrack(index);
+}
+
+function toggleFav(trackId: number, e: Event) {
+  e.stopPropagation();
+  playerStore.toggleFavorite(trackId);
+}
+
+/* ============ 虚拟列表 ============ */
+const ROW_HEIGHT = 40;
+const scrollContainer = ref<HTMLElement | null>(null);
+const { totalHeight, offsetY, visibleItems } = useVirtualList({
+  containerRef: scrollContainer,
+  items: computed(() => playerStore.tracks) as any,
+  itemHeight: ROW_HEIGHT,
+  buffer: 8,
+});
+
+/* ============ 无限加载更多 ============ */
+function onListScroll() {
+  const el = scrollContainer.value;
+  if (!el) return;
+  if (el.scrollTop + el.clientHeight >= el.scrollHeight - 200) {
+    if (playerStore.hasMoreTracks && !playerStore.isLoadingTracks) {
+      playerStore.fetchTracks();
+    }
+  }
+}
+
+/* ============ Tab 切换时重新拉取数据 ============ */
+function loadForCurrentTab() {
+  const tab = playerStore.activeLibraryTab;
+  if (tab === '最近播放') playerStore.fetchRecentlyPlayed();
+  else if (tab === '收藏') playerStore.fetchFavoriteTracks();
+  else playerStore.fetchTracks(true);
+}
+watch(() => playerStore.activeLibraryTab, loadForCurrentTab);
+
+onMounted(() => {
+  // 仅在还没有数据时首次拉取，避免覆盖 restoreSession 的状态
+  if (playerStore.tracks.length === 0) loadForCurrentTab();
+});
 </script>
 
 <template>
-  <div class="flex-1 flex flex-col bg-bg-content overflow-hidden select-none">
-    
+  <div class="flex-1 flex flex-col bg-bg-content overflow-hidden select-none min-w-0">
+
     <!-- Header -->
     <div class="px-8 pt-8 pb-0 flex-shrink-0" data-tauri-drag-region>
-      <div class="flex items-start justify-between mb-2">
+      <div class="flex items-end justify-between mb-2">
         <div>
-          <h1 class="text-[28px] font-bold text-text-primary tracking-tight leading-tight mb-1">全部歌曲</h1>
-          <p class="text-[12px] text-text-muted leading-relaxed">12,483 首歌曲 · 982 GB · 31 天连续播放时长</p>
-        </div>
-        
-        <div class="flex items-center gap-3 mt-1">
-          <button class="text-text-muted hover:text-text-primary text-[12px] transition-colors">视图</button>
-          <button class="text-text-muted hover:text-text-primary transition-colors">
-            <List class="w-4 h-4" />
-          </button>
+          <!-- LDL Page Title = 42px -->
+          <h1 class="text-[42px] font-bold text-text-primary tracking-tight leading-none mb-2">{{ pageTitle }}</h1>
+          <p class="text-[12px] text-text-muted leading-relaxed font-mono">{{ metaText }}</p>
         </div>
       </div>
     </div>
 
-    <!-- Table -->
-    <div class="flex-1 overflow-y-auto px-8">
-      
-      <!-- Table Header -->
-      <div class="flex items-center text-[11px] text-text-muted uppercase tracking-wider py-3 border-b border-border-color sticky top-0 bg-bg-content z-10">
-        <div class="w-10 text-center shrink-0">#</div>
-        <div class="w-8 shrink-0"></div>
-        <div class="flex-[2] min-w-0 pl-1">标题</div>
-        <div class="flex-[1.5] min-w-0 hidden md:block">艺术家</div>
-        <div class="flex-[1.5] min-w-0 hidden lg:block">专辑</div>
-        <div class="w-[60px] text-right shrink-0 hidden xl:block">时长</div>
-        <div class="w-[50px] text-center shrink-0 hidden xl:block">格式</div>
-        <div class="w-[100px] text-right shrink-0 hidden xl:block">比特率</div>
-        <div class="w-8 shrink-0"></div>
+    <!-- Page Toolbar（LDL Region 03：搜索 / 筛选 / 排序 / 视图切换） -->
+    <div class="px-8 py-3 flex items-center gap-3 flex-shrink-0">
+      <div class="relative flex-1 max-w-[280px]">
+        <Search class="w-[14px] h-[14px] text-text-muted absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+        <input
+          v-model="searchInput"
+          @input="onSearchInput"
+          type="text"
+          placeholder="搜索歌曲、艺术家、专辑…"
+          class="w-full h-[32px] pl-8 pr-3 text-[12px] bg-bg-canvas border border-border-color rounded-[8px] text-text-primary placeholder:text-text-muted transition-colors-smooth focus:border-brand-orange/50"
+        />
       </div>
 
-      <!-- Table Rows -->
-      <div>
-        <div 
-          v-for="(song, index) in songs" 
-          :key="song.id"
-          class="flex items-center py-[9px] hover:bg-list-hover transition-colors group cursor-pointer border-b border-border-color/40"
-          :class="{ 'bg-list-selected': index === 0 }"
+      <div class="flex-1"></div>
+
+      <!-- 视图切换 -->
+      <div class="flex items-center gap-0 bg-bg-canvas border border-border-color rounded-[8px] p-[2px]">
+        <button
+          class="w-7 h-7 flex items-center justify-center rounded-[6px] transition-colors-smooth"
+          :class="viewMode === 'list' ? 'bg-list-selected text-text-primary' : 'text-text-muted hover:text-text-primary'"
+          @click="viewMode = 'list'"
+          title="列表视图"
         >
-          <div class="w-10 text-center shrink-0 text-[12px] font-mono text-text-muted">
-            <span v-if="index === 0" class="text-brand-orange">
-              <Play class="w-3 h-3 fill-current inline" />
-            </span>
-            <span v-else class="group-hover:hidden">{{ String(index + 1).padStart(2, '0') }}</span>
-            <Play v-if="index !== 0" class="w-3 h-3 fill-current mx-auto hidden group-hover:block text-text-secondary" />
-          </div>
-          <!-- Heart column -->
-          <div class="w-8 shrink-0 flex items-center justify-center">
-            <Heart v-if="index === 0" class="w-[14px] h-[14px] text-brand-orange fill-current" />
-            <Heart v-else class="w-[14px] h-[14px] text-text-disabled opacity-0 group-hover:opacity-60 transition-opacity hover:!opacity-100 hover:!text-brand-orange cursor-pointer" />
-          </div>
-          <div class="flex-[2] min-w-0 pl-1">
-            <span class="text-[13px] font-medium text-text-primary truncate block" :class="{ '!text-brand-orange font-semibold': index === 0 }">
-              {{ song.title }}
-            </span>
-          </div>
-          <div class="flex-[1.5] min-w-0 hidden md:block text-[13px] text-text-secondary truncate">{{ song.artist }}</div>
-          <div class="flex-[1.5] min-w-0 hidden lg:block text-[13px] text-text-secondary truncate italic">{{ song.album }}</div>
-          <div class="w-[60px] text-right shrink-0 hidden xl:block text-[12px] font-mono text-text-muted">{{ song.duration }}</div>
-          <div class="w-[50px] text-center shrink-0 hidden xl:block text-[11px] font-mono text-text-muted">{{ song.format }}</div>
-          <div class="w-[100px] text-right shrink-0 hidden xl:block text-[11px] font-mono text-text-muted">{{ song.bitrate }}</div>
-          <div class="w-8 shrink-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-            <MoreHorizontal class="w-4 h-4 text-text-muted" />
+          <List class="w-[14px] h-[14px]" />
+        </button>
+        <button
+          class="w-7 h-7 flex items-center justify-center rounded-[6px] transition-colors-smooth"
+          :class="viewMode === 'grid' ? 'bg-list-selected text-text-primary' : 'text-text-muted hover:text-text-primary'"
+          @click="viewMode = 'grid'"
+          title="网格视图"
+        >
+          <LayoutGrid class="w-[14px] h-[14px]" />
+        </button>
+      </div>
+    </div>
+
+    <!-- ============ 轨道表格视图 ============ -->
+    <template v-if="isTracksView">
+      <div ref="scrollContainer" class="flex-1 overflow-y-auto px-8" @scroll="onListScroll">
+
+        <!-- 表头（sticky） -->
+        <div class="flex items-center text-[10px] text-text-muted uppercase tracking-wider py-2 border-b border-border-color sticky top-0 bg-bg-content z-10">
+          <div class="w-10 text-center shrink-0">#</div>
+          <div class="w-8 shrink-0"></div>
+          <div class="flex-[2] min-w-0 pl-1">标题</div>
+          <div class="flex-[1.5] min-w-0 hidden md:block">艺术家</div>
+          <div class="flex-[1.5] min-w-0 hidden lg:block">专辑</div>
+          <div class="w-[56px] text-right shrink-0 hidden xl:block">时长</div>
+          <div class="w-[50px] text-center shrink-0 hidden xl:block">格式</div>
+          <div class="w-8 shrink-0"></div>
+        </div>
+
+        <!-- 加载态（首次） -->
+        <div v-if="playerStore.isLoadingTracks && playerStore.tracks.length === 0" class="flex flex-col items-center justify-center py-20 gap-3 text-text-muted">
+          <Loader2 class="w-5 h-5 animate-spin text-brand-orange" />
+          <span class="text-[12px]">加载中…</span>
+        </div>
+
+        <!-- 空态 -->
+        <div v-else-if="playerStore.tracks.length === 0" class="flex flex-col items-center justify-center py-20 gap-3 text-text-muted">
+          <Music class="w-8 h-8 text-text-disabled" />
+          <span class="text-[12px]">没有找到歌曲</span>
+        </div>
+
+        <!-- 错误态 -->
+        <div v-else-if="playerStore.isErrorTracks" class="flex flex-col items-center justify-center py-20 gap-3 text-text-muted">
+          <span class="text-[12px]">加载失败，请稍后重试</span>
+        </div>
+
+        <!-- 虚拟列表 -->
+        <div v-else :style="{ height: totalHeight + 'px', position: 'relative' }">
+          <div :style="{ transform: `translateY(${offsetY}px)` }">
+            <div
+              v-for="{ index, data: song } in visibleItems"
+              :key="song.id"
+              class="flex items-center hover:bg-list-hover transition-colors-smooth group cursor-pointer relative"
+              :style="{ height: ROW_HEIGHT + 'px' }"
+              :class="{
+                'playing-row bg-list-selected': isPlayingTrack(song.id),
+              }"
+              @dblclick="playSong(index)"
+            >
+              <!-- 序号 / 播放图标 -->
+              <div class="w-10 text-center shrink-0 text-[12px] font-mono">
+                <span v-if="isPlayingTrack(song.id)" class="text-brand-orange inline-flex items-center justify-center">
+                  <Loader2 v-if="playerStore.isPlaying" class="w-[14px] h-[14px] animate-spin" />
+                  <Play v-else class="w-[12px] h-[12px] fill-current" />
+                </span>
+                <template v-else>
+                  <span class="text-text-muted group-hover:hidden tabular-nums">{{ String(index + 1).padStart(2, '0') }}</span>
+                  <Play class="w-[12px] h-[12px] fill-current mx-auto hidden group-hover:block text-text-secondary" />
+                </template>
+              </div>
+
+              <!-- 收藏 -->
+              <div class="w-8 shrink-0 flex items-center justify-center">
+                <Heart
+                  v-if="song.isFavorite"
+                  class="w-[14px] h-[14px] text-brand-orange fill-current cursor-pointer"
+                  @click="toggleFav(song.id, $event)"
+                />
+                <Heart
+                  v-else
+                  class="w-[14px] h-[14px] text-text-disabled opacity-0 group-hover:opacity-60 transition-opacity hover:!opacity-100 hover:!text-brand-orange cursor-pointer"
+                  @click="toggleFav(song.id, $event)"
+                />
+              </div>
+
+              <!-- 标题 -->
+              <div class="flex-[2] min-w-0 pl-1">
+                <span class="text-[13px] truncate block" :class="isPlayingTrack(song.id) ? 'text-brand-orange font-semibold' : 'text-text-primary font-medium'">
+                  {{ song.title }}
+                </span>
+              </div>
+
+              <!-- 艺术家 -->
+              <div class="flex-[1.5] min-w-0 hidden md:block text-[13px] text-text-secondary truncate">{{ song.artist }}</div>
+
+              <!-- 专辑（非斜体） -->
+              <div class="flex-[1.5] min-w-0 hidden lg:block text-[13px] text-text-secondary truncate">{{ song.album }}</div>
+
+              <!-- 时长 -->
+              <div class="w-[56px] text-right shrink-0 hidden xl:block text-[12px] font-mono text-text-muted tabular-nums">{{ song.duration }}</div>
+
+              <!-- 格式 -->
+              <div class="w-[50px] text-center shrink-0 hidden xl:block">
+                <span class="text-[10px] font-mono text-text-muted uppercase">{{ song.format }}</span>
+              </div>
+
+              <!-- more -->
+              <div class="w-8 shrink-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                <MoreHorizontal class="w-4 h-4 text-text-muted" />
+              </div>
+            </div>
           </div>
         </div>
-      </div>
 
-      <!-- Footer Status -->
-      <div class="flex items-center justify-between py-4 border-t border-border-color mt-4 text-[11px] text-text-muted font-mono">
-        <span>12,483 首歌曲  982 GB</span>
-        <span>总时长: 31 天 7 小时 42 分钟</span>
-      </div>
+        <!-- 增量加载指示 -->
+        <div v-if="playerStore.isLoadingTracks && playerStore.tracks.length > 0" class="flex items-center justify-center py-4 text-text-muted">
+          <Loader2 class="w-3.5 h-3.5 animate-spin mr-2" />
+          <span class="text-[11px]">加载更多…</span>
+        </div>
 
+        <!-- Footer Status -->
+        <div v-if="playerStore.tracks.length > 0" class="flex items-center justify-between py-4 border-t border-border-color mt-2 text-[11px] text-text-muted font-mono">
+          <span>{{ trackCount.toLocaleString() }} 首歌曲</span>
+          <span>双击播放</span>
+        </div>
+
+      </div>
+    </template>
+
+    <!-- ============ 占位：专辑 / 艺术家等非轨道视图 ============ -->
+    <div v-else class="flex-1 flex flex-col items-center justify-center gap-3 text-text-muted px-8">
+      <LayoutGrid class="w-8 h-8 text-text-disabled" />
+      <p class="text-[13px]">{{ pageTitle }}视图</p>
+      <p class="text-[11px] text-text-muted/70">该页面的网格视图将在后续迭代中接入。</p>
     </div>
+
   </div>
 </template>

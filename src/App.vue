@@ -2,7 +2,6 @@
 import { onMounted, onUnmounted } from 'vue';
 import { usePlayerStore } from './stores/player';
 import { useUiStore } from './stores/ui';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 
 import SidebarLeft from './components/layout/SidebarLeft.vue';
 import TopBar from './components/layout/TopBar.vue';
@@ -63,9 +62,17 @@ const handleGlobalKeyDown = (e: KeyboardEvent) => {
   }
 };
 
-onMounted(() => {
-  playerStore.restoreSession();
+onMounted(async () => {
   window.addEventListener('keydown', handleGlobalKeyDown);
+  // 1. 恢复播放会话（队列 / 进度 / 音量）
+  await playerStore.restoreSession();
+  // 2. 拉取侧边栏与库的基础数据（并行）
+  await Promise.all([
+    playerStore.fetchPlaylists(),
+    playerStore.fetchSources(),
+    playerStore.fetchAlbums(true),
+    playerStore.fetchArtists(true),
+  ]);
 });
 
 onUnmounted(() => {

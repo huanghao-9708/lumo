@@ -1,7 +1,43 @@
 <script setup lang="ts">
-import { 
-  Activity, Disc, User, Heart, Folder, Clock, ListMusic, List, Plus, Music
+import { computed } from 'vue';
+import {
+  Activity, Disc, User, Heart, Folder, Clock, ListMusic, List, Plus,
 } from 'lucide-vue-next';
+import { usePlayerStore } from '../../stores/player';
+
+const playerStore = usePlayerStore();
+
+/** Library 一级导航。activeLibraryTab 是 store 里维护的当前页标识。 */
+const libraryNav = computed(() => [
+  { key: '全部歌曲', label: '全部歌曲', icon: Activity, count: playerStore.albumsTotalCount ? null : null },
+  { key: '专辑', label: '专辑', icon: Disc, count: playerStore.albumsTotalCount },
+  { key: '艺术家', label: '艺术家', icon: User, count: playerStore.artists.length },
+  { key: '作曲家', label: '作曲家', icon: Heart, count: null },
+  { key: '文件夹', label: '文件夹', icon: Folder, count: playerStore.localSources.length },
+  { key: '最近播放', label: '最近播放', icon: Clock, count: null },
+  { key: '播放列表', label: '播放列表', icon: ListMusic, count: playerStore.playlists.length },
+]);
+
+function isActive(key: string): boolean {
+  // 「播放列表」分组里的具体歌单被选中时，也高亮「播放列表」入口
+  if (key === '播放列表') return playerStore.activeLibraryTab === '播放列表' || playerStore.activePlaylistId !== null;
+  return playerStore.activeLibraryTab === key;
+}
+
+function selectNav(key: string) {
+  playerStore.activeAlbumId = null;
+  playerStore.activeArtistId = null;
+  playerStore.activePlaylistId = null;
+  playerStore.activeLibraryTab = key;
+}
+
+function selectPlaylist(id: number) {
+  playerStore.activeAlbumId = null;
+  playerStore.activeArtistId = null;
+  playerStore.activeLibraryTab = '播放列表';
+  playerStore.activePlaylistId = id;
+  playerStore.refreshCurrentPlaylistTracks(id);
+}
 </script>
 
 <template>
@@ -15,66 +51,33 @@ import {
 
     <!-- Scrollable Nav -->
     <div class="flex-1 overflow-y-auto px-5 pb-4">
-      
+
       <!-- LIBRARY -->
       <div class="mb-6">
         <h2 class="px-3 text-[10px] font-semibold text-text-muted mb-2 uppercase tracking-widest">Library</h2>
-        
+
         <ul class="space-y-[2px]">
-          <li>
-            <a href="#" class="flex items-center px-3 py-[7px] rounded-[6px] bg-list-selected text-text-primary transition-smooth">
-              <Activity class="w-[16px] h-[16px] mr-3 flex-shrink-0" />
-              <span class="text-[13px] font-medium flex-1">全部歌曲</span>
-              <span class="text-[11px] font-mono text-text-secondary tabular-nums">12,483</span>
-              <div class="w-[6px] h-[6px] rounded-full bg-brand-orange ml-2 flex-shrink-0"></div>
-            </a>
-          </li>
-          
-          <li>
-            <a href="#" class="flex items-center px-3 py-[7px] rounded-[6px] text-text-primary hover:bg-list-hover transition-smooth">
-              <Disc class="w-[16px] h-[16px] mr-3 text-text-muted flex-shrink-0" />
-              <span class="text-[13px] flex-1">专辑</span>
-              <span class="text-[11px] font-mono text-text-muted tabular-nums">1,246</span>
-            </a>
-          </li>
-          
-          <li>
-            <a href="#" class="flex items-center px-3 py-[7px] rounded-[6px] text-text-primary hover:bg-list-hover transition-smooth">
-              <User class="w-[16px] h-[16px] mr-3 text-text-muted flex-shrink-0" />
-              <span class="text-[13px] flex-1">艺术家</span>
-              <span class="text-[11px] font-mono text-text-muted tabular-nums">643</span>
-            </a>
-          </li>
-          
-          <li>
-            <a href="#" class="flex items-center px-3 py-[7px] rounded-[6px] text-text-primary hover:bg-list-hover transition-smooth">
-              <Heart class="w-[16px] h-[16px] mr-3 text-text-muted flex-shrink-0" />
-              <span class="text-[13px] flex-1">作曲家</span>
-              <span class="text-[11px] font-mono text-text-muted tabular-nums">128</span>
-            </a>
-          </li>
-          
-          <li>
-            <a href="#" class="flex items-center px-3 py-[7px] rounded-[6px] text-text-primary hover:bg-list-hover transition-smooth">
-              <Folder class="w-[16px] h-[16px] mr-3 text-text-muted flex-shrink-0" />
-              <span class="text-[13px] flex-1">文件夹</span>
-              <span class="text-[11px] font-mono text-text-muted tabular-nums">892</span>
-            </a>
-          </li>
-          
-          <li>
-            <a href="#" class="flex items-center px-3 py-[7px] rounded-[6px] text-text-primary hover:bg-list-hover transition-smooth">
-              <Clock class="w-[16px] h-[16px] mr-3 text-text-muted flex-shrink-0" />
-              <span class="text-[13px] flex-1">最近播放</span>
-              <span class="text-[11px] font-mono text-text-muted tabular-nums">200</span>
-            </a>
-          </li>
-          
-          <li>
-            <a href="#" class="flex items-center px-3 py-[7px] rounded-[6px] text-text-primary hover:bg-list-hover transition-smooth">
-              <ListMusic class="w-[16px] h-[16px] mr-3 text-text-muted flex-shrink-0" />
-              <span class="text-[13px] flex-1">播放列表</span>
-              <span class="text-[11px] font-mono text-text-muted tabular-nums">28</span>
+          <li v-for="item in libraryNav" :key="item.key">
+            <a
+              href="#"
+              class="flex items-center px-3 py-[7px] rounded-[6px] transition-colors-smooth"
+              :class="isActive(item.key)
+                ? 'bg-list-selected text-text-primary'
+                : 'text-text-primary hover:bg-list-hover'"
+              @click.prevent="selectNav(item.key)"
+            >
+              <component
+                :is="item.icon"
+                class="w-[16px] h-[16px] mr-3 flex-shrink-0"
+                :class="isActive(item.key) ? 'text-brand-orange' : 'text-text-muted'"
+              />
+              <span class="text-[13px] flex-1" :class="isActive(item.key) ? 'font-medium' : ''">{{ item.label }}</span>
+              <span
+                v-if="item.count !== null && item.count > 0"
+                class="text-[11px] font-mono tabular-nums"
+                :class="isActive(item.key) ? 'text-text-secondary' : 'text-text-muted'"
+              >{{ item.count.toLocaleString() }}</span>
+              <div v-if="isActive(item.key)" class="w-[6px] h-[6px] rounded-full bg-brand-orange ml-2 flex-shrink-0"></div>
             </a>
           </li>
         </ul>
@@ -83,53 +86,33 @@ import {
       <!-- PLAYLISTS -->
       <div>
         <h2 class="px-3 text-[10px] font-semibold text-text-muted mb-2 uppercase tracking-widest">Playlists</h2>
-        
+
         <ul class="space-y-[2px]">
-          <li>
-            <a href="#" class="flex items-center px-3 py-[7px] rounded-[6px] text-text-primary hover:bg-list-hover transition-smooth">
+          <li v-if="playerStore.playlists.length === 0">
+            <p class="px-3 py-1 text-[12px] text-text-muted/70">暂无歌单</p>
+          </li>
+
+          <li v-for="pl in playerStore.playlists" :key="pl.id">
+            <a
+              href="#"
+              class="flex items-center px-3 py-[7px] rounded-[6px] transition-colors-smooth"
+              :class="playerStore.activePlaylistId === pl.id
+                ? 'bg-list-selected text-text-primary'
+                : 'text-text-primary hover:bg-list-hover'"
+              @click.prevent="selectPlaylist(pl.id)"
+            >
               <List class="w-[16px] h-[16px] mr-3 text-text-muted flex-shrink-0" />
-              <span class="text-[13px] flex-1">日常音乐</span>
-              <span class="text-[11px] font-mono text-text-muted tabular-nums">58</span>
+              <span class="text-[13px] flex-1 truncate">{{ pl.name }}</span>
+              <span class="text-[11px] font-mono text-text-muted tabular-nums">{{ pl.count }}</span>
             </a>
           </li>
-          <li>
-            <a href="#" class="flex items-center px-3 py-[7px] rounded-[6px] text-text-primary hover:bg-list-hover transition-smooth">
-              <List class="w-[16px] h-[16px] mr-3 text-text-muted flex-shrink-0" />
-              <span class="text-[13px] flex-1">工作专注</span>
-              <span class="text-[11px] font-mono text-text-muted tabular-nums">24</span>
-            </a>
-          </li>
-          <li>
-            <a href="#" class="flex items-center px-3 py-[7px] rounded-[6px] text-text-primary hover:bg-list-hover transition-smooth">
-              <List class="w-[16px] h-[16px] mr-3 text-text-muted flex-shrink-0" />
-              <span class="text-[13px] flex-1">放松时刻</span>
-              <span class="text-[11px] font-mono text-text-muted tabular-nums">36</span>
-            </a>
-          </li>
-          <li>
-            <a href="#" class="flex items-center px-3 py-[7px] rounded-[6px] text-text-primary hover:bg-list-hover transition-smooth">
-              <List class="w-[16px] h-[16px] mr-3 text-text-muted flex-shrink-0" />
-              <span class="text-[13px] flex-1">90s 精选</span>
-              <span class="text-[11px] font-mono text-text-muted tabular-nums">57</span>
-            </a>
-          </li>
-          <li>
-            <a href="#" class="flex items-center px-3 py-[7px] rounded-[6px] text-text-primary hover:bg-list-hover transition-smooth">
-              <List class="w-[16px] h-[16px] mr-3 text-text-muted flex-shrink-0" />
-              <span class="text-[13px] flex-1">旅行音乐</span>
-              <span class="text-[11px] font-mono text-text-muted tabular-nums">42</span>
-            </a>
-          </li>
-          <li>
-            <a href="#" class="flex items-center px-3 py-[7px] rounded-[6px] text-text-primary hover:bg-list-hover transition-smooth">
-              <Music class="w-[16px] h-[16px] mr-3 text-text-muted flex-shrink-0" />
-              <span class="text-[13px] flex-1">古典精选</span>
-              <span class="text-[11px] font-mono text-text-muted tabular-nums">31</span>
-            </a>
-          </li>
-          
+
           <li class="mt-3">
-            <a href="#" class="flex items-center px-3 py-[7px] rounded-[6px] text-text-muted hover:bg-list-hover hover:text-text-primary transition-smooth">
+            <a
+              href="#"
+              class="flex items-center px-3 py-[7px] rounded-[6px] text-text-muted hover:bg-list-hover hover:text-text-primary transition-colors-smooth"
+              @click.prevent="playerStore.isCreatePlaylistModalOpen = true"
+            >
               <Plus class="w-[16px] h-[16px] mr-3 flex-shrink-0" />
               <span class="text-[13px] flex-1">新建播放列表</span>
             </a>

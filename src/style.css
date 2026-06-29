@@ -1,53 +1,86 @@
 @import "tailwindcss";
 
+/* ============================================================
+   LUMO Design Language (LDL) v1.0 — Warm Industrial Minimalism
+   ============================================================ */
+
 :root {
-  /* LDL v1.0 Backgrounds */
+  /* LDL v1.0 Backgrounds (Warm White) */
   --bg-canvas: #F7F5F1;
   --bg-content: #FBFAF7;
-  --bg-active: rgba(226, 138, 35, 0.1);
+  --bg-active: rgba(226, 138, 35, 0.10);
   --bg-hover: rgba(0, 0, 0, 0.04);
-  
+
   /* LDL v1.0 Component Colors */
   --btn-hover: #F1EFE9;
   --list-hover: #F5F2EB;
   --list-selected: #F0ECE4;
-  
+
   /* LDL v1.0 Text */
   --text-primary: #111111;
   --text-secondary: #5F5F5F;
   --text-muted: #8B8B8B;
   --text-disabled: #BDBDBD;
   --text-inverse: #FFFFFF;
-  
+
   /* LDL v1.0 Divider */
   --border-color: rgba(232, 229, 222, 0.7);
   --border-solid: #E8E5DE;
-  
-  /* LDL v1.0 Accent */
+
+  /* LDL v1.0 Accent — 唯一强调色 */
   --brand-orange: #E28A23;
+
+  /* 滚动条（暖灰，不出现冷灰） */
+  --scrollbar-thumb: #D8D4CB;
+  --scrollbar-thumb-hover: #BCB7AB;
+}
+
+/* ===== 夜间模式：覆盖 LDL token =====
+   仍是 Warm Industrial 调性——偏暖的深色，不是冷的 zinc/neutral。 */
+[data-theme="dark"] {
+  --bg-canvas: #1C1A17;
+  --bg-content: #23211D;
+  --bg-active: rgba(226, 138, 35, 0.16);
+  --bg-hover: rgba(255, 255, 255, 0.05);
+
+  --btn-hover: #2C2924;
+  --list-hover: #2A2722;
+  --list-selected: #322E28;
+
+  --text-primary: #F2EFE9;
+  --text-secondary: #A9A49A;
+  --text-muted: #7A756B;
+  --text-disabled: #514E47;
+  --text-inverse: #111111;
+
+  --border-color: rgba(255, 255, 255, 0.07);
+  --border-solid: #36332D;
+
+  --scrollbar-thumb: #3F3C35;
+  --scrollbar-thumb-hover: #534F47;
 }
 
 @theme {
   --font-sans: "Inter", "SF Pro Display", "Helvetica Now", "MiSans", "HarmonyOS Sans", "OPPOSans", sans-serif;
   --font-mono: "IBM Plex Mono", "JetBrains Mono", monospace;
-  
+
   --color-brand-orange: var(--brand-orange);
-  
+
   --color-bg-canvas: var(--bg-canvas);
   --color-bg-content: var(--bg-content);
   --color-bg-active: var(--bg-active);
   --color-bg-hover: var(--bg-hover);
-  
+
   --color-btn-hover: var(--btn-hover);
   --color-list-hover: var(--list-hover);
   --color-list-selected: var(--list-selected);
-  
+
   --color-text-primary: var(--text-primary);
   --color-text-secondary: var(--text-secondary);
   --color-text-muted: var(--text-muted);
   --color-text-disabled: var(--text-disabled);
   --color-text-inverse: var(--text-inverse);
-  
+
   --color-border-color: var(--border-color);
   --color-border-solid: var(--border-solid);
 }
@@ -62,9 +95,11 @@ body {
   overflow: hidden; /* App is a fixed window size, no global scroll */
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* 平滑过渡到夜间模式（LDL 动画：200ms ease-out） */
+  transition: background-color 0.2s ease-out, color 0.2s ease-out;
 }
 
-/* Custom Scrollbar */
+/* Custom Scrollbar — 暖灰，绝不冷灰 */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -73,30 +108,49 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #d1d0cb;
+  background: var(--scrollbar-thumb);
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #b5b4af;
+  background: var(--scrollbar-thumb-hover);
 }
 
-/* Base utility classes for smooth interactions */
+/* ===== LDL 动画体系：只用 150 / 200 / 250ms ease-out，禁弹簧/缩放 ===== */
 .transition-smooth {
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
-.hover-scale {
-  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-}
-.hover-scale:hover {
-  transform: scale(1.02);
+.transition-colors-smooth {
+  transition: color 0.2s ease-out, background-color 0.2s ease-out, border-color 0.2s ease-out;
 }
 
+/* ===== Current Playing 行：左侧 2px Accent 竖条（LDL Region 10） =====
+   父行加 .playing-row，左竖条用 ::before 绘制，贯穿整行高度。 */
+.playing-row {
+  position: relative;
+}
+.playing-row::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--brand-orange);
+  border-radius: 0 1px 1px 0;
+  z-index: 1;
+}
+
+/* 拖拽区域标记（Tauri 窗口） */
 [data-tauri-drag-region] {
   -webkit-app-region: drag;
   user-select: none;
 }
 
-button, input, a, .cursor-pointer, [style*="cursor: pointer"] {
+button, input, a, .cursor-pointer, [style*="cursor: pointer"], select, textarea {
   -webkit-app-region: no-drag;
 }
 
+/* 输入框聚焦描边用 Accent，不抢眼 */
+input:focus, textarea:focus, select:focus {
+  outline: none;
+}
