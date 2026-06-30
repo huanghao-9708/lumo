@@ -29,10 +29,11 @@ function toggleArtistFav() {
 const albumGrid = computed<Album[]>(() => {
   const d = detail.value;
   if (!d || !d.albums) return [];
-  return d.albums.map((a: any) => ({
+  return d.albums.map((a: Album) => ({
     id: a.id,
     title: a.title,
-    artist: a.artist_name || '未知艺人',
+    artist: a.artist,
+    year: a.year || 0,
     coverColor: a.coverColor || 'from-gray-500 to-gray-700',
     cover_artwork_id: a.cover_artwork_id ?? null,
     cover_thumb: a.cover_thumb || null,
