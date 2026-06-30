@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import {
-  Play, Loader2, Heart, MoreHorizontal, Music,
+  Play, Loader2, Heart, MoreHorizontal,
 } from 'lucide-vue-next';
 import { usePlayerStore } from '../../stores/player';
 import FooterStatus from '../shared/FooterStatus.vue';

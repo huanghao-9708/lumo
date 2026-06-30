@@ -2,7 +2,7 @@
 import { ref, computed, onMounted } from 'vue';
 import { FolderOpen, Server, Trash2, Sun, Moon, Info, Scan } from 'lucide-vue-next';
 import { open } from '@tauri-apps/plugin-dialog';
-import { usePlayerStore, type MusicSource } from '../../stores/player';
+import { usePlayerStore } from '../../stores/player';
 import { useUiStore } from '../../stores/ui';
 import { libraryGetCacheSize, libraryClearCache } from '../../api/library';
 

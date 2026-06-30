@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onBeforeUnmount } from 'vue';
 import {
-  Play, Loader2, Heart, MoreHorizontal, Music, Search, Disc3, User,
+  Play, Loader2, Music, Search, Disc3, User,
 } from 'lucide-vue-next';
 import { usePlayerStore } from '../../stores/player';
 import { libraryGetTracks, libraryGetAlbums, libraryGetArtists } from '../../api/library';
@@ -88,15 +88,7 @@ function selectArtist(artist: ArtistDTO) {
   playerStore.globalSearchQuery = '';
 }
 
-function toggleFav(trackId: number, e: Event) {
-  e.stopPropagation();
-  playerStore.toggleFavorite(trackId);
-}
 
-function isPlayingTrack(trackId: number): boolean {
-  const t = playerStore.currentTrack;
-  return !!t && t.id === trackId;
-}
 </script>
 
 <template>

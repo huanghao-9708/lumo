@@ -3,7 +3,7 @@ import { ref, computed } from 'vue';
 import {
   Play, Shuffle, User, Loader2, Heart, MoreHorizontal, Clock, Disc3, Star,
 } from 'lucide-vue-next';
-import { usePlayerStore, type Album, type Track } from '../../stores/player';
+import { usePlayerStore, type Album } from '../../stores/player';
 
 const props = defineProps<{
   artistId: number | null;

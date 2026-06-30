@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted } from 'vue';
 import { usePlayerStore } from './stores/player';
-import { useUiStore } from './stores/ui';
 
 import SidebarLeft from './components/layout/SidebarLeft.vue';
 import TopBar from './components/layout/TopBar.vue';
@@ -11,7 +10,6 @@ import BottomPlayer from './components/layout/BottomPlayer.vue';
 import CreatePlaylistModal from './components/shared/CreatePlaylistModal.vue';
 
 const playerStore = usePlayerStore();
-const uiStore = useUiStore();
 
 // 键盘快捷键监听
 const handleGlobalKeyDown = (e: KeyboardEvent) => {

@@ -19,7 +19,6 @@ import Settings from '../content/Settings.vue';
 import ArtistGrid from '../content/ArtistGrid.vue';
 import ArtistDetail from '../content/ArtistDetail.vue';
 import FolderView from '../content/FolderView.vue';
-import FooterStatus from '../shared/FooterStatus.vue';
 
 const playerStore = usePlayerStore();
 

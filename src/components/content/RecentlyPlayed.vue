@@ -3,7 +3,7 @@ import { computed } from 'vue';
 import {
   Play, Loader2, Heart, MoreHorizontal, Music,
 } from 'lucide-vue-next';
-import { usePlayerStore, type Track } from '../../stores/player';
+import { usePlayerStore } from '../../stores/player';
 import FooterStatus from '../shared/FooterStatus.vue';
 
 const playerStore = usePlayerStore();
