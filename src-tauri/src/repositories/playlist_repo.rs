@@ -62,7 +62,9 @@ impl PlaylistRepo {
                 SELECT 
                     t.id, 
                     t.title, 
+                    (SELECT artist_id FROM track_artists WHERE track_id = t.id ORDER BY position LIMIT 1) AS artist_id,
                     (SELECT GROUP_CONCAT(a.name, ', ') FROM track_artists ta JOIN artists a ON ta.artist_id = a.id WHERE ta.track_id = t.id ORDER BY ta.position) AS artist_name,
+                    t.album_id,
                     al.title AS album_title, 
                     m.duration_ms, 
                     m.file_ext, 

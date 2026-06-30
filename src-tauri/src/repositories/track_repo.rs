@@ -10,7 +10,9 @@ impl TrackRepo {
                 SELECT 
                     t.id, 
                     t.title, 
+                    (SELECT artist_id FROM track_artists WHERE track_id = t.id ORDER BY position LIMIT 1) AS artist_id,
                     (SELECT GROUP_CONCAT(a.name, ', ') FROM track_artists ta JOIN artists a ON ta.artist_id = a.id WHERE ta.track_id = t.id ORDER BY ta.position) AS artist_name,
+                    t.album_id,
                     al.title AS album_title, 
                     m.duration_ms, 
                     m.file_ext, 
@@ -92,7 +94,9 @@ impl TrackRepo {
             let mut stmt = conn.prepare("
                 SELECT 
                     t.id, t.title, 
+                    (SELECT artist_id FROM track_artists WHERE track_id = t.id ORDER BY position LIMIT 1) AS artist_id,
                     (SELECT GROUP_CONCAT(a.name, ', ') FROM track_artists ta JOIN artists a ON ta.artist_id = a.id WHERE ta.track_id = t.id ORDER BY ta.position) AS artist_name, 
+                    t.album_id,
                     al.title AS album_title, m.duration_ms, m.file_ext, m.id AS media_file_id, ft.track_id IS NOT NULL AS is_favorite, al.cover_artwork_id,
                     m.file_size,
                     t.last_played_at
@@ -107,15 +111,17 @@ impl TrackRepo {
                 Ok(TrackDTO {
                     id: row.get(0)?,
                     title: row.get(1)?,
-                    artist_name: row.get(2)?,
-                    album_title: row.get(3)?,
-                    duration_ms: row.get(4)?,
-                    format: row.get(5)?,
-                    media_file_id: row.get(6)?,
-                    is_favorite: row.get(7)?,
-                    cover_artwork_id: row.get(8)?,
-                    file_size: row.get::<_, Option<i64>>(9)?,
-                    last_played_at: row.get(10)?,
+                    artist_id: row.get(2)?,
+                    artist_name: row.get(3)?,
+                    album_id: row.get(4)?,
+                    album_title: row.get(5)?,
+                    duration_ms: row.get(6)?,
+                    format: row.get(7)?,
+                    media_file_id: row.get(8)?,
+                    is_favorite: row.get(9)?,
+                    cover_artwork_id: row.get(10)?,
+                    file_size: row.get::<_, Option<i64>>(11)?,
+                    last_played_at: row.get(12)?,
                 })
             })?;
             let mut result = Vec::new();
@@ -127,7 +133,9 @@ impl TrackRepo {
             let mut stmt = conn.prepare("
                 SELECT 
                     t.id, t.title, 
+                    (SELECT artist_id FROM track_artists WHERE track_id = t.id ORDER BY position LIMIT 1) AS artist_id,
                     (SELECT GROUP_CONCAT(a.name, ', ') FROM track_artists ta JOIN artists a ON ta.artist_id = a.id WHERE ta.track_id = t.id ORDER BY ta.position) AS artist_name, 
+                    t.album_id,
                     al.title AS album_title, m.duration_ms, m.file_ext, m.id AS media_file_id, 1 AS is_favorite, al.cover_artwork_id, m.file_size
                 FROM favorite_tracks ft
                 JOIN tracks t ON ft.track_id = t.id
@@ -145,7 +153,9 @@ impl TrackRepo {
             let sql = "
                 SELECT 
                     t.id, t.title, 
+                    (SELECT artist_id FROM track_artists WHERE track_id = t.id ORDER BY position LIMIT 1) AS artist_id,
                     (SELECT GROUP_CONCAT(a.name, ', ') FROM track_artists ta JOIN artists a ON ta.artist_id = a.id WHERE ta.track_id = t.id ORDER BY ta.position) AS artist_name,
+                    t.album_id,
                     al.title AS album_title, m.duration_ms, m.file_ext, m.id AS media_file_id, ft.track_id IS NOT NULL AS is_favorite, al.cover_artwork_id, m.file_size
                 FROM media_files m
                 JOIN tracks t ON m.track_id = t.id
@@ -348,7 +358,9 @@ impl TrackRepo {
 
             let mut stmt = conn.prepare("
                 SELECT t.id, t.title,
+                    (SELECT artist_id FROM track_artists WHERE track_id = t.id ORDER BY position LIMIT 1) AS artist_id,
                     (SELECT GROUP_CONCAT(a.name, ', ') FROM track_artists ta JOIN artists a ON ta.artist_id = a.id WHERE ta.track_id = t.id ORDER BY ta.position) AS artist_name,
+                    t.album_id,
                     al.title AS album_title,
                     m.duration_ms, m.file_ext, m.id AS media_file_id,
                     ft.track_id IS NOT NULL AS is_favorite,

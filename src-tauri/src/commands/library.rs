@@ -43,6 +43,20 @@ pub fn library_get_album_tracks(db_state: State<'_, DbState>, album_id: i64) -> 
 }
 
 #[tauri::command]
+pub fn library_get_album_by_id(db_state: State<'_, DbState>, album_id: i64) -> Result<Option<AlbumDTO>, AppError> {
+    let _trace = ipc_trace!("library_get_album_by_id");
+    let conn = db_state.db.get()?;
+    crate::repositories::album_repo::AlbumRepo::get_album_by_id(&conn, album_id).map_err(|e| e.into())
+}
+
+#[tauri::command]
+pub fn library_get_artist_by_id(db_state: State<'_, DbState>, artist_id: i64) -> Result<Option<ArtistDTO>, AppError> {
+    let _trace = ipc_trace!("library_get_artist_by_id");
+    let conn = db_state.db.get()?;
+    crate::repositories::artist_repo::ArtistRepo::get_artist_by_id(&conn, artist_id).map_err(|e| e.into())
+}
+
+#[tauri::command]
 pub fn library_get_artist_albums(db_state: State<'_, DbState>, artist_id: i64, limit: u32, offset: u32) -> Result<Vec<AlbumDTO>, AppError> {
     let _trace = ipc_trace!("library_get_artist_albums");
     let conn = db_state.db.get()?;
@@ -169,16 +183,95 @@ pub fn library_toggle_favorite_artist(db_state: State<'_, DbState>, artist_id: i
 }
 
 #[tauri::command]
-pub fn library_get_lyrics(db_state: State<'_, DbState>, track_id: i64) -> Result<Option<String>, AppError> {
+pub async fn library_get_lyrics(db_state: State<'_, DbState>, track_id: i64) -> Result<Option<String>, AppError> {
     let _trace = ipc_trace!("library_get_lyrics");
-    use rusqlite::OptionalExtension;
-    let conn = db_state.db.get()?;
-    let lyr: Option<String> = conn.query_row(
-        "SELECT content FROM lyrics WHERE track_id = ?1 LIMIT 1",
-        params![track_id],
-        |row| row.get(0),
-    ).optional()?;
-    Ok(lyr)
+    
+    // First, check DB
+    let local_lyrics = {
+        let conn = db_state.db.get()?;
+        use rusqlite::OptionalExtension;
+        let lyr: Option<String> = conn.query_row(
+            "SELECT content FROM lyrics WHERE track_id = ?1 LIMIT 1",
+            params![track_id],
+            |row| row.get(0),
+        ).optional()?;
+        lyr
+    };
+
+    if local_lyrics.is_some() {
+        return Ok(local_lyrics);
+    }
+
+    // Not found in DB, try to download from LRCLIB
+    let (title, artist, album, duration_sec): (String, Option<String>, Option<String>, Option<u32>) = {
+        let conn = db_state.db.get()?;
+        let mut stmt = conn.prepare("
+            SELECT 
+                t.title,
+                (SELECT GROUP_CONCAT(a.name, ', ') FROM track_artists ta JOIN artists a ON ta.artist_id = a.id WHERE ta.track_id = t.id ORDER BY ta.position),
+                (SELECT title FROM albums WHERE id = t.album_id),
+                (SELECT duration_ms FROM media_files WHERE track_id = t.id LIMIT 1)
+            FROM tracks t WHERE t.id = ?1
+        ")?;
+        use rusqlite::OptionalExtension;
+        let row = stmt.query_row(params![track_id], |row| {
+            let duration_ms: Option<u32> = row.get(3)?;
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                duration_ms.map(|ms| ms / 1000)
+            ))
+        }).optional()?;
+        if let Some(r) = row { r } else { return Ok(None); }
+    };
+
+    // Prepare URL
+    let mut url = url::Url::parse("https://lrclib.net/api/get").unwrap();
+    url.query_pairs_mut().append_pair("track_name", &title);
+    if let Some(a) = artist { url.query_pairs_mut().append_pair("artist_name", &a); }
+    if let Some(al) = album { url.query_pairs_mut().append_pair("album_name", &al); }
+    if let Some(d) = duration_sec { url.query_pairs_mut().append_pair("duration", &d.to_string()); }
+
+    let client = reqwest::Client::builder()
+        .user_agent("LumoMusicPlayer/1.0.0")
+        .build()
+        .map_err(|e| AppError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+
+    let resp = client.get(url)
+        .send()
+        .await
+        .map_err(|e| AppError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+
+    if !resp.status().is_success() {
+        return Ok(None);
+    }
+
+    #[derive(serde::Deserialize)]
+    struct LrclibResponse {
+        #[serde(rename = "syncedLyrics")]
+        synced_lyrics: Option<String>,
+        #[serde(rename = "plainLyrics")]
+        plain_lyrics: Option<String>,
+    }
+
+    let result = resp.json::<LrclibResponse>()
+        .await
+        .map_err(|e| AppError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+
+    let fetched_lyrics = result.synced_lyrics.or(result.plain_lyrics);
+
+    if let Some(ref l) = fetched_lyrics {
+        let conn = db_state.db.get()?;
+        let format = if l.contains("[00:") { "lrc" } else { "plain" };
+        let synced = if format == "lrc" { 1 } else { 0 };
+        let _ = conn.execute(
+            "INSERT INTO lyrics (track_id, format, synced, content, source) VALUES (?1, ?2, ?3, ?4, 'lrclib')",
+            params![track_id, format, synced, l]
+        );
+    }
+
+    Ok(fetched_lyrics)
 }
 
 #[tauri::command]
@@ -382,4 +475,217 @@ pub fn library_get_counts(
     )?;
 
     Ok(counts)
+}
+
+#[tauri::command]
+pub async fn library_fetch_missing_album_cover(app: tauri::AppHandle, db_state: State<'_, DbState>, album_id: i64) -> Result<Option<i64>, AppError> {
+    let _trace = ipc_trace!("library_fetch_missing_album_cover");
+    
+    // 1. Get album info
+    let (album_title, artist_name): (String, Option<String>) = {
+        let conn = db_state.db.get()?;
+        let mut stmt = conn.prepare("
+            SELECT al.title, (SELECT name FROM artists WHERE id = (SELECT artist_id FROM track_artists WHERE track_id = t.id LIMIT 1))
+            FROM albums al
+            LEFT JOIN tracks t ON t.album_id = al.id
+            WHERE al.id = ?1 LIMIT 1
+        ")?;
+        use rusqlite::OptionalExtension;
+        let row = stmt.query_row(params![album_id], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        }).optional()?;
+        if let Some(r) = row { r } else { return Ok(None); }
+    };
+
+    // 2. Query iTunes
+    let mut term = album_title.clone();
+    if let Some(a) = &artist_name {
+        term = format!("{} {}", a, term);
+    }
+    
+    let mut url = url::Url::parse("https://itunes.apple.com/search").unwrap();
+    url.query_pairs_mut().append_pair("term", &term);
+    url.query_pairs_mut().append_pair("entity", "album");
+    url.query_pairs_mut().append_pair("limit", "1");
+
+    let client = reqwest::Client::new();
+    let resp = client.get(url).send().await.map_err(|e| AppError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+    if !resp.status().is_success() { return Ok(None); }
+
+    #[derive(serde::Deserialize)]
+    struct ItunesResponse {
+        results: Vec<ItunesResult>,
+    }
+    #[derive(serde::Deserialize)]
+    struct ItunesResult {
+        #[serde(rename = "artworkUrl100")]
+        artwork_url_100: Option<String>,
+    }
+
+    let result = resp.json::<ItunesResponse>().await.map_err(|e| AppError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+    if result.results.is_empty() { return Ok(None); }
+    let artwork_url = if let Some(url) = &result.results[0].artwork_url_100 {
+        url.replace("100x100bb", "600x600bb")
+    } else {
+        return Ok(None);
+    };
+
+    // 3. Download image
+    let img_resp = client.get(&artwork_url).send().await.map_err(|e| AppError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+    if !img_resp.status().is_success() { return Ok(None); }
+    
+    let mime_type = img_resp.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("image/jpeg").to_string();
+    let bytes = img_resp.bytes().await.map_err(|e| AppError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+
+    // 4. Save to db
+    use sha2::{Sha256, Digest};
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    let hash = hex::encode(hasher.finalize());
+
+    let app_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let artworks_dir = app_dir.join("artworks");
+    if !artworks_dir.exists() {
+        let _ = std::fs::create_dir_all(&artworks_dir);
+    }
+    let ext = match mime_type.as_str() {
+        "image/png" => "png",
+        "image/jpeg" | "image/jpg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        _ => "jpg",
+    };
+    let cache_path = artworks_dir.join(format!("{}.{}", hash, ext));
+    if !cache_path.exists() {
+        let _ = std::fs::write(&cache_path, &bytes);
+    }
+    
+    let thumbnail_blob = crate::services::library::LibraryService::generate_thumbnail(&bytes);
+
+    let conn = db_state.db.get()?;
+    use rusqlite::OptionalExtension;
+    // Check if hash exists
+    let existing_id: Option<i64> = conn.query_row(
+        "SELECT id FROM artwork WHERE content_hash = ?1",
+        params![hash],
+        |row| row.get(0),
+    ).optional()?;
+    
+    let artwork_id = if let Some(id) = existing_id {
+        id
+    } else {
+        conn.execute(
+            "INSERT INTO artwork (cache_path, mime_type, content_hash, thumbnail_blob) VALUES (?1, ?2, ?3, ?4)",
+            params![cache_path.to_string_lossy().to_string(), mime_type, hash, thumbnail_blob],
+        )?;
+        conn.last_insert_rowid()
+    };
+
+    conn.execute(
+        "UPDATE albums SET cover_artwork_id = ?1 WHERE id = ?2",
+        params![artwork_id, album_id],
+    )?;
+
+    Ok(Some(artwork_id))
+}
+
+#[tauri::command]
+pub async fn library_fetch_missing_artist_cover(app: tauri::AppHandle, db_state: State<'_, DbState>, artist_id: i64) -> Result<Option<i64>, AppError> {
+    let _trace = ipc_trace!("library_fetch_missing_artist_cover");
+    
+    // 1. Get artist info
+    let artist_name: String = {
+        let conn = db_state.db.get()?;
+        let mut stmt = conn.prepare("SELECT name FROM artists WHERE id = ?1 LIMIT 1")?;
+        use rusqlite::OptionalExtension;
+        let row = stmt.query_row(params![artist_id], |row| row.get(0)).optional()?;
+        if let Some(r) = row { r } else { return Ok(None); }
+    };
+
+    // 2. Query iTunes
+    let mut url = url::Url::parse("https://itunes.apple.com/search").unwrap();
+    url.query_pairs_mut().append_pair("term", &artist_name);
+    url.query_pairs_mut().append_pair("entity", "album"); // artist entity often lacks image, so we use their top album
+    url.query_pairs_mut().append_pair("limit", "1");
+
+    let client = reqwest::Client::new();
+    let resp = client.get(url).send().await.map_err(|e| AppError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+    if !resp.status().is_success() { return Ok(None); }
+
+    #[derive(serde::Deserialize)]
+    struct ItunesResponse {
+        results: Vec<ItunesResult>,
+    }
+    #[derive(serde::Deserialize)]
+    struct ItunesResult {
+        #[serde(rename = "artworkUrl100")]
+        artwork_url_100: Option<String>,
+    }
+
+    let result = resp.json::<ItunesResponse>().await.map_err(|e| AppError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+    if result.results.is_empty() { return Ok(None); }
+    let artwork_url = if let Some(url) = &result.results[0].artwork_url_100 {
+        url.replace("100x100bb", "600x600bb")
+    } else {
+        return Ok(None);
+    };
+
+    // 3. Download image
+    let img_resp = client.get(&artwork_url).send().await.map_err(|e| AppError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+    if !img_resp.status().is_success() { return Ok(None); }
+    
+    let mime_type = img_resp.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("image/jpeg").to_string();
+    let bytes = img_resp.bytes().await.map_err(|e| AppError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+
+    // 4. Save to db
+    use sha2::{Sha256, Digest};
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    let hash = hex::encode(hasher.finalize());
+
+    let app_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let artworks_dir = app_dir.join("artworks");
+    if !artworks_dir.exists() {
+        let _ = std::fs::create_dir_all(&artworks_dir);
+    }
+    let ext = match mime_type.as_str() {
+        "image/png" => "png",
+        "image/jpeg" | "image/jpg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        _ => "jpg",
+    };
+    let cache_path = artworks_dir.join(format!("{}.{}", hash, ext));
+    if !cache_path.exists() {
+        let _ = std::fs::write(&cache_path, &bytes);
+    }
+    
+    let thumbnail_blob = crate::services::library::LibraryService::generate_thumbnail(&bytes);
+
+    let conn = db_state.db.get()?;
+    use rusqlite::OptionalExtension;
+    
+    // Check if hash exists
+    let existing_id: Option<i64> = conn.query_row(
+        "SELECT id FROM artwork WHERE content_hash = ?1",
+        params![hash],
+        |row| row.get(0),
+    ).optional()?;
+    
+    let artwork_id = if let Some(id) = existing_id {
+        id
+    } else {
+        conn.execute(
+            "INSERT INTO artwork (cache_path, mime_type, content_hash, thumbnail_blob) VALUES (?1, ?2, ?3, ?4)",
+            params![cache_path.to_string_lossy().to_string(), mime_type, hash, thumbnail_blob],
+        )?;
+        conn.last_insert_rowid()
+    };
+
+    conn.execute(
+        "UPDATE artists SET avatar_artwork_id = ?1 WHERE id = ?2",
+        params![artwork_id, artist_id],
+    )?;
+
+    Ok(Some(artwork_id))
 }

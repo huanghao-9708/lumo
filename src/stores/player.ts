@@ -7,7 +7,10 @@ import {
   libraryCreatePlaylist, libraryGetPlaylists, libraryAddToPlaylist, libraryGetPlaylistTracks, libraryDeletePlaylist, libraryRemovePlaylistItem, libraryAddFolderToPlaylist,
   libraryToggleFavorite, libraryRecordPlay, libraryGetRecentlyPlayed, libraryGetFavoriteTracks, libraryGetFavoriteAlbums, libraryGetFavoriteArtists, libraryToggleFavoriteAlbum, libraryToggleFavoriteArtist, librarySavePlayQueue, libraryGetPlayQueue,
   libraryGetFolderContents, libraryGetFolderChildren, libraryGetFolderTracks,
-  libraryGetLyrics, libraryGetTrackFileInfo, libraryGetCounts
+  libraryGetLyrics, libraryGetTrackFileInfo, libraryGetCounts,
+  libraryFetchMissingAlbumCover, libraryFetchMissingArtistCover,
+  libraryGetAlbumById,
+  libraryGetArtistById
 } from '../api/library';
 import {
   playbackPlay, playbackPause, playbackResume, playbackSetVolume, playbackGetPos, playbackSeek, playbackIsFinished, playbackEnqueueNext, playbackGetQueueLen
@@ -25,7 +28,9 @@ import type { TrackDTO, ArtistDTO, AlbumDTO, PlaylistDTOBackend, FolderChildrenR
 export interface Track {
   id: number;
   title: string;
+  artistId: number | null;
   artist: string;
+  albumId: number | null;
   album: string;
   duration: string;
   durationSec: number;
@@ -66,6 +71,7 @@ export interface Artist {
   trackCount: number;
   avatarColor: string;
   track_count?: number;
+  avatar_artwork_id?: number | null;
 }
 
 export interface MusicSource {
@@ -152,7 +158,9 @@ export const usePlayerStore = defineStore("player", () => {
     return {
       id: t.id,
       title: t.title,
+      artistId: t.artist_id || null,
       artist: t.artist_name || '未知艺人',
+      albumId: t.album_id || null,
       album: t.album_title || '未知专辑',
       duration: formatTime(durationMs / 1000),
       durationSec: Math.floor(durationMs / 1000),
@@ -691,6 +699,7 @@ const albums = shallowRef<Album[]>([]);
         name: a.name,
         trackCount: a.track_count,
         avatarColor: getDeterministicColor(a.name || 'Unknown'),
+        avatar_artwork_id: a.avatar_artwork_id
       }));
     } catch(e) {
       console.error(e);
@@ -810,7 +819,8 @@ const albums = shallowRef<Album[]>([]);
         name: a.name,
         trackCount: a.track_count,
         avatarColor: getDeterministicColor(a.name || 'Unknown'),
-        track_count: a.track_count
+        track_count: a.track_count,
+        avatar_artwork_id: a.avatar_artwork_id
       }));
       artists.value.push(...newArtists);
       artistsOffset += result.length;
@@ -952,33 +962,71 @@ const albums = shallowRef<Album[]>([]);
 
   watch(activeAlbumId, async (newId) => {
     if (newId) {
-       let album = albums.value.find(a => a.id === newId);
-       if (!album && currentArtistDetailsData.value?.albums) {
-         album = currentArtistDetailsData.value.albums.find((a: any) => a.id === newId);
-       }
-       // 兜底：如果也找不到，从已加载的 tracks 里第一首推断专辑信息
-       if (!album) {
-         const loadedTracks = currentAlbumDetailsData.value?.tracks ?? [];
-         if (loadedTracks.length > 0) {
-           album = {
-             id: newId,
-             title: loadedTracks[0].album,
-             artist: loadedTracks[0].artist,
-             cover_artwork_id: loadedTracks[0].cover_artwork_id,
-             coverColor: loadedTracks[0].coverColor,
-             track_count: loadedTracks.length,
-           } as any;
-         }
-       }
-       if (album) {
-         try {
-           const result: TrackDTO[] = await libraryGetAlbumTracks(newId);
-           const tracksData = mapTrackList(result);
-           currentAlbumDetailsData.value = { ...album, tracks: tracksData };
-         } catch (e) {
-           console.error(e);
-         }
-       }
+      let album = albums.value.find(a => a.id === newId);
+      if (!album && currentArtistDetailsData.value?.albums) {
+        album = currentArtistDetailsData.value.albums.find((a: any) => a.id === newId);
+      }
+      
+      // 如果内存里找不到该专辑（例如从全局搜索或最近播放跳转），去后端查询
+      if (!album) {
+        try {
+          const albumDto = await libraryGetAlbumById(newId);
+          if (albumDto) {
+            album = {
+              id: albumDto.id,
+              title: albumDto.title,
+              artist: albumDto.artist_name || '未知艺人',
+              year: albumDto.release_year || 0,
+              coverColor: getDeterministicColor(albumDto.title),
+              cover_artwork_id: albumDto.cover_artwork_id ?? null,
+              cover_thumb: albumDto.cover_thumbnail_base64 || null,
+              artist_name: albumDto.artist_name || '未知艺人',
+              track_count: albumDto.track_count || 0,
+            } as any;
+          }
+        } catch (e) {
+          console.error('Failed to load album info:', e);
+        }
+      }
+
+      // 如果连后端也查不到（兜底逻辑），尝试从 tracks 推断
+      if (!album) {
+        const loadedTracks = currentAlbumDetailsData.value?.tracks ?? [];
+        if (loadedTracks.length > 0) {
+          album = {
+            id: newId,
+            title: loadedTracks[0].album,
+            artist: loadedTracks[0].artist,
+            cover_artwork_id: loadedTracks[0].cover_artwork_id,
+            coverColor: loadedTracks[0].coverColor,
+            track_count: loadedTracks.length,
+          } as any;
+        }
+      }
+
+      if (album) {
+        try {
+          // 不要 await 阻塞 tracks 的加载，改为异步后台执行
+          if (album.cover_artwork_id == null) {
+            libraryFetchMissingAlbumCover(newId).then((newCoverId) => {
+              if (newCoverId) {
+                // 如果当前选中的专辑还是这一个，更新它的封面
+                if (currentAlbumDetailsData.value?.id === newId) {
+                  currentAlbumDetailsData.value.cover_artwork_id = newCoverId;
+                }
+                // 更新列表中的封面
+                const foundAlbum = albums.value.find(a => a.id === newId);
+                if (foundAlbum) foundAlbum.cover_artwork_id = newCoverId;
+              }
+            }).catch(console.error);
+          }
+          const result: TrackDTO[] = await libraryGetAlbumTracks(newId);
+          const tracksData = mapTrackList(result);
+          currentAlbumDetailsData.value = { ...album, tracks: tracksData };
+        } catch (e) {
+          console.error(e);
+        }
+      }
     } else {
        currentAlbumDetailsData.value = null;
     }
@@ -1074,13 +1122,42 @@ const albums = shallowRef<Album[]>([]);
 
   watch(activeArtistId, async (newId) => {
     if (newId) {
-      const artist = artists.value.find(a => a.id === newId) || { id: newId, name: '未知艺人', avatarColor: getDeterministicColor('未知艺人'), trackCount: 0 };
+      let artist = artists.value.find(a => a.id === newId);
+
+      // 如果内存列表里找不到，从后端查询
+      if (!artist) {
+        try {
+          const artistDto = await libraryGetArtistById(newId);
+          if (artistDto) {
+            artist = {
+              id: artistDto.id,
+              name: artistDto.name,
+              avatarColor: getDeterministicColor(artistDto.name),
+              trackCount: artistDto.track_count || 0,
+              avatar_artwork_id: artistDto.avatar_artwork_id ?? null,
+            };
+          }
+        } catch (e) {
+          console.error('Failed to load artist info:', e);
+        }
+      }
+
+      // 兜底：如果还是找不到，给个默认值
+      if (!artist) {
+        artist = { 
+          id: newId, 
+          name: '未知艺人', 
+          avatarColor: getDeterministicColor('未知艺人'), 
+          trackCount: 0,
+          avatar_artwork_id: null,
+        };
+      }
 
       currentArtistDetailsData.value = {
         ...artist,
-        stats: { track_count: 0, album_count: 0 },
-        tracks: [],
         albums: [],
+        tracks: [],
+        stats: { track_count: 0, album_count: 0 },
         tracksOffset: 0,
         albumsOffset: 0,
         albumsCurrentPage: 1,
@@ -1093,8 +1170,26 @@ const albums = shallowRef<Album[]>([]);
       } as ArtistDetails;
 
       try {
-        const stats: ArtistStatsDTO = await libraryGetArtistStats(newId);
-        if (currentArtistDetailsData.value) currentArtistDetailsData.value.stats = stats;
+        if (artist.avatar_artwork_id == null) {
+          // 不阻塞，异步获取封面
+          libraryFetchMissingArtistCover(newId).then((newCoverId) => {
+            if (newCoverId) {
+              if (currentArtistDetailsData.value?.id === newId) {
+                currentArtistDetailsData.value.avatar_artwork_id = newCoverId;
+              }
+              const foundArtist = artists.value.find(a => a.id === newId);
+              if (foundArtist) foundArtist.avatar_artwork_id = newCoverId;
+            }
+          }).catch(console.error);
+        }
+        
+        // 并行加载统计信息，不阻塞轨道和专辑
+        libraryGetArtistStats(newId).then(stats => {
+          if (currentArtistDetailsData.value?.id === newId) {
+             currentArtistDetailsData.value.stats = stats;
+             currentArtistDetailsData.value.trackCount = stats.track_count;
+          }
+        }).catch(console.error);
       } catch(e) {
         console.error(e);
       }

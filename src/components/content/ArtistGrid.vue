@@ -2,6 +2,7 @@
 import { computed } from 'vue';
 import { User } from 'lucide-vue-next';
 import { usePlayerStore } from '../../stores/player';
+import { getArtworkUrl } from '../../utils';
 
 const playerStore = usePlayerStore();
 
@@ -29,10 +30,15 @@ function getColorClass(color: string): string {
         @click="selectArtist(artist.id)"
       >
         <div
-          class="w-full aspect-square mb-3 overflow-hidden flex items-center justify-center bg-gradient-to-br"
-          :class="[getColorClass(artist.avatarColor), index % 2 === 0 ? 'rounded-[10px]' : 'rounded-full']"
+          class="w-full aspect-square mb-3 overflow-hidden flex items-center justify-center relative"
+          :class="[index % 2 === 0 ? 'rounded-[10px]' : 'rounded-full', !artist.avatar_artwork_id ? `bg-gradient-to-br ${getColorClass(artist.avatarColor)}` : '']"
         >
-          <div class="w-full h-full flex items-center justify-center bg-black/10 group-hover:bg-black/20 transition-colors-smooth">
+          <img 
+            v-if="artist.avatar_artwork_id"
+            :src="getArtworkUrl(artist.avatar_artwork_id)"
+            class="w-full h-full object-cover"
+          />
+          <div v-else class="w-full h-full flex items-center justify-center bg-black/10 group-hover:bg-black/20 transition-colors-smooth">
             <User class="w-[40px] h-[40px] text-white/60" />
           </div>
         </div>

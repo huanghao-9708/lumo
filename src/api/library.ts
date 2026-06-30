@@ -29,6 +29,14 @@ export function libraryGetArtists(limit: number, offset: number, searchKeyword?:
   return invoke('library_get_artists', { limit, offset, searchKeyword });
 }
 
+export function libraryGetAlbumById(albumId: number): Promise<AlbumDTO | null> {
+  return invoke('library_get_album_by_id', { albumId });
+}
+
+export function libraryGetArtistById(artistId: number): Promise<ArtistDTO | null> {
+  return invoke('library_get_artist_by_id', { artistId });
+}
+
 export function libraryGetAlbumTracks(albumId: number): Promise<TrackDTO[]> {
   return invoke('library_get_album_tracks', { albumId });
 }
@@ -138,6 +146,14 @@ export function libraryGetFolderTracks(sourceId: number, folderPath: string, lim
 
 export function libraryGetCounts(): Promise<LibraryCountsDTO> {
   return invoke('library_get_counts');
+}
+
+export function libraryFetchMissingAlbumCover(albumId: number): Promise<number | null> {
+  return invoke('library_fetch_missing_album_cover', { albumId });
+}
+
+export function libraryFetchMissingArtistCover(artistId: number): Promise<number | null> {
+  return invoke('library_fetch_missing_artist_cover', { artistId });
 }
 
 export function libraryGetLyrics(trackId: number): Promise<string | null> {

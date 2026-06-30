@@ -157,7 +157,9 @@ impl AlbumRepo {
             let mut stmt = conn.prepare("
                 SELECT 
                     t.id, t.title, 
+                    (SELECT artist_id FROM track_artists WHERE track_id = t.id ORDER BY position LIMIT 1) AS artist_id,
                     (SELECT GROUP_CONCAT(a.name, ', ') FROM track_artists ta2 JOIN artists a ON ta2.artist_id = a.id WHERE ta2.track_id = t.id ORDER BY ta2.position) AS artist_name,
+                    t.album_id,
                     al.title AS album_title, m.duration_ms, m.file_ext, m.id AS media_file_id, ft.track_id IS NOT NULL AS is_favorite, al.cover_artwork_id, m.file_size
                 FROM tracks t
                 LEFT JOIN albums al ON t.album_id = al.id
@@ -171,5 +173,36 @@ impl AlbumRepo {
             for r in rows { result.push(r?); }
             Ok(result)
         }
+
+    pub fn get_album_by_id(conn: &Connection, album_id: i64) -> rusqlite::Result<Option<AlbumDTO>> {
+        let mut stmt = conn.prepare("
+            SELECT
+                al.id, al.title,
+                (SELECT GROUP_CONCAT(aa2.name, ', ') FROM album_artists aa1 JOIN artists aa2 ON aa1.artist_id = aa2.id WHERE aa1.album_id = al.id ORDER BY aa1.position) AS artist_name,
+                al.cover_artwork_id, al.track_count, aw.thumbnail_blob
+            FROM albums al
+            LEFT JOIN artwork aw ON al.cover_artwork_id = aw.id
+            WHERE al.id = ?1
+        ")?;
+        let mut rows = stmt.query_map([album_id], |row| {
+            let thumb: Option<Vec<u8>> = row.get(5)?;
+            let cover_thumbnail_base64 = thumb.map(|b| {
+                format!("data:image/jpeg;base64,{}", general_purpose::STANDARD.encode(&b))
+            });
+            Ok(AlbumDTO {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                artist_name: row.get(2)?,
+                cover_artwork_id: row.get(3)?,
+                track_count: row.get(4)?,
+                cover_thumbnail_base64,
+            })
+        })?;
+        if let Some(r) = rows.next() {
+            Ok(Some(r?))
+        } else {
+            Ok(None)
+        }
+    }
 
 }

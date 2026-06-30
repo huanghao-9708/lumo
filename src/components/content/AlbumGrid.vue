@@ -38,6 +38,8 @@ async function playAlbum(album: Album) {
         duration: `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`,
         durationSec: sec,
         format: t.format ? t.format.toUpperCase() : 'UNKNOWN',
+        artistId: t.artist_id ?? null,
+        albumId: t.album_id ?? null,
         coverColor: '',
         isFavorite: false,
         primary_file_id: t.media_file_id,

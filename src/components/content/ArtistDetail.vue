@@ -4,6 +4,7 @@ import {
   Play, Shuffle, User, Loader2, Heart, MoreHorizontal, Clock, Disc3, Star,
 } from 'lucide-vue-next';
 import { usePlayerStore, type Album } from '../../stores/player';
+import { getArtworkUrl } from '../../utils';
 
 const props = defineProps<{
   artistId: number | null;
@@ -69,7 +70,8 @@ function playTrack(index: number) {
 
 function toggleFav(trackId: number, e: Event) {
   e.stopPropagation();
-  playerStore.toggleFavorite(trackId);
+  const t = detail.value?.tracks?.find(x => x.id === trackId);
+  if (t) playerStore.toggleFavorite(trackId);
 }
 
 function selectAlbum(albumId: number) {
@@ -99,10 +101,15 @@ function getColorClass(color: string): string {
       <div class="px-8 pt-8 pb-4 flex-shrink-0">
         <div class="flex items-start gap-8">
           <div
-            class="w-[180px] h-[180px] rounded-[10px] overflow-hidden flex-shrink-0 flex items-center justify-center bg-gradient-to-br"
-            :class="getColorClass(detail.avatarColor)"
+            class="w-[180px] h-[180px] rounded-[10px] overflow-hidden flex-shrink-0 flex items-center justify-center relative"
+            :class="!detail.avatar_artwork_id ? `bg-gradient-to-br ${getColorClass(detail.avatarColor)}` : ''"
           >
-            <User class="w-[48px] h-[48px] text-white/60" />
+            <img 
+              v-if="detail.avatar_artwork_id"
+              :src="getArtworkUrl(detail.avatar_artwork_id)"
+              class="w-full h-full object-cover"
+            />
+            <User v-else class="w-[48px] h-[48px] text-white/60" />
           </div>
 
           <div class="flex-1 min-w-0 pt-2">

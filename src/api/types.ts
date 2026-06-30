@@ -1,7 +1,9 @@
 export interface TrackDTO {
   id: number;
   title: string;
+  artist_id: number | null;
   artist_name: string | null;
+  album_id: number | null;
   album_title: string | null;
   duration_ms: number | null;
   format: string | null;
@@ -30,6 +32,7 @@ export interface ArtistDTO {
   id: number;
   name: string;
   track_count: number;
+  avatar_artwork_id?: number | null;
 }
 
 export interface PlaylistDTOBackend {

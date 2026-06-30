@@ -613,6 +613,14 @@ fn apply_migrations(conn: &Connection, app_dir: &std::path::Path) -> Result<()> 
         tracing::info!("数据库迁移：已升级至 V6（WebDAV 凭据加密迁移）");
     }
 
+    // ===== V7: 给 artists 表加头像字段 =====
+    if current < 7 {
+        conn.execute_batch("ALTER TABLE artists ADD COLUMN avatar_artwork_id INTEGER REFERENCES artwork(id) ON DELETE SET NULL;")?;
+        mark_migration_applied(conn, 7)?;
+        current = 7;
+        tracing::info!("数据库迁移：已升级至 V7（artists 加 avatar_artwork_id 字段）");
+    }
+
     let _ = current;
     Ok(())
 }

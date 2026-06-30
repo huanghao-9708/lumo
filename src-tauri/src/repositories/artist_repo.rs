@@ -10,7 +10,8 @@ impl ArtistRepo {
                 SELECT
                     ar.id,
                     ar.name,
-                    ar.track_count
+                    ar.track_count,
+                    ar.avatar_artwork_id
                 FROM artists ar
                 WHERE 1=1
             ".to_string();
@@ -35,6 +36,7 @@ impl ArtistRepo {
                         id: row.get(0)?,
                         name: row.get(1)?,
                         track_count: row.get(2)?,
+                        avatar_artwork_id: row.get(3)?,
                     })
                 })?;
                 for r in rows { result.push(r?); }
@@ -45,6 +47,7 @@ impl ArtistRepo {
                         id: row.get(0)?,
                         name: row.get(1)?,
                         track_count: row.get(2)?,
+                        avatar_artwork_id: row.get(3)?,
                     })
                 })?;
                 for r in rows { result.push(r?); }
@@ -115,7 +118,9 @@ impl ArtistRepo {
             let mut stmt = conn.prepare("
                 SELECT 
                     t.id, t.title, 
+                    (SELECT artist_id FROM track_artists WHERE track_id = t.id ORDER BY position LIMIT 1) AS artist_id,
                     (SELECT GROUP_CONCAT(a.name, ', ') FROM track_artists ta2 JOIN artists a ON ta2.artist_id = a.id WHERE ta2.track_id = t.id ORDER BY ta2.position) AS artist_name,
+                    t.album_id,
                     al.title AS album_title, m.duration_ms, m.file_ext, m.id AS media_file_id, ft.track_id IS NOT NULL AS is_favorite, al.cover_artwork_id, m.file_size
                 FROM tracks t
                 JOIN track_artists ta ON ta.track_id = t.id
@@ -161,7 +166,7 @@ impl ArtistRepo {
     pub fn get_favorite_artists(conn: &Connection) -> rusqlite::Result<Vec<ArtistDTO>> {
             let mut stmt = conn.prepare("
                 SELECT
-                    ar.id, ar.name, ar.track_count
+                    ar.id, ar.name, ar.track_count, ar.avatar_artwork_id
                 FROM favorite_artists fa
                 JOIN artists ar ON fa.artist_id = ar.id
                 ORDER BY fa.favorited_at DESC
@@ -171,6 +176,7 @@ impl ArtistRepo {
                     id: row.get(0)?,
                     name: row.get(1)?,
                     track_count: row.get(2)?,
+                    avatar_artwork_id: row.get(3)?,
                 })
             })?;
             let mut result = Vec::new();
@@ -192,5 +198,27 @@ impl ArtistRepo {
             }
             Ok(())
         }
+
+    pub fn get_artist_by_id(conn: &Connection, artist_id: i64) -> rusqlite::Result<Option<ArtistDTO>> {
+        let mut stmt = conn.prepare("
+            SELECT
+                ar.id, ar.name, ar.track_count, ar.avatar_artwork_id
+            FROM artists ar
+            WHERE ar.id = ?1
+        ")?;
+        let mut rows = stmt.query_map(params![artist_id], |row| {
+            Ok(ArtistDTO {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                track_count: row.get(2)?,
+                avatar_artwork_id: row.get(3)?,
+            })
+        })?;
+        if let Some(r) = rows.next() {
+            Ok(Some(r?))
+        } else {
+            Ok(None)
+        }
+    }
 
 }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue';
 import {
   Shuffle, SkipBack, Play, Pause, SkipForward, Repeat, Repeat1, ChevronDown, Disc3, Volume, Volume1, Volume2,
   Heart, ListPlus,
@@ -75,15 +75,55 @@ function seedRand(seed: number) {
     return s / 4294967296;
   };
 }
+const animationTick = ref(0);
+let animationFrameId: number;
+
+function animateWaveform() {
+  if (playerStore.isPlaying) {
+    animationTick.value += 0.15;
+    animationFrameId = requestAnimationFrame(animateWaveform);
+  }
+}
+
+watch(() => playerStore.isPlaying, (playing) => {
+  if (playing) {
+    animationFrameId = requestAnimationFrame(animateWaveform);
+  } else {
+    cancelAnimationFrame(animationFrameId);
+  }
+});
+
+onMounted(() => {
+  if (playerStore.isPlaying) {
+    animationFrameId = requestAnimationFrame(animateWaveform);
+  }
+});
+
+onBeforeUnmount(() => {
+  cancelAnimationFrame(animationFrameId);
+});
+
 const waveform = computed(() => {
   const seed = playerStore.currentTrack?.id ?? 42;
   const rand = seedRand(seed);
   const bars: number[] = [];
+  const tick = animationTick.value;
+  const playing = playerStore.isPlaying;
+  
   // 中间高、两边低的包络，更像真实音频波形
   for (let i = 0; i < BARS; i++) {
     const center = 1 - Math.abs(i - BARS / 2) / (BARS / 2);
-    const noise = 0.3 + rand() * 0.7;
-    bars.push(Math.max(0.15, Math.min(1, center * 0.6 + noise * 0.5)));
+    const staticNoise = 0.3 + rand() * 0.7;
+    let base = Math.max(0.15, Math.min(1, center * 0.6 + staticNoise * 0.5));
+    
+    // 如果正在播放，叠加一个动态正弦波跳动
+    if (playing) {
+      // 用不同的频率和相位，让每个柱子跳动不一致
+      const jump = (Math.sin(tick + i * 0.5) + Math.cos(tick * 1.3 - i * 0.3)) * 0.15 * center;
+      base = Math.max(0.15, Math.min(1, base + jump));
+    }
+    
+    bars.push(base);
   }
   return bars;
 });

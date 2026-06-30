@@ -68,6 +68,8 @@ function playTrack(index: number, dto: TrackDTO) {
     duration: `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`,
     durationSec: sec,
     format: dto.format ? dto.format.toUpperCase() : 'UNKNOWN',
+    artistId: dto.artist_id ?? null,
+    albumId: dto.album_id ?? null,
     coverColor: '',
     cover_artwork_id: dto.cover_artwork_id,
     isFavorite: dto.is_favorite || false,

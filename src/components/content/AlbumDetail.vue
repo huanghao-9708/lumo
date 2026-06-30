@@ -215,7 +215,7 @@ function toggleFav(trackId: number, e: Event) {
           </div>
 
           <!-- 艺术家 -->
-          <div class="flex-[1.5] min-w-0 hidden sm:block text-[13px] text-text-secondary truncate">{{ track.artist }}</div>
+          <div class="flex-[1.5] min-w-0 hidden sm:block text-[13px] text-text-secondary truncate"><span class="hover:underline cursor-pointer" @click.stop="if(track.artistId) { playerStore.activeLibraryTab = '艺术家'; playerStore.activeArtistId = track.artistId; }">{{ track.artist }}</span></div>
 
           <!-- 时长 -->
           <div class="w-[56px] text-right shrink-0 text-[12px] font-mono text-text-muted tabular-nums">{{ track.duration }}</div>

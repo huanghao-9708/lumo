@@ -336,8 +336,10 @@ pub fn run() {
             crate::commands::scanner::source_remove,
             crate::commands::library::library_get_tracks,
             crate::commands::library::library_get_albums,
+            crate::commands::library::library_get_album_by_id,
             crate::commands::library::library_get_album_count,
             crate::commands::library::library_get_artists,
+            crate::commands::library::library_get_artist_by_id,
             crate::commands::library::library_get_album_tracks,
             crate::commands::library::library_get_artist_albums,
             crate::commands::library::library_get_artist_album_count,
@@ -377,7 +379,9 @@ pub fn run() {
             crate::commands::library::library_add_folder_to_playlist,
             crate::commands::library::library_get_folder_children,
             crate::commands::library::library_get_folder_tracks,
-            crate::commands::library::library_get_counts
+            crate::commands::library::library_get_counts,
+            crate::commands::library::library_fetch_missing_album_cover,
+            crate::commands::library::library_fetch_missing_artist_cover
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

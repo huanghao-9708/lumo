@@ -144,8 +144,12 @@ pub struct TrackDTO {
     pub id: i64,
     /// 歌曲标题
     pub title: String,
+    /// 首要艺人 ID（用于跳转）
+    pub artist_id: Option<i64>,
     /// 格式化后拼接好的所有艺人名称（如 "Artist A, Artist B"）
     pub artist_name: Option<String>,
+    /// 所属专辑 ID（用于跳转）
+    pub album_id: Option<i64>,
     /// 专辑标题
     pub album_title: Option<String>,
     /// 时长（毫秒）
@@ -193,6 +197,8 @@ pub struct ArtistDTO {
     pub name: String,
     /// 该艺人参与的歌曲总数
     pub track_count: i64,
+    /// 艺人头像在 artwork 表中的 ID
+    pub avatar_artwork_id: Option<i64>,
 }
 
 /// 传输给前端的歌单数据传输对象

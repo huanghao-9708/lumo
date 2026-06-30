@@ -161,6 +161,18 @@ function onAlbumSelect(album: Album) {
   playerStore.activeAlbumId = album.id;
 }
 
+function navigateToArtist(artistId: number | null) {
+  if (!artistId) return;
+  playerStore.activeLibraryTab = '艺术家';
+  playerStore.activeArtistId = artistId;
+}
+
+function navigateToAlbum(albumId: number | null) {
+  if (!albumId) return;
+  playerStore.activeLibraryTab = '专辑';
+  playerStore.activeAlbumId = albumId;
+}
+
 /* ============ Tab 切换时重新拉取数据 ============ */
 function loadForCurrentTab() {
   const tab = playerStore.activeLibraryTab;
@@ -366,10 +378,14 @@ onMounted(() => {
                 </div>
 
                 <!-- 艺术家 -->
-                <div class="flex-[1.5] min-w-0 hidden sm:block text-[13px] text-text-secondary truncate">{{ song.artist }}</div>
+                <div class="flex-[1.5] min-w-0 hidden sm:block text-[13px] text-text-secondary truncate">
+                  <span class="hover:underline cursor-pointer" @click.stop="navigateToArtist(song.artistId)">{{ song.artist }}</span>
+                </div>
 
                 <!-- 专辑（非斜体） -->
-                <div class="flex-[1.5] min-w-0 hidden md:block text-[13px] text-text-secondary truncate">{{ song.album }}</div>
+                <div class="flex-[1.5] min-w-0 hidden md:block text-[13px] text-text-secondary truncate">
+                  <span class="hover:underline cursor-pointer" @click.stop="navigateToAlbum(song.albumId)">{{ song.album }}</span>
+                </div>
 
                 <!-- 时长 -->
                 <div class="w-[56px] text-right shrink-0 hidden lg:block text-[12px] font-mono text-text-muted tabular-nums">{{ song.duration }}</div>
