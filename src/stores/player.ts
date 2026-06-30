@@ -85,6 +85,34 @@ export interface FolderEntry {
   track?: Track;
 }
 
+// ================= 详情页数据接口 =================
+
+import type { ArtistStatsDTO, TrackFileInfoDTO, SourceDTO } from '../api/types';
+
+interface AlbumDetails extends Album {
+  tracks: Track[];
+}
+
+interface ArtistDetails extends Artist {
+  stats: ArtistStatsDTO;
+  tracks: Track[];
+  albums: Album[];
+  tracksOffset: number;
+  albumsOffset: number;
+  hasMoreTracks: boolean;
+  isLoadingTracks: boolean;
+  albumsCurrentPage: number;
+  albumsTotalCount: number;
+  albumsTotalPages: number;
+  hasMoreAlbums: boolean;
+  isLoadingAlbums: boolean;
+}
+
+interface PlaylistDetails extends Playlist {
+  tracks: Track[];
+  isLoadingTracks: boolean;
+}
+
 // ================= Store 实现 =================
 
 export const usePlayerStore = defineStore("player", () => {
@@ -154,7 +182,7 @@ export const usePlayerStore = defineStore("player", () => {
   const durationMs = ref(0);
   let progressTimer: ReturnType<typeof setInterval> | null = null;
 
-  const currentTrackFileInfo = ref<any>(null);
+  const currentTrackFileInfo = ref<TrackFileInfoDTO | null>(null);
   const isErrorTracks = ref(false);
   const isErrorArtists = ref(false);
   const hasLoadedCurrentFile = ref(false);
@@ -401,7 +429,7 @@ export const usePlayerStore = defineStore("player", () => {
   }
 
   // 歌词数据
-  const lyrics = ref<any[]>([]);
+  const lyrics = ref<LyricLine[]>([]);
 
   const activeLyricIndex = computed(() => {
     if (lyrics.value.length === 0) return -1;
@@ -731,7 +759,7 @@ const albums = shallowRef<Album[]>([]);
         id: a.id,
         title: a.title,
         artist: a.artist_name || '未知艺人',
-        year: a.release_year || new Date().getFullYear(),
+        year: a.release_year || 0,
         coverColor: getDeterministicColor(a.title || 'Unknown'),
         cover_artwork_id: a.cover_artwork_id,
         cover_thumb: a.cover_thumbnail_base64,
@@ -874,9 +902,9 @@ const albums = shallowRef<Album[]>([]);
     }
   }, { immediate: true });
 
-  const currentAlbumDetailsData = ref<any>(null);
-  const currentArtistDetailsData = ref<any>(null);
-  const currentPlaylistDetailsData = ref<any>(null);
+  const currentAlbumDetailsData = ref<AlbumDetails | null>(null);
+  const currentArtistDetailsData = ref<ArtistDetails | null>(null);
+  const currentPlaylistDetailsData = ref<PlaylistDetails | null>(null);
   const isCreatePlaylistModalOpen = ref(false);
 
   const createPlaylist = async (name: string, description: string): Promise<number> => {
@@ -1005,7 +1033,7 @@ const albums = shallowRef<Album[]>([]);
         id: a.id,
         title: a.title,
         artist: a.artist_name || '未知艺人',
-        year: a.release_year || new Date().getFullYear(),
+        year: a.release_year || 0,
         coverColor: getDeterministicColor(a.title || 'Unknown'),
         cover_artwork_id: a.cover_artwork_id,
         cover_thumb: a.cover_thumbnail_base64,
@@ -1046,7 +1074,7 @@ const albums = shallowRef<Album[]>([]);
 
   watch(activeArtistId, async (newId) => {
     if (newId) {
-      const artist = artists.value.find(a => a.id === newId) || { id: newId, name: '未知艺人', avatarColor: getDeterministicColor('未知艺人') };
+      const artist = artists.value.find(a => a.id === newId) || { id: newId, name: '未知艺人', avatarColor: getDeterministicColor('未知艺人'), trackCount: 0 };
 
       currentArtistDetailsData.value = {
         ...artist,
@@ -1062,11 +1090,11 @@ const albums = shallowRef<Album[]>([]);
         hasMoreAlbums: true,
         isLoadingTracks: false,
         isLoadingAlbums: false
-      };
+      } as ArtistDetails;
 
       try {
-        const stats: any = await libraryGetArtistStats(newId);
-        currentArtistDetailsData.value.stats = stats;
+        const stats: ArtistStatsDTO = await libraryGetArtistStats(newId);
+        if (currentArtistDetailsData.value) currentArtistDetailsData.value.stats = stats;
       } catch(e) {
         console.error(e);
       }
@@ -1106,6 +1134,26 @@ const albums = shallowRef<Album[]>([]);
       .catch(e => console.error("Failed to auto-save play queue:", e));
   }
 
+  // ===== 进度持久化（事件驱动，避免高频写磁盘） =====
+  let progressSaveTimer: ReturnType<typeof setInterval> | null = null;
+
+  function saveProgressToStorage() {
+    localStorage.setItem('lumo_progress_ms', String(progressMs.value));
+  }
+
+  function startProgressAutoSave() {
+    if (progressSaveTimer) return;
+    progressSaveTimer = setInterval(saveProgressToStorage, 30000);
+  }
+
+  function stopProgressAutoSave() {
+    if (progressSaveTimer) {
+      clearInterval(progressSaveTimer);
+      progressSaveTimer = null;
+    }
+    saveProgressToStorage();
+  }
+
   // 监视状态标量并写入 localStorage
   watch(currentIndex, (newIdx) => {
     localStorage.setItem('lumo_current_index', String(newIdx));
@@ -1115,9 +1163,6 @@ const albums = shallowRef<Album[]>([]);
   });
   watch(volume, (newVol) => {
     localStorage.setItem('lumo_volume', String(newVol));
-  });
-  watch(progressMs, (newProgress) => {
-    localStorage.setItem('lumo_progress_ms', String(newProgress));
   });
 
   // 恢复状态与队列
@@ -1133,7 +1178,7 @@ const albums = shallowRef<Album[]>([]);
       // 2. 恢复播放模式
       const savedMode = localStorage.getItem('lumo_play_mode');
       if (savedMode && ['normal', 'repeat', 'repeat-one', 'shuffle'].includes(savedMode)) {
-        playMode.value = savedMode as any;
+        playMode.value = savedMode as 'normal' | 'repeat' | 'repeat-one' | 'shuffle';
       }
 
       // 3. 恢复音量
@@ -1211,6 +1256,7 @@ const albums = shallowRef<Album[]>([]);
       if (isPlaying.value) {
         await playbackPause();
         isPlaying.value = false;
+        stopProgressAutoSave();
       } else {
         if (!hasLoadedCurrentFile.value) {
           if (track.primary_file_id) {
@@ -1226,6 +1272,7 @@ const albums = shallowRef<Album[]>([]);
         }
         isPlaying.value = true;
         startProgressPolling();
+        startProgressAutoSave();
       }
     } catch (e) {
       console.error("Toggle play failed:", e);
@@ -1234,7 +1281,11 @@ const albums = shallowRef<Album[]>([]);
 
   let actualListenMs = 0;
   let hasEnqueuedNext = false;
-    let enqueuedTrackIndex: number | null = null;
+  let enqueuedTrackIndex: number | null = null;
+
+  // Shuffle 模式播放历史栈：记录已播放的 index，用于 prevTrack 精确回退
+  const playHistory: number[] = [];
+  const MAX_PLAY_HISTORY = 100;
 
   async function startProgressPolling() {
     if (progressTimer) clearInterval(progressTimer);
@@ -1285,7 +1336,7 @@ const albums = shallowRef<Album[]>([]);
                 if (queue.value && queue.value[currentIndex.value] && actualListenMs > 0) {
                    recordPlay(queue.value[currentIndex.value].id, actualListenMs);
                 }
-                
+
                 currentIndex.value = enqueuedTrackIndex as number;
                 const newTrack = queue.value[currentIndex.value];
                 actualListenMs = 0;
@@ -1293,10 +1344,11 @@ const albums = shallowRef<Album[]>([]);
                 progressMs.value = 0;
                 hasEnqueuedNext = false;
                                 enqueuedTrackIndex = null;
-                
-                return; // 直接返回，等待下一个轮询获取新歌进度
+
+                return;
              }
            } catch(e) {}
+           return; // 已预加载 gapless，跳过下方传统兜底，避免竞态
         }
 
         // 传统切歌兜底判定
@@ -1318,12 +1370,20 @@ const albums = shallowRef<Album[]>([]);
     }, 500);
   }
 
-  async function playQueue(newQueue: Track[], index: number) {
+  async function playQueue(newQueue: Track[], index: number, skipHistoryPush = false) {
     // 切歌前记录上一首的播放时长
     if (queue.value && queue.value[currentIndex.value] && actualListenMs > 0) {
       recordPlay(queue.value[currentIndex.value].id, actualListenMs);
     }
-    
+
+    // 记录播放历史（用于 shuffle 模式 prevTrack 精确回退）
+    if (!skipHistoryPush && currentIndex.value >= 0 && currentIndex.value < queue.value.length) {
+      playHistory.push(currentIndex.value);
+      if (playHistory.length > MAX_PLAY_HISTORY) {
+        playHistory.shift();
+      }
+    }
+
     queue.value = [...newQueue];
     currentIndex.value = index;
     const track = queue.value[index];
@@ -1339,6 +1399,7 @@ const albums = shallowRef<Album[]>([]);
         isPlaying.value = true;
         hasLoadedCurrentFile.value = true;
         startProgressPolling();
+        startProgressAutoSave();
         persistPlayQueueIfNeeded();
       } catch (e) {
         console.error("Play failed:", e);
@@ -1347,10 +1408,12 @@ const albums = shallowRef<Album[]>([]);
   }
 
   async function nextTrack(isAuto = false) {
+    // 重置 gapless 状态，防止竞态残留
+    hasEnqueuedNext = false;
+    enqueuedTrackIndex = null;
     if (queue.value.length === 0) return;
     if (isAuto && playMode.value === 'repeat-one') {
-      // Keep currentIndex unchanged，但需要重新载入播放
-      await playQueue(queue.value, currentIndex.value);
+      await playQueue(queue.value, currentIndex.value, true);
       return;
     }
     if (playMode.value === 'shuffle') {
@@ -1363,12 +1426,14 @@ const albums = shallowRef<Album[]>([]);
 
   async function prevTrack() {
     if (queue.value.length === 0) return;
-    if (playMode.value === 'shuffle') {
+    if (playMode.value === 'shuffle' && playHistory.length > 0) {
+      currentIndex.value = playHistory.pop()!;
+    } else if (playMode.value === 'shuffle') {
       currentIndex.value = Math.floor(Math.random() * queue.value.length);
     } else {
       currentIndex.value = (currentIndex.value - 1 + queue.value.length) % queue.value.length;
     }
-    await playQueue(queue.value, currentIndex.value);
+    await playQueue(queue.value, currentIndex.value, true);
   }
 
   async function setVolume(v: number) {
@@ -1411,7 +1476,7 @@ const albums = shallowRef<Album[]>([]);
 
   async function fetchSources() {
     try {
-      const result: any[] = await sourceList();
+      const result: SourceDTO[] = await sourceList();
       sources.value = result.map(s => ({
         id: s.id,
         kind: s.kind as 'local' | 'webdav',
@@ -1457,34 +1522,49 @@ const albums = shallowRef<Album[]>([]);
     }
   }
 
-  // Register global listeners for scan events
-  listen('scan-progress', (event: any) => {
-    const payload = event.payload as { source_id: number; scanned_count: number; skipped_count?: number; current_path: string };
-    const source = sources.value.find(s => s.id === payload.source_id);
-    if (source) {
-      const skipped = payload.skipped_count ? `，跳过 ${payload.skipped_count}` : '';
-      source.lastScanned = `扫描中: ${payload.scanned_count} 首${skipped}...`;
-    }
-  });
+  // ===== 全局 Tauri 事件监听器（P1-8: 保存 unlisten 引用，HMR 时清理） =====
+  let unlistenScanProgress: (() => void) | null = null;
+  let unlistenScanComplete: (() => void) | null = null;
+  let unlistenArtworkBackfill: (() => void) | null = null;
 
-  listen('scan-complete', async (event: any) => {
-    const sourceId = event.payload as number;
-    const source = sources.value.find(s => s.id === sourceId);
-    if (source) {
-      source.lastScanned = "刚刚扫描";
-    }
-    await fetchTracks(true); // Reset and fetch
-    await fetchAlbums(true);
-    await fetchArtists(true);
-  });
+  async function initEventListeners() {
+    // 先清理可能残留的旧监听（Vite HMR 场景）
+    unlistenScanProgress?.();
+    unlistenScanComplete?.();
+    unlistenArtworkBackfill?.();
 
-  // 监听后端 artwork 缩略图回填完成事件。
-  // 回填在应用启动后后台执行（674 张图片约 20-40s），
-  // 完成后重新拉取专辑列表,让前端拿到内联 base64 缩略图,不再走 lumo:// 协议。
-  listen('artwork-backfill-complete', async () => {
-    console.log('[artwork-backfill-complete] 缩略图回填完成，重新拉取专辑列表');
-    await fetchAlbums(true);
-  });
+    unlistenScanProgress = await listen('scan-progress', (event: any) => {
+      const payload = event.payload as { source_id: number; scanned_count: number; skipped_count?: number; current_path: string };
+      const source = sources.value.find(s => s.id === payload.source_id);
+      if (source) {
+        const skipped = payload.skipped_count ? `，跳过 ${payload.skipped_count}` : '';
+        source.lastScanned = `扫描中: ${payload.scanned_count} 首${skipped}...`;
+      }
+    });
+
+    unlistenScanComplete = await listen('scan-complete', async (event: any) => {
+      const sourceId = event.payload as number;
+      const source = sources.value.find(s => s.id === sourceId);
+      if (source) {
+        source.lastScanned = "刚刚扫描";
+      }
+      await fetchTracks(true);
+      await fetchAlbums(true);
+      await fetchArtists(true);
+    });
+
+    unlistenArtworkBackfill = await listen('artwork-backfill-complete', async () => {
+      console.log('[artwork-backfill-complete] 缩略图回填完成，重新拉取专辑列表');
+      await fetchAlbums(true);
+    });
+  }
+
+  initEventListeners();
+
+  // 页面关闭前保存播放进度（P0-3 兜底）
+  if (typeof window !== 'undefined') {
+    window.addEventListener('beforeunload', saveProgressToStorage);
+  }
 
   return {
     isPlaying,

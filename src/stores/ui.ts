@@ -1,7 +1,7 @@
 import { defineStore } from "pinia";
 import { ref, watch } from "vue";
 
-export type ThemeKey = "theme-light" | "theme-dark";
+
 
 /**
  * UI 全局状态：夜间模式、右栏可见性。

@@ -1,4 +1,5 @@
 import { invoke } from '../utils/tauriInvoke';
+import type { SourceDTO } from './types';
 
 export function sourceAddLocal(path: string, name: string): Promise<number> {
   return invoke('source_add_local', { path, name });
@@ -8,7 +9,7 @@ export function sourceAddWebdav(url: string, name: string, username?: string, pa
   return invoke('source_add_webdav', { url, name, username, password });
 }
 
-export function sourceList(): Promise<any[]> {
+export function sourceList(): Promise<SourceDTO[]> {
   return invoke('source_list');
 }
 

@@ -75,13 +75,12 @@ static ARTWORK_SEMAPHORE: CountingSemaphore = CountingSemaphore::new(4);
 /// 期间前端正常使用 `lumo://` 协议加载封面(有 semaphore 限流保护),
 /// 回填完成后 emit `artwork-backfill-complete` 事件,前端收到后重新拉取专辑列表。
 ///
-/// 节流策略:每处理 10 张暂停 50ms,给 lumo:// 协议处理器和 IPC 通道留出 CPU/IO 余量。
-/// 不节流的话 674 张图片密集处理会吃满 CPU,反而让前端更卡。
+/// 优化:每 50 条一批开启独立事务提交,避免 600+ 条逐条事务的写放大开销。
+/// 每批完成后暂停 50ms,避免吃满 CPU 导致前端卡顿。
 fn backfill_artwork_thumbnails(app: tauri::AppHandle, pool: &DbPool) {
     use rusqlite::params;
     use tauri::Emitter;
 
-    // 1. 查询所有需要回填的记录(快速持锁,只读 id + path)
     let rows: Vec<(i64, String)> = {
         let conn = match pool.get() {
             Ok(c) => c,
@@ -117,41 +116,54 @@ fn backfill_artwork_thumbnails(app: tauri::AppHandle, pool: &DbPool) {
     }
     tracing::info!("[回填] 发现 {} 条 artwork 记录待生成缩略图，后台异步执行中...", total);
 
-    // 2. 逐条处理:读原图 → 生成缩略图 → UPDATE
-    // 每处理 10 张暂停 50ms,避免吃满 CPU 导致前端卡顿
+    let batch_size = 50;
     let mut done = 0usize;
     let mut failed = 0usize;
-    for (i, (id, cache_path)) in rows.iter().enumerate() {
-        let thumb = std::fs::read(&cache_path)
-            .ok()
-            .and_then(|data| crate::services::library::LibraryService::generate_thumbnail(&data));
 
-        if let Some(blob) = thumb {
-            if let Ok(conn) = pool.get() {
-                let _ = conn.execute(
+    for chunk in rows.chunks(batch_size) {
+        let conn = match pool.get() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!("[回填] 获取数据库连接失败: {}", e);
+                break;
+            }
+        };
+
+        let tx = match conn.unchecked_transaction() {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::error!("[回填] 开启事务失败: {}", e);
+                break;
+            }
+        };
+
+        for (id, cache_path) in chunk {
+            let thumb = std::fs::read(cache_path)
+                .ok()
+                .and_then(|data| crate::services::library::LibraryService::generate_thumbnail(&data));
+
+            if let Some(blob) = thumb {
+                let _ = tx.execute(
                     "UPDATE artwork SET thumbnail_blob = ?1 WHERE id = ?2",
                     params![blob, id],
                 );
+                done += 1;
+            } else {
+                failed += 1;
+                tracing::warn!("[回填] artwork id={} 无法生成缩略图（路径={}）", id, cache_path);
             }
-            done += 1;
-        } else {
-            failed += 1;
-            tracing::warn!("[回填] artwork id={} 无法生成缩略图（路径={}）", id, cache_path);
         }
 
-        // 每 10 张暂停 50ms,给系统喘息空间
-        if (i + 1) % 10 == 0 {
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        }
+        let _ = tx.commit();
 
-        // 每 100 条报告一次进度
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
         if (done + failed) % 100 == 0 {
             tracing::info!("[回填] 进度：{}/{}（成功 {}，失败 {}）", done + failed, total, done, failed);
         }
     }
 
     tracing::info!("[回填] 完成：成功 {}，失败 {}，总计 {}", done, failed, total);
-    // 通知前端回填完成,前端重新拉取专辑列表以获取内联缩略图
     let _ = app.emit("artwork-backfill-complete", ());
 }
 
@@ -159,44 +171,11 @@ fn backfill_artwork_thumbnails(app: tauri::AppHandle, pool: &DbPool) {
 /// 用于 `Last-Modified` / `Date` 响应头。
 ///
 /// 格式样例：`Wed, 14 Jun 2026 07:28:00 GMT`
-/// 手写实现是为了避免引入 chrono 这类额外依赖（agent.md 约束）。
+/// 使用已有的 chrono crate（Cargo.toml 已引入），替换手写 civil_from_days 算法。
 fn format_http_date(unix_secs: u64) -> Option<String> {
-    // 我们需要"年月日 + 时分秒"，但 std 只提供了从 1970-01-01 起的天数算法。
-    // 下面用经典的 civil_from_days 算法把"天数"换算为公历日期。
-    // 参考：Howard Hinnant, http://howardhinnant.github.io/date_algorithms.html
-    let days = (unix_secs / 86400) as i64;
-    let secs_of_day = (unix_secs % 86400) as u64;
-    let hour = secs_of_day / 3600;
-    let minute = (secs_of_day % 3600) / 60;
-    let second = secs_of_day % 60;
-
-    // civil_from_days：days 是自 1970-01-01 起的天数
-    let z = days + 719468; // 偏移到 0000-03-01 为起点
-    let era = if z >= 0 { z } else { z - 146096 } / 146097;
-    let doe = (z - era * 146097) as u64; // [0, 146096]
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // [0, 399]
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
-    let mp = (5 * doy + 2) / 153; // [0, 11]
-    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
-    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
-    let year = if m <= 2 { y + 1 } else { y };
-
-    // 星期几：1970-01-01 是周四（对应 days=0 → dow=4）
-    // dow = (days + 4) mod 7，结果 0=周日, 6=周六
-    let dow = ((days % 7 + 4 + 7) % 7) as u8;
-    const WEEKDAY: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-    const MONTH: [&str; 12] = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-    ];
-
-    let weekday = WEEKDAY.get(dow as usize)?;
-    let month = MONTH.get((m - 1) as usize)?;
-    Some(format!(
-        "{}, {:02} {} {} {:02}:{:02}:{:02} GMT",
-        weekday, d, month, year, hour, minute, second
-    ))
+    use chrono::DateTime;
+    let dt = DateTime::from_timestamp(unix_secs as i64, 0)?;
+    Some(dt.format("%a, %d %b %Y %H:%M:%S GMT").to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

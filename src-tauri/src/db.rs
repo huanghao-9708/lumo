@@ -40,7 +40,9 @@ pub fn init_db(db_path: PathBuf) -> Result<DbPool, Box<dyn std::error::Error>> {
         // 第一阶段：基础建表（仅用 IF NOT EXISTS，字段定义以这一版为准）
         conn.execute_batch(BASE_SCHEMA_SQL)?;
         // 第二阶段：版本化迁移
-        apply_migrations(&conn)?;
+        // 从数据库路径的父目录派生加密密钥（用于 WebDAV 凭据加密）
+        let app_dir = db_path.parent().unwrap_or(&db_path);
+        apply_migrations(&conn, app_dir)?;
     }
 
     Ok(pool)
@@ -307,7 +309,7 @@ fn mark_migration_applied(conn: &Connection, version: i64) -> Result<()> {
 
 /// 版本化迁移：按顺序应用每个版本的补丁，每个版本只执行一次。
 /// 每个迁移函数应当做到幂等（IF NOT EXISTS / 包裹在 try 中），以便重试安全。
-fn apply_migrations(conn: &Connection) -> Result<()> {
+fn apply_migrations(conn: &Connection, app_dir: &std::path::Path) -> Result<()> {
     let mut current = get_current_version(conn)?;
 
     // ===== V1: 索引与去重唯一约束（首次为已有库补齐索引） =====
@@ -579,6 +581,38 @@ fn apply_migrations(conn: &Connection) -> Result<()> {
         tracing::info!("数据库迁移：已升级至 V5（album_artists 多对多表 + 拆分组合艺人）");
     }
 
-    let _ = current; // 当前版本号，未来可用于日志/诊断
+    // ===== V6: 将已有的明文 WebDAV 凭据迁移为加密存储 =====
+    if current < 6 {
+        let webdav_sources: Vec<(i64, String)> = {
+            let mut stmt = conn.prepare(
+                "SELECT id, credential_ref FROM sources WHERE kind = 'webdav' AND credential_ref IS NOT NULL"
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?;
+            rows.filter_map(|r| r.ok()).collect()
+        };
+
+        for (source_id, cred) in &webdav_sources {
+            // 旧格式 "username:password" → 加密为 "username##base64_encrypted"
+            if let Some((username, password)) = cred.split_once(':') {
+                let key = crate::commands::scanner::derive_credential_key(app_dir);
+                let encrypted = crate::commands::scanner::encrypt_password(&key, password);
+                let new_cred = format!("{}##{}", username, encrypted);
+                conn.execute(
+                    "UPDATE sources SET credential_ref = ?1 WHERE id = ?2",
+                    rusqlite::params![new_cred, source_id],
+                )?;
+                tracing::info!("[V6] 已加密迁移 source {} 凭据", source_id);
+            }
+            // 无冒号：已是新格式或仅有用户名，无需处理
+        }
+
+        mark_migration_applied(conn, 6)?;
+        current = 6;
+        tracing::info!("数据库迁移：已升级至 V6（WebDAV 凭据加密迁移）");
+    }
+
+    let _ = current;
     Ok(())
 }

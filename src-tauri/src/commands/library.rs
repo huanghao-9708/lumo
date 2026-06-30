@@ -5,20 +5,7 @@ use crate::models::{TrackDTO, AlbumDTO, ArtistDTO, PlaylistDTO, ArtistStatsDTO};
 use std::path::PathBuf;
 use rusqlite::params;
 use crate::ipc_trace;
-
 // For storing PlaybackManager state
-
-
-
-
-
-
-
-
-
-
-
-
 
 #[tauri::command]
 pub fn library_get_tracks(db_state: State<'_, DbState>, limit: u32, offset: u32, search_keyword: Option<String>) -> Result<Vec<TrackDTO>, AppError> {
@@ -377,27 +364,22 @@ pub fn library_get_counts(
     let _trace = ipc_trace!("library_get_counts");
     let conn = db_state.db.get()?;
 
-    let tracks: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM tracks", [], |row| row.get(0),
-    )?;
-    let favorite_tracks: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM favorite_tracks", [], |row| row.get(0),
-    )?;
-    let favorite_albums: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM favorite_albums", [], |row| row.get(0),
-    )?;
-    let favorite_artists: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM favorite_artists", [], |row| row.get(0),
-    )?;
-    let recently_played: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM tracks WHERE last_played_at IS NOT NULL", [], |row| row.get(0),
+    let counts: crate::models::LibraryCounts = conn.query_row(
+        "SELECT
+            (SELECT COUNT(*) FROM tracks),
+            (SELECT COUNT(*) FROM favorite_tracks),
+            (SELECT COUNT(*) FROM favorite_albums),
+            (SELECT COUNT(*) FROM favorite_artists),
+            (SELECT COUNT(*) FROM tracks WHERE last_played_at IS NOT NULL)",
+        [],
+        |row| Ok(crate::models::LibraryCounts {
+            tracks: row.get(0)?,
+            favorite_tracks: row.get(1)?,
+            favorite_albums: row.get(2)?,
+            favorite_artists: row.get(3)?,
+            recently_played: row.get(4)?,
+        }),
     )?;
 
-    Ok(crate::models::LibraryCounts {
-        tracks,
-        favorite_tracks,
-        favorite_albums,
-        favorite_artists,
-        recently_played,
-    })
+    Ok(counts)
 }

@@ -73,3 +73,34 @@ export interface LibraryCountsDTO {
   favorite_artists: number;
   recently_played: number;
 }
+
+export interface ArtistStatsDTO {
+  track_count: number;
+  album_count: number;
+}
+
+export interface TrackFileInfoDTO {
+  id: number;
+  path: string;
+  file_size: number | null;
+  duration_ms: number | null;
+  bitrate: number | null;
+  sample_rate: number | null;
+  bit_depth: number | null;
+  channels: number | null;
+  format: string | null;
+}
+
+export interface SourceDTO {
+  id: number;
+  name: string;
+  kind: string;
+  root_uri: string;
+  config_json: string;
+  credential_ref: string | null;
+  enabled: boolean;
+  last_scan_at: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+}

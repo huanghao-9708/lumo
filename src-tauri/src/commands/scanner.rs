@@ -4,6 +4,40 @@ use crate::error::AppError;
 use crate::ipc_trace;
 use std::path::PathBuf;
 
+/// 从 app_data_dir 路径推导加密密钥（同一台机器稳定，跨机器不同）。
+pub(crate) fn derive_credential_key(app_dir: &std::path::Path) -> [u8; 32] {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    app_dir.to_string_lossy().hash(&mut hasher);
+    let seed = hasher.finish().to_le_bytes();
+    let mut key = [0u8; 32];
+    for i in 0..32 {
+        key[i] = seed[i % 8];
+    }
+    key
+}
+
+/// 对密码做 XOR + base64 编码（防止明文暴露，机器绑定）。
+pub(crate) fn encrypt_password(key: &[u8; 32], password: &str) -> String {
+    let bytes: Vec<u8> = password.bytes()
+        .enumerate()
+        .map(|(i, b)| b ^ key[i % 32])
+        .collect();
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(&bytes)
+}
+
+/// 解密用 encrypt_password 编码的密码。
+pub(crate) fn decrypt_password(key: &[u8; 32], encoded: &str) -> Option<String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(encoded).ok()?;
+    let decrypted: Vec<u8> = bytes.iter()
+        .enumerate()
+        .map(|(i, &b)| b ^ key[i % 32])
+        .collect();
+    String::from_utf8(decrypted).ok()
+}
+
 #[tauri::command]
 pub fn source_add_local(db_state: State<'_, DbState>, path: String, name: String) -> Result<i64, AppError> {
     let _trace = ipc_trace!("source_add_local");
@@ -18,29 +52,29 @@ pub fn source_add_local(db_state: State<'_, DbState>, path: String, name: String
 }
 
 #[tauri::command]
-pub fn source_add_webdav(db_state: State<'_, DbState>, url: String, name: String, username: Option<String>, password: Option<String>) -> Result<i64, AppError> {
+pub fn source_add_webdav(app: tauri::AppHandle, db_state: State<'_, DbState>, url: String, name: String, username: Option<String>, password: Option<String>) -> Result<i64, AppError> {
     let _trace = ipc_trace!("source_add_webdav");
     let conn = db_state.db.get()?;
-    
+
     // Test connection
     let webdav = crate::services::webdav::WebdavClient::new(url.clone(), username.clone(), password.clone());
     webdav.propfind("/").map_err(|e| AppError::Internal(format!("Failed to connect to WebDAV: {}", e)))?;
 
-    let cred = if let (Some(u), Some(p)) = (&username, &password) {
-        Some(format!("{}:{}", u, p))
-    } else if let Some(u) = &username {
-        Some(u.clone())
-    } else {
-        None
+    // credential_ref 格式：新来源存为 "username##base64_encrypted_password"
+    let app_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let key = derive_credential_key(&app_dir);
+    let cred = match (&username, &password) {
+        (Some(u), Some(p)) => Some(format!("{}##{}", u, encrypt_password(&key, p))),
+        (Some(u), None) => Some(u.clone()),
+        (None, _) => None,
     };
 
     conn.execute(
         "INSERT INTO sources (name, kind, root_uri, credential_ref) VALUES (?1, 'webdav', ?2, ?3)",
         rusqlite::params![name, url, cred],
     )?;
-    
-    let id = conn.last_insert_rowid();
-    Ok(id)
+
+    Ok(conn.last_insert_rowid())
 }
 
 #[tauri::command]
@@ -57,22 +91,28 @@ pub fn source_scan(app: tauri::AppHandle, db_state: State<'_, DbState>, source_i
     };
 
     let app_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
-    
+    let key = derive_credential_key(&app_dir);
+
     std::thread::spawn(move || {
         if kind == "local" {
             crate::services::scanner::scan_local_directory(app, source_id, &PathBuf::from(path), &app_dir);
         } else if kind == "webdav" {
-            let mut username = None;
-            let mut password = None;
-            if let Some(cred) = credential {
-                let parts: Vec<&str> = cred.splitn(2, ':').collect();
-                if parts.len() == 2 {
-                    username = Some(parts[0].to_string());
-                    password = Some(parts[1].to_string());
-                } else if parts.len() == 1 {
-                    username = Some(parts[0].to_string());
-                }
-            }
+            // 从 credential_ref 提取用户名和密码，兼容三种格式：
+            // 1) "username##base64_encrypted" ─ V6+ 加密格式
+            // 2) "username:password" ─ V5 及之前明文（迁移/旧库兼容）
+            // 3) "username" ─ 仅有用户名（无密码认证）
+            let (username, password) = credential.as_deref()
+                .and_then(|cred| {
+                    if let Some((u, enc)) = cred.split_once("##") {
+                        decrypt_password(&key, enc).map(|p| (u.to_string(), p))
+                    } else if let Some((u, p)) = cred.split_once(':') {
+                        Some((u.to_string(), p.to_string()))
+                    } else {
+                        Some((cred.to_string(), String::new()))
+                    }
+                })
+                .map(|(u, p)| (Some(u), Some(p)))
+                .unwrap_or((None, None));
             crate::services::scanner::scan_webdav_directory(app, source_id, path, username, password, &app_dir);
         }
     });
@@ -136,6 +176,30 @@ pub fn source_remove(db_state: State<'_, DbState>, source_id: i64) -> Result<(),
         )",
         [],
     )?;
+
+    // 清理无主的 artwork 记录（对应 P1-4）
+    // artwork 通过 media_file_id 关联 media_files，media_files 已通过 ON DELETE CASCADE 被删除，
+    // 但 artwork.media_file_id 是 SET NULL，需要主动清理引用计数为 0 的 artwork。
+    {
+        let orphan_artworks: Vec<(i64, Option<String>)> = {
+            let mut stmt = tx.prepare(
+                "SELECT a.id, a.cache_path FROM artwork a
+                 WHERE a.id NOT IN (
+                     SELECT cover_artwork_id FROM albums WHERE cover_artwork_id IS NOT NULL
+                 )"
+            )?;
+            let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+            let collected: Vec<(i64, Option<String>)> = rows.filter_map(|r| r.ok()).collect();
+            collected
+        };
+
+        for (art_id, cache_path) in &orphan_artworks {
+            tx.execute("DELETE FROM artwork WHERE id = ?1", rusqlite::params![art_id])?;
+            if let Some(path) = cache_path {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
 
     tx.execute_batch(
         "UPDATE albums SET track_count = (

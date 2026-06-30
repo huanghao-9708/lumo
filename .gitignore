@@ -28,7 +28,7 @@ dist-ssr
 # Rust target and Tauri schemas
 /src-tauri/target
 /src-tauri/gen/schemas
-
+target/*
 # local env files
 .env
 .env*.local

@@ -7,7 +7,9 @@ import type {
   FolderContentsResultDTO,
   FolderChildrenResultDTO,
   FolderTracksResultDTO,
-  LibraryCountsDTO
+  LibraryCountsDTO,
+  ArtistStatsDTO,
+  TrackFileInfoDTO
 } from './types';
 
 // Tracks
@@ -43,7 +45,7 @@ export function libraryGetArtistTracks(artistId: number, limit: number, offset: 
   return invoke('library_get_artist_tracks', { artistId, limit, offset });
 }
 
-export function libraryGetArtistStats(artistId: number): Promise<any> {
+export function libraryGetArtistStats(artistId: number): Promise<ArtistStatsDTO> {
   return invoke('library_get_artist_stats', { artistId });
 }
 
@@ -142,7 +144,7 @@ export function libraryGetLyrics(trackId: number): Promise<string | null> {
   return invoke('library_get_lyrics', { trackId });
 }
 
-export function libraryGetTrackFileInfo(trackId: number): Promise<any> {
+export function libraryGetTrackFileInfo(trackId: number): Promise<TrackFileInfoDTO | null> {
   return invoke('library_get_track_file_info', { trackId });
 }
 
