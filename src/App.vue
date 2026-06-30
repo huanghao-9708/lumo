@@ -7,9 +7,12 @@ import TopBar from './components/layout/TopBar.vue';
 import MainContent from './components/layout/MainContent.vue';
 import SidebarRight from './components/layout/SidebarRight.vue';
 import BottomPlayer from './components/layout/BottomPlayer.vue';
+import NowPlayingImmersive from './components/layout/NowPlayingImmersive.vue';
 import CreatePlaylistModal from './components/shared/CreatePlaylistModal.vue';
+import { useUiStore } from './stores/ui';
 
 const playerStore = usePlayerStore();
+const uiStore = useUiStore();
 
 // 键盘快捷键监听
 const handleGlobalKeyDown = (e: KeyboardEvent) => {
@@ -119,6 +122,11 @@ onUnmounted(() => {
     <!-- Region 05: Playback Bar (h: 110px) -->
     <BottomPlayer />
 
+    <!-- 沉浸式播放页（覆盖整窗，z-[200]；进/出为抽屉式上下滑动） -->
+    <Transition name="np-drawer">
+      <NowPlayingImmersive v-if="uiStore.isImmersiveView" />
+    </Transition>
+
     <CreatePlaylistModal v-if="playerStore.isCreatePlaylistModalOpen" />
 
   </div>
@@ -126,4 +134,27 @@ onUnmounted(() => {
 
 <style>
 /* 全局重置或覆盖样式 */
+
+/* 沉浸式播放页抽屉式进/出动画（LDL：250ms ease-out，禁弹簧/缩放）。
+   进入：从下往上滑入；退出：从上往下滑出（打开的反方向）。 */
+.np-drawer-enter-active,
+.np-drawer-leave-active {
+  transition: transform 0.25s ease-out, opacity 0.25s ease-out;
+}
+.np-drawer-enter-from {
+  transform: translateY(100%);
+  opacity: 0;
+}
+.np-drawer-enter-to {
+  transform: translateY(0);
+  opacity: 1;
+}
+.np-drawer-leave-from {
+  transform: translateY(0);
+  opacity: 1;
+}
+.np-drawer-leave-to {
+  transform: translateY(100%);
+  opacity: 0;
+}
 </style>

@@ -4,7 +4,7 @@ import { ref, watch } from "vue";
 
 
 /**
- * UI 全局状态：夜间模式、右栏可见性。
+ * UI 全局状态：夜间模式、右栏可见性、沉浸式播放页。
  *
  * 夜间模式通过切换 <html> 上的 data-theme 属性，由 style.css 里
  * `[data-theme="dark"]` 选择器覆盖 LDL token 实现，无需在此处硬编码颜色。
@@ -56,6 +56,20 @@ export const useUiStore = defineStore("ui", () => {
     isRightSidebarVisible.value = visible;
   }
 
+  // ===== 沉浸式播放页（全屏 Now Playing）可见性 =====
+  // 由 BottomPlayer 封面点击 / ChevronDown 触发，从下往上抽屉式覆盖整窗。
+  const isImmersiveView = ref(false);
+
+  function openImmersiveView() {
+    isImmersiveView.value = true;
+  }
+  function closeImmersiveView() {
+    isImmersiveView.value = false;
+  }
+  function toggleImmersiveView() {
+    isImmersiveView.value = !isImmersiveView.value;
+  }
+
   return {
     isDarkMode,
     toggleDarkMode,
@@ -63,5 +77,9 @@ export const useUiStore = defineStore("ui", () => {
     isRightSidebarVisible,
     toggleRightSidebar,
     setRightSidebarVisible,
+    isImmersiveView,
+    openImmersiveView,
+    closeImmersiveView,
+    toggleImmersiveView,
   };
 });

@@ -5,10 +5,12 @@ import {
   Heart, ListPlus,
 } from 'lucide-vue-next';
 import { usePlayerStore } from '../../stores/player';
+import { useUiStore } from '../../stores/ui';
 import { useArtworkSrc } from '../../composables/useArtworkSrc';
 import { libraryAddToPlaylist } from '../../api/library';
 
 const playerStore = usePlayerStore();
+const uiStore = useUiStore();
 const coverSrc = useArtworkSrc(() => playerStore.currentTrack?.cover_artwork_id ?? null);
 
 /* ============ 进度条 ============ */
@@ -180,7 +182,11 @@ async function addCurrentToPlaylist(playlistId: number) {
 
     <!-- Left: Track Info & Waveform -->
     <div class="flex items-center w-[280px] flex-shrink-0">
-      <div class="w-[56px] h-[56px] bg-bg-hover rounded-[6px] overflow-hidden flex-shrink-0 mr-3 flex items-center justify-center">
+      <div
+        class="w-[56px] h-[56px] bg-bg-hover rounded-[6px] overflow-hidden flex-shrink-0 mr-3 flex items-center justify-center cursor-pointer hover:opacity-80 transition-opacity"
+        title="进入沉浸式播放"
+        @click="uiStore.openImmersiveView()"
+      >
         <img v-if="coverSrc" :src="coverSrc" class="w-full h-full object-cover" alt="cover" />
         <Disc3 v-else class="w-5 h-5 text-text-disabled" />
       </div>
@@ -263,7 +269,8 @@ async function addCurrentToPlaylist(playlistId: number) {
         </button>
         <button
           class="text-text-muted hover:text-text-primary transition-colors-smooth"
-          title="更多"
+          title="展开沉浸式播放"
+          @click="uiStore.openImmersiveView()"
         >
           <ChevronDown class="w-[16px] h-[16px]" />
         </button>

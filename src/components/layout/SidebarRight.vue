@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref, watch, nextTick } from 'vue';
+import { ref } from 'vue';
 import { Heart, MoreHorizontal, ListMusic, Disc3 } from 'lucide-vue-next';
 import { usePlayerStore } from '../../stores/player';
 import { useUiStore } from '../../stores/ui';
 import { useArtworkSrc } from '../../composables/useArtworkSrc';
+import LyricsView from '../shared/LyricsView.vue';
 
 const playerStore = usePlayerStore();
 const uiStore = useUiStore();
@@ -28,19 +29,6 @@ function fileInfoText(): string {
   }
   return parts.join(' · ');
 }
-
-/* ============ 歌词自动滚动到当前行 ============ */
-const lyricsContainer = ref<HTMLElement | null>(null);
-function scrollToActiveLyric() {
-  if (!lyricsContainer.value) return;
-  const el = lyricsContainer.value.querySelector('[data-active-lyric="true"]') as HTMLElement | null;
-  if (el) {
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }
-}
-watch(() => playerStore.activeLyricIndex, () => {
-  nextTick(scrollToActiveLyric);
-});
 
 /* ============ 收藏 ============ */
 function toggleFav() {
@@ -118,28 +106,7 @@ function toggleFav() {
           </div>
 
           <!-- Lyrics -->
-          <div ref="lyricsContainer" class="flex-1 overflow-y-auto min-h-0">
-            <h3 class="text-[10px] font-semibold text-text-muted uppercase tracking-widest mb-3">Lyrics</h3>
-
-            <div v-if="playerStore.lyrics.length === 0" class="text-[13px] text-text-muted/70 italic">暂无歌词</div>
-
-            <div class="space-y-3">
-              <p
-                v-for="(line, i) in playerStore.lyrics"
-                :key="i"
-                :data-active-lyric="i === playerStore.activeLyricIndex"
-                class="text-[13px] leading-[1.8] transition-colors-smooth cursor-pointer"
-                :class="i === playerStore.activeLyricIndex
-                  ? 'text-brand-orange font-medium'
-                  : i < playerStore.activeLyricIndex
-                    ? 'text-text-muted'
-                    : 'text-text-secondary hover:text-text-primary'"
-                @click="playerStore.seek((line.time || 0) * 1000)"
-              >
-                {{ line.text }}
-              </p>
-            </div>
-          </div>
+          <LyricsView variant="sidebar" />
         </div>
       </template>
     </div>
