@@ -160,6 +160,8 @@ pub struct TrackDTO {
     pub cover_artwork_id: Option<i64>,
     /// 最近播放时间戳（仅最近播放查询返回）
     pub last_played_at: Option<String>,
+    /// 文件大小（字节）
+    pub file_size: Option<i64>,
 }
 
 /// 传输给前端的专辑数据传输对象
@@ -247,6 +249,8 @@ pub struct FolderEntryDTO {
     pub is_dir: bool,
     /// 绝对路径或相对于系统的归一化路径
     pub path: String,
+    /// 该目录下的音频文件总数（仅 is_dir=true 时有效）
+    pub audio_count: Option<i64>,
     /// 如果是音频文件且被索引，则附带其完整歌曲信息
     pub track: Option<TrackDTO>,
 }
@@ -259,4 +263,45 @@ pub struct FolderContentsResult {
     pub entries: Vec<FolderEntryDTO>,
     /// 该文件夹下的总条目数（不随分页变化），前端用 `entries.len() < total` 判断是否到末尾
     pub total: usize,
+}
+
+/// 文件浏览器 - 目录树节点
+#[derive(Debug, serde::Serialize)]
+pub struct DirectoryNodeDTO {
+    /// 目录名
+    pub name: String,
+    /// 完整路径（相对于 source root 的路径）
+    pub path: String,
+    /// 该目录（含子目录）下的音频文件总数
+    pub audio_count: i64,
+    /// 是否有子目录
+    pub has_subdirs: bool,
+}
+
+/// `library_get_folder_children` 的返回包装
+#[derive(Debug, serde::Serialize)]
+pub struct FolderChildrenResult {
+    /// 子目录列表
+    pub children: Vec<DirectoryNodeDTO>,
+    /// 源根路径（前端用于面包屑显示）
+    pub source_root: String,
+}
+
+/// `library_get_folder_tracks` 的返回包装
+#[derive(Debug, serde::Serialize)]
+pub struct FolderTracksResult {
+    /// 当前页的歌曲列表
+    pub tracks: Vec<TrackDTO>,
+    /// 总歌曲数
+    pub total: i64,
+}
+
+/// `library_get_counts` 的统一返回
+#[derive(Debug, serde::Serialize)]
+pub struct LibraryCounts {
+    pub tracks: i64,
+    pub favorite_tracks: i64,
+    pub favorite_albums: i64,
+    pub favorite_artists: i64,
+    pub recently_played: i64,
 }

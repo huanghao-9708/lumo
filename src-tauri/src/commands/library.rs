@@ -323,3 +323,81 @@ pub fn library_add_folder_to_playlist(db_state: State<'_, DbState>, source_id: i
     let conn = db_state.db.get()?;
     crate::repositories::playlist_repo::PlaylistRepo::add_folder_to_playlist(&conn, playlist_id, source_id, &folder_path).map_err(|e| e.into())
 }
+
+#[tauri::command]
+pub fn library_get_folder_children(
+    db_state: State<'_, DbState>,
+    source_id: i64,
+    folder_path: Option<String>,
+) -> Result<crate::models::FolderChildrenResult, AppError> {
+    let _trace = ipc_trace!("library_get_folder_children");
+    let conn = db_state.db.get()?;
+
+    let root_uri: String = conn.query_row(
+        "SELECT root_uri FROM sources WHERE id = ?1",
+        rusqlite::params![source_id],
+        |row| row.get(0),
+    )?;
+    let source_root = std::path::PathBuf::from(&root_uri);
+    let real_path = folder_path
+        .map(|p| source_root.join(&p))
+        .unwrap_or_else(|| source_root.clone());
+
+    crate::repositories::track_repo::TrackRepo::get_folder_children(&conn, source_id, &real_path, &source_root)
+        .map_err(|e| e.into())
+}
+
+#[tauri::command]
+pub fn library_get_folder_tracks(
+    db_state: State<'_, DbState>,
+    source_id: i64,
+    folder_path: String,
+    limit: u32,
+    offset: u32,
+) -> Result<crate::models::FolderTracksResult, AppError> {
+    let _trace = ipc_trace!("library_get_folder_tracks");
+    let conn = db_state.db.get()?;
+
+    let root_uri: String = conn.query_row(
+        "SELECT root_uri FROM sources WHERE id = ?1",
+        rusqlite::params![source_id],
+        |row| row.get(0),
+    )?;
+    let source_root = std::path::PathBuf::from(&root_uri);
+    let real_path = source_root.join(&folder_path);
+
+    crate::repositories::track_repo::TrackRepo::get_folder_tracks_recursive(&conn, source_id, &real_path, &source_root, limit, offset)
+        .map_err(|e| e.into())
+}
+
+#[tauri::command]
+pub fn library_get_counts(
+    db_state: State<'_, DbState>,
+) -> Result<crate::models::LibraryCounts, AppError> {
+    let _trace = ipc_trace!("library_get_counts");
+    let conn = db_state.db.get()?;
+
+    let tracks: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM tracks", [], |row| row.get(0),
+    )?;
+    let favorite_tracks: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM favorite_tracks", [], |row| row.get(0),
+    )?;
+    let favorite_albums: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM favorite_albums", [], |row| row.get(0),
+    )?;
+    let favorite_artists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM favorite_artists", [], |row| row.get(0),
+    )?;
+    let recently_played: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM tracks WHERE last_played_at IS NOT NULL", [], |row| row.get(0),
+    )?;
+
+    Ok(crate::models::LibraryCounts {
+        tracks,
+        favorite_tracks,
+        favorite_albums,
+        favorite_artists,
+        recently_played,
+    })
+}

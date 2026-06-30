@@ -395,7 +395,10 @@ pub fn run() {
             crate::commands::library::library_get_cache_size,
             crate::commands::library::library_clear_cache,
             crate::commands::library::library_get_folder_contents,
-            crate::commands::library::library_add_folder_to_playlist
+            crate::commands::library::library_add_folder_to_playlist,
+            crate::commands::library::library_get_folder_children,
+            crate::commands::library::library_get_folder_tracks,
+            crate::commands::library::library_get_counts
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

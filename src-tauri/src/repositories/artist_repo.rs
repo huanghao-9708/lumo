@@ -116,7 +116,7 @@ impl ArtistRepo {
                 SELECT 
                     t.id, t.title, 
                     (SELECT GROUP_CONCAT(a.name, ', ') FROM track_artists ta2 JOIN artists a ON ta2.artist_id = a.id WHERE ta2.track_id = t.id ORDER BY ta2.position) AS artist_name,
-                    al.title AS album_title, m.duration_ms, m.file_ext, m.id AS media_file_id, ft.track_id IS NOT NULL AS is_favorite, al.cover_artwork_id
+                    al.title AS album_title, m.duration_ms, m.file_ext, m.id AS media_file_id, ft.track_id IS NOT NULL AS is_favorite, al.cover_artwork_id, m.file_size
                 FROM tracks t
                 JOIN track_artists ta ON ta.track_id = t.id
                 LEFT JOIN albums al ON t.album_id = al.id

@@ -102,16 +102,17 @@ function toggleFav(trackId: number, e: Event) {
       <!-- 轨道列表 -->
       <div class="flex-1 overflow-y-auto px-8">
         <!-- 表头 -->
-        <div class="flex items-center text-[10px] text-text-muted uppercase tracking-wider py-2 border-b border-border-color sticky top-0 bg-bg-content z-10">
-          <div class="w-10 text-center shrink-0">#</div>
-          <div class="w-8 shrink-0"></div>
-          <div class="flex-[2] min-w-0 pl-1">标题</div>
-          <div class="flex-[1.5] min-w-0 hidden sm:block">艺术家</div>
-          <div class="w-[56px] text-right shrink-0">
-            <Clock class="w-[12px] h-[12px] inline-block" />
+          <div class="flex items-center text-[10px] text-text-muted uppercase tracking-wider py-2 border-b border-border-color sticky top-0 bg-bg-content z-10">
+            <div class="w-10 text-center shrink-0">#</div>
+            <div class="w-8 shrink-0"></div>
+            <div class="flex-[2] min-w-0 pl-1">标题</div>
+            <div class="flex-[1] min-w-0 hidden sm:block">艺术家</div>
+            <div class="flex-[1.5] min-w-0 hidden md:block">专辑</div>
+            <div class="w-[56px] text-right shrink-0">
+              <Clock class="w-[12px] h-[12px] inline-block" />
+            </div>
+            <div class="w-8 shrink-0"></div>
           </div>
-          <div class="w-8 shrink-0"></div>
-        </div>
 
         <!-- 空列表 -->
         <div v-if="tracks.length === 0" class="flex flex-col items-center justify-center py-16 gap-3 text-text-muted">
@@ -157,7 +158,9 @@ function toggleFav(trackId: number, e: Event) {
             </span>
           </div>
 
-          <div class="flex-[1.5] min-w-0 hidden sm:block text-[13px] text-text-secondary truncate">{{ track.artist }}</div>
+          <div class="flex-[1] min-w-0 hidden sm:block text-[13px] text-text-secondary truncate">{{ track.artist }}</div>
+
+          <div class="flex-[1.5] min-w-0 hidden md:block text-[13px] text-text-secondary truncate">{{ track.album }}</div>
 
           <div class="w-[56px] text-right shrink-0 text-[12px] font-mono text-text-muted tabular-nums">{{ track.duration }}</div>
 

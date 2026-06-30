@@ -4,7 +4,10 @@ import type {
   AlbumDTO,
   ArtistDTO,
   PlaylistDTOBackend,
-  FolderContentsResultDTO
+  FolderContentsResultDTO,
+  FolderChildrenResultDTO,
+  FolderTracksResultDTO,
+  LibraryCountsDTO
 } from './types';
 
 // Tracks
@@ -121,6 +124,18 @@ export function libraryClearCache(): Promise<void> {
 
 export function libraryGetFolderContents(sourceId: number, folderPath?: string, limit?: number, offset?: number): Promise<FolderContentsResultDTO> {
   return invoke('library_get_folder_contents', { sourceId, folderPath, limit, offset });
+}
+
+export function libraryGetFolderChildren(sourceId: number, folderPath?: string): Promise<FolderChildrenResultDTO> {
+  return invoke('library_get_folder_children', { sourceId, folderPath });
+}
+
+export function libraryGetFolderTracks(sourceId: number, folderPath: string, limit: number, offset: number): Promise<FolderTracksResultDTO> {
+  return invoke('library_get_folder_tracks', { sourceId, folderPath, limit, offset });
+}
+
+export function libraryGetCounts(): Promise<LibraryCountsDTO> {
+  return invoke('library_get_counts');
 }
 
 export function libraryGetLyrics(trackId: number): Promise<string | null> {

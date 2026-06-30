@@ -16,7 +16,8 @@ impl TrackRepo {
                     m.file_ext, 
                     m.id AS media_file_id,
                     ft.track_id IS NOT NULL AS is_favorite,
-                    al.cover_artwork_id
+                    al.cover_artwork_id,
+                    m.file_size
                 FROM tracks t
                 LEFT JOIN albums al ON t.album_id = al.id
                 JOIN media_files m ON m.id = COALESCE(t.primary_file_id, (SELECT mf.id FROM media_files mf WHERE mf.track_id = t.id ORDER BY mf.id LIMIT 1))
@@ -93,6 +94,7 @@ impl TrackRepo {
                     t.id, t.title, 
                     (SELECT GROUP_CONCAT(a.name, ', ') FROM track_artists ta JOIN artists a ON ta.artist_id = a.id WHERE ta.track_id = t.id ORDER BY ta.position) AS artist_name, 
                     al.title AS album_title, m.duration_ms, m.file_ext, m.id AS media_file_id, ft.track_id IS NOT NULL AS is_favorite, al.cover_artwork_id,
+                    m.file_size,
                     t.last_played_at
                 FROM tracks t
                 LEFT JOIN albums al ON t.album_id = al.id
@@ -112,7 +114,8 @@ impl TrackRepo {
                     media_file_id: row.get(6)?,
                     is_favorite: row.get(7)?,
                     cover_artwork_id: row.get(8)?,
-                    last_played_at: row.get(9)?,
+                    file_size: row.get::<_, Option<i64>>(9)?,
+                    last_played_at: row.get(10)?,
                 })
             })?;
             let mut result = Vec::new();
@@ -125,7 +128,7 @@ impl TrackRepo {
                 SELECT 
                     t.id, t.title, 
                     (SELECT GROUP_CONCAT(a.name, ', ') FROM track_artists ta JOIN artists a ON ta.artist_id = a.id WHERE ta.track_id = t.id ORDER BY ta.position) AS artist_name, 
-                    al.title AS album_title, m.duration_ms, m.file_ext, m.id AS media_file_id, 1 AS is_favorite, al.cover_artwork_id
+                    al.title AS album_title, m.duration_ms, m.file_ext, m.id AS media_file_id, 1 AS is_favorite, al.cover_artwork_id, m.file_size
                 FROM favorite_tracks ft
                 JOIN tracks t ON ft.track_id = t.id
                 LEFT JOIN albums al ON t.album_id = al.id
@@ -143,7 +146,7 @@ impl TrackRepo {
                 SELECT 
                     t.id, t.title, 
                     (SELECT GROUP_CONCAT(a.name, ', ') FROM track_artists ta JOIN artists a ON ta.artist_id = a.id WHERE ta.track_id = t.id ORDER BY ta.position) AS artist_name,
-                    al.title AS album_title, m.duration_ms, m.file_ext, m.id AS media_file_id, ft.track_id IS NOT NULL AS is_favorite, al.cover_artwork_id
+                    al.title AS album_title, m.duration_ms, m.file_ext, m.id AS media_file_id, ft.track_id IS NOT NULL AS is_favorite, al.cover_artwork_id, m.file_size
                 FROM media_files m
                 JOIN tracks t ON m.track_id = t.id
                 LEFT JOIN albums al ON t.album_id = al.id
@@ -177,7 +180,8 @@ impl TrackRepo {
                     m.file_ext, 
                     m.id AS media_file_id,
                     (ft.track_id IS NOT NULL) AS is_favorite,
-                    al.cover_artwork_id
+                    al.cover_artwork_id,
+                    m.file_size
                 FROM play_queue pq
                 JOIN tracks t ON pq.track_id = t.id
                 LEFT JOIN albums al ON t.album_id = al.id
@@ -215,6 +219,7 @@ impl TrackRepo {
                             name,
                             is_dir: true,
                             path: path.to_string_lossy().to_string(),
+                            audio_count: None,
                             track: None,
                         });
                     } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
@@ -226,6 +231,7 @@ impl TrackRepo {
                                 name,
                                 is_dir: false,
                                 path: path_str,
+                                audio_count: None,
                                 track,
                             });
                         }
@@ -248,4 +254,121 @@ impl TrackRepo {
             Ok(crate::models::FolderContentsResult { entries, total })
         }
 
+    /// 获取目录下的子目录列表（含音频计数），用于文件浏览器左侧树
+    pub fn get_folder_children(
+            conn: &Connection,
+            source_id: i64,
+            folder_path: &std::path::Path,
+            source_root: &std::path::Path,
+        ) -> rusqlite::Result<crate::models::FolderChildrenResult> {
+            let relative_prefix = if folder_path == source_root {
+                String::new()
+            } else {
+                let rel = folder_path.strip_prefix(source_root)
+                    .unwrap_or(folder_path)
+                    .to_string_lossy()
+                    .to_lowercase();
+                format!("{}\\", rel.trim_end_matches('\\'))
+            };
+
+            let mut children = Vec::new();
+
+            if let Ok(read_dir) = std::fs::read_dir(folder_path) {
+                let mut dirs: Vec<(String, std::path::PathBuf)> = Vec::new();
+                for entry_res in read_dir {
+                    let Ok(entry) = entry_res else { continue };
+                    let path = entry.path();
+                    if !path.is_dir() { continue; }
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    dirs.push((name, path));
+                }
+
+                for (name, path) in dirs {
+                    let dir_normalized = format!("{}{}\\", relative_prefix, name.to_lowercase());
+                    let audio_count: i64 = conn.query_row(
+                        "SELECT COUNT(*) FROM media_files WHERE source_id = ?1 AND normalized_path LIKE ?2 AND availability = 'available'",
+                        rusqlite::params![source_id, format!("{}%", dir_normalized)],
+                        |row| row.get(0),
+                    ).unwrap_or(0);
+
+                    let has_subdirs = std::fs::read_dir(&path)
+                        .map(|rd| rd.filter_map(|e| e.ok()).any(|e| e.path().is_dir()))
+                        .unwrap_or(false);
+
+                    let rel_path = if relative_prefix.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{}{}", relative_prefix, &name)
+                    };
+
+                    children.push(crate::models::DirectoryNodeDTO {
+                        name,
+                        path: rel_path,
+                        audio_count,
+                        has_subdirs,
+                    });
+                }
+            }
+
+            children.sort_by(|a, b| a.name.cmp(&b.name));
+
+            Ok(crate::models::FolderChildrenResult {
+                children,
+                source_root: source_root.to_string_lossy().to_string(),
+            })
+        }
+
+    /// 递归获取目录下所有音频文件（含子目录），分页返回，用于文件浏览器右侧列表
+    pub fn get_folder_tracks_recursive(
+            conn: &Connection,
+            source_id: i64,
+            folder_path: &std::path::Path,
+            source_root: &std::path::Path,
+            limit: u32,
+            offset: u32,
+        ) -> rusqlite::Result<crate::models::FolderTracksResult> {
+            let relative = folder_path.strip_prefix(source_root)
+                .unwrap_or(folder_path)
+                .to_string_lossy()
+                .to_lowercase();
+            let relative = relative.trim_end_matches('\\');
+            let pattern = if relative.is_empty() {
+                "%".to_string()
+            } else {
+                format!("{}\\", relative)
+            };
+
+            let total: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM tracks t WHERE COALESCE(t.primary_file_id, -1) IN (
+                    SELECT m.id FROM media_files m WHERE m.source_id = ?1 AND m.normalized_path LIKE ?2 AND m.availability = 'available'
+                )",
+                rusqlite::params![source_id, format!("{}%", pattern)],
+                |row| row.get(0),
+            )?;
+
+            let mut stmt = conn.prepare("
+                SELECT t.id, t.title,
+                    (SELECT GROUP_CONCAT(a.name, ', ') FROM track_artists ta JOIN artists a ON ta.artist_id = a.id WHERE ta.track_id = t.id ORDER BY ta.position) AS artist_name,
+                    al.title AS album_title,
+                    m.duration_ms, m.file_ext, m.id AS media_file_id,
+                    ft.track_id IS NOT NULL AS is_favorite,
+                    al.cover_artwork_id,
+                    m.file_size
+                FROM tracks t
+                JOIN media_files m ON m.id = COALESCE(t.primary_file_id, (SELECT mf.id FROM media_files mf WHERE mf.track_id = t.id ORDER BY mf.id LIMIT 1))
+                LEFT JOIN albums al ON t.album_id = al.id
+                LEFT JOIN favorite_tracks ft ON t.id = ft.track_id
+                WHERE m.source_id = ?1 AND m.normalized_path LIKE ?2
+                AND m.availability = 'available'
+                ORDER BY m.normalized_path ASC
+                LIMIT ?3 OFFSET ?4
+            ")?;
+            tracing::info!("请求参数pattern={}", pattern);
+
+            let rows = stmt.query_map(rusqlite::params![source_id, format!("{}%", pattern), limit, offset], crate::repositories::map_track_row)?;
+            let mut tracks = Vec::new();
+            for r in rows { tracks.push(r?); }
+
+            Ok(crate::models::FolderTracksResult { tracks, total })
+        }
 }

@@ -9,18 +9,18 @@ const playerStore = usePlayerStore();
 
 /** Library 一级导航。activeLibraryTab 是 store 里维护的当前页标识。 */
 const libraryNav = computed(() => [
-  { key: '全部歌曲', label: '全部歌曲', icon: Activity, count: playerStore.albumsTotalCount ? null : null },
+  { key: '全部歌曲', label: '全部歌曲', icon: Activity, count: playerStore.tracksTotalCount },
   { key: '专辑', label: '专辑', icon: Disc, count: playerStore.albumsTotalCount },
   { key: '艺术家', label: '艺术家', icon: User, count: playerStore.artists.length },
   { key: '文件夹', label: '文件夹', icon: Folder, count: playerStore.localSources.length },
-  { key: '最近播放', label: '最近播放', icon: Clock, count: null },
+  { key: '最近播放', label: '最近播放', icon: Clock, count: playerStore.libraryCounts.recently_played },
   { key: '播放列表', label: '播放列表', icon: ListMusic, count: playerStore.playlists.length },
 ]);
 
 const favoritesNav = computed(() => [
-  { key: '喜欢的音乐', label: '喜欢的音乐', icon: Heart, count: playerStore.tracks.length > 0 ? null : null },
-  { key: '收藏的专辑', label: '收藏的专辑', icon: Disc, count: playerStore.favoriteAlbums.length },
-  { key: '收藏的歌手', label: '收藏的歌手', icon: Star, count: playerStore.favoriteArtists.length },
+  { key: '喜欢的音乐', label: '喜欢的音乐', icon: Heart, count: playerStore.libraryCounts.favorite_tracks },
+  { key: '收藏的专辑', label: '收藏的专辑', icon: Disc, count: playerStore.libraryCounts.favorite_albums },
+  { key: '收藏的歌手', label: '收藏的歌手', icon: Star, count: playerStore.libraryCounts.favorite_artists },
 ]);
 
 function isActive(key: string): boolean {
@@ -82,7 +82,6 @@ function selectPlaylist(id: number) {
                 class="text-[11px] font-mono tabular-nums"
                 :class="isActive(item.key) ? 'text-text-secondary' : 'text-text-muted'"
               >{{ item.count.toLocaleString() }}</span>
-              <div v-if="isActive(item.key)" class="w-[6px] h-[6px] rounded-full bg-brand-orange ml-2 flex-shrink-0"></div>
             </a>
           </li>
         </ul>
@@ -113,7 +112,6 @@ function selectPlaylist(id: number) {
                 class="text-[11px] font-mono tabular-nums"
                 :class="isActive(item.key) ? 'text-text-secondary' : 'text-text-muted'"
               >{{ item.count.toLocaleString() }}</span>
-              <div v-if="isActive(item.key)" class="w-[6px] h-[6px] rounded-full bg-brand-orange ml-2 flex-shrink-0"></div>
             </a>
           </li>
         </ul>

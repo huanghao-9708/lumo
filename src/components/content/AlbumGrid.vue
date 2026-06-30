@@ -42,6 +42,7 @@ async function playAlbum(album: Album) {
         isFavorite: false,
         primary_file_id: t.media_file_id,
         cover_artwork_id: t.cover_artwork_id,
+        fileSize: t.file_size ?? null,
       };
     });
     if (tracks.length > 0) {

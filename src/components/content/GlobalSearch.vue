@@ -72,6 +72,7 @@ function playTrack(index: number, dto: TrackDTO) {
     cover_artwork_id: dto.cover_artwork_id,
     isFavorite: dto.is_favorite || false,
     primary_file_id: dto.media_file_id,
+    fileSize: dto.file_size ?? null,
   }], index);
 }
 

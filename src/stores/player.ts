@@ -1,13 +1,14 @@
 import { defineStore } from "pinia";
-import { ref, computed, watch, shallowRef } from "vue";
+import { ref, computed, watch, shallowRef, reactive } from "vue";
 import { listen } from '@tauri-apps/api/event';
 
 import {
   libraryGetTracks, libraryGetAlbums, libraryGetAlbumCount, libraryGetArtists, libraryGetAlbumTracks, libraryGetArtistAlbums, libraryGetArtistAlbumCount, libraryGetArtistTracks, libraryGetArtistStats,
   libraryCreatePlaylist, libraryGetPlaylists, libraryAddToPlaylist, libraryGetPlaylistTracks, libraryDeletePlaylist, libraryRemovePlaylistItem, libraryAddFolderToPlaylist,
   libraryToggleFavorite, libraryRecordPlay, libraryGetRecentlyPlayed, libraryGetFavoriteTracks, libraryGetFavoriteAlbums, libraryGetFavoriteArtists, libraryToggleFavoriteAlbum, libraryToggleFavoriteArtist, librarySavePlayQueue, libraryGetPlayQueue,
-  libraryGetFolderContents
-, libraryGetLyrics, libraryGetTrackFileInfo } from '../api/library';
+  libraryGetFolderContents, libraryGetFolderChildren, libraryGetFolderTracks,
+  libraryGetLyrics, libraryGetTrackFileInfo, libraryGetCounts
+} from '../api/library';
 import {
   playbackPlay, playbackPause, playbackResume, playbackSetVolume, playbackGetPos, playbackSeek, playbackIsFinished, playbackEnqueueNext, playbackGetQueueLen
 } from '../api/playback';
@@ -17,7 +18,7 @@ import {
 
 
 // ================= 后端 DTO 接口（与 Rust 端 models.rs 保持一致） =================
-import type { TrackDTO, ArtistDTO, AlbumDTO, PlaylistDTOBackend } from '../api/types';
+import type { TrackDTO, ArtistDTO, AlbumDTO, PlaylistDTOBackend, FolderChildrenResultDTO, FolderTracksResultDTO } from '../api/types';
 
 // ================= 前端展示模型 =================
 
@@ -34,6 +35,7 @@ export interface Track {
   isFavorite: boolean;
   primary_file_id?: number | null;
   playedAt?: string;
+  fileSize: number | null;
 }
 
 export interface Playlist {
@@ -132,6 +134,7 @@ export const usePlayerStore = defineStore("player", () => {
       isFavorite: t.is_favorite || false,
       primary_file_id: t.media_file_id,
       playedAt: t.last_played_at ?? '',
+      fileSize: t.file_size ?? null,
     };
   }
 
@@ -179,6 +182,17 @@ export const usePlayerStore = defineStore("player", () => {
   let folderOffset = 0;
   const folderTotalCount = ref(0);
   const hasMoreFolderEntries = computed(() => currentFolderContents.value.length < folderTotalCount.value);
+
+  // ===== 新文件浏览器状态 =====
+  const folderTreeChildren = ref<import('../api/types').DirectoryNodeDTO[]>([]);
+  const folderTreeSourceRoot = ref('');
+  const folderTracks = ref<Track[]>([]);
+  const folderTracksTotal = ref(0);
+  let folderTracksOffset = 0;
+  const folderTracksLimit = 100;
+  const isLoadingFolderTracks = ref(false);
+  const hasMoreFolderTracks = computed(() => folderTracks.value.length < folderTracksTotal.value);
+  const selectedTreePath = ref<string | null>(null);
 
   /**
    * 拉取文件夹内容。
@@ -270,6 +284,49 @@ export const usePlayerStore = defineStore("player", () => {
       console.error("Failed to add folder to playlist:", e);
       return false;
     }
+  }
+
+  // ===== 新文件浏览器功能 =====
+
+  async function fetchFolderTreeChildren(sourceId: number, folderPath?: string) {
+    try {
+      const res: FolderChildrenResultDTO = await libraryGetFolderChildren(sourceId, folderPath);
+      folderTreeChildren.value = res.children;
+      folderTreeSourceRoot.value = res.source_root;
+    } catch (e) {
+      console.error('Failed to fetch folder children:', e);
+    }
+  }
+
+  async function fetchFolderTracks(sourceId: number, folderPath: string, reset = false) {
+    if (!reset && (isLoadingFolderTracks.value || !hasMoreFolderTracks.value)) return;
+    if (reset) {
+      folderTracks.value = [];
+      folderTracksTotal.value = 0;
+      folderTracksOffset = 0;
+    }
+    isLoadingFolderTracks.value = true;
+    try {
+      const res: FolderTracksResultDTO = await libraryGetFolderTracks(sourceId, folderPath, folderTracksLimit, folderTracksOffset);
+      folderTracksTotal.value = res.total;
+      const mapped = res.tracks.map(mapTrackDTO);
+      if (reset) {
+        folderTracks.value = mapped;
+      } else {
+        folderTracks.value.push(...mapped);
+      }
+      folderTracksOffset += mapped.length;
+      selectedTreePath.value = folderPath;
+    } catch (e) {
+      console.error('Failed to fetch folder tracks:', e);
+      if (reset) folderTracks.value = [];
+    } finally {
+      isLoadingFolderTracks.value = false;
+    }
+  }
+
+  async function fetchMoreFolderTracks(sourceId: number, folderPath: string) {
+    await fetchFolderTracks(sourceId, folderPath, false);
   }
 
   // 页面导航历史栈
@@ -381,6 +438,16 @@ const albums = shallowRef<Album[]>([]);
 
   // 歌曲数据列表
   const tracks = ref<Track[]>([]);
+  const tracksTotalCount = ref(0);
+
+  // 收藏数据计数（用于侧边栏徽标）
+  const libraryCounts = reactive<import('../api/types').LibraryCountsDTO>({
+    tracks: 0,
+    favorite_tracks: 0,
+    favorite_albums: 0,
+    favorite_artists: 0,
+    recently_played: 0,
+  });
 
   // 分页与加载状态
   const tracksLimit = 50;
@@ -429,6 +496,16 @@ const albums = shallowRef<Album[]>([]);
       isErrorTracks.value = true;
     } finally {
       isLoadingTracks.value = false;
+    }
+  }
+
+  async function fetchCounts() {
+    try {
+      const c = await libraryGetCounts();
+      Object.assign(libraryCounts, c);
+      tracksTotalCount.value = c.tracks;
+    } catch (e) {
+      console.error("Failed to fetch library counts:", e);
     }
   }
 
@@ -1089,6 +1166,7 @@ const albums = shallowRef<Album[]>([]);
     } catch (e) {
       console.error("Failed to restore session:", e);
     }
+    fetchCounts();
   }
 
   // ================= 歌单操作 Actions =================
@@ -1433,6 +1511,8 @@ const albums = shallowRef<Album[]>([]);
     albums,
     artists,
     tracks,
+    tracksTotalCount,
+    libraryCounts,
     currentTime,
     playTrack,
     playAll,
@@ -1463,6 +1543,17 @@ const albums = shallowRef<Album[]>([]);
     fetchMoreFolderEntries,
     hasMoreFolderEntries,
     addFolderToPlaylist,
+    folderTreeChildren,
+    folderTreeSourceRoot,
+    folderTracks,
+    folderTracksTotal,
+    selectedTreePath,
+    isLoadingFolderTracks,
+    hasMoreFolderTracks,
+    fetchFolderTreeChildren,
+    fetchCounts,
+    fetchFolderTracks,
+    fetchMoreFolderTracks,
     searchQuery,
     globalSearchQuery,
     canGoBack,

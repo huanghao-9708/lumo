@@ -9,6 +9,7 @@ export interface TrackDTO {
   is_favorite: boolean;
   cover_artwork_id?: number | null;
   last_played_at?: string | null;
+  file_size: number | null;
 }
 
 export interface AlbumDTO {
@@ -46,4 +47,29 @@ export interface FolderContentsResultDTO {
     track?: TrackDTO;
   }>;
   total: number;
+}
+
+export interface DirectoryNodeDTO {
+  name: string;
+  path: string;
+  audio_count: number;
+  has_subdirs: boolean;
+}
+
+export interface FolderChildrenResultDTO {
+  children: DirectoryNodeDTO[];
+  source_root: string;
+}
+
+export interface FolderTracksResultDTO {
+  tracks: TrackDTO[];
+  total: number;
+}
+
+export interface LibraryCountsDTO {
+  tracks: number;
+  favorite_tracks: number;
+  favorite_albums: number;
+  favorite_artists: number;
+  recently_played: number;
 }

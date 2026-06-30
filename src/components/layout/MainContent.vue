@@ -57,17 +57,16 @@ const pageTitle = computed(() => {
 
 const trackCount = computed(() => {
   if (playerStore.activeLibraryTab === '专辑') return playerStore.albumsTotalCount;
-  return playerStore.tracks.length;
+  return playerStore.tracksTotalCount;
 });
 const metaText = computed(() => {
-  const n = trackCount.value;
-  if (playerStore.activeLibraryTab === '专辑') return `${n.toLocaleString()} 张专辑`;
+  if (playerStore.activeLibraryTab === '专辑') return `${playerStore.albumsTotalCount.toLocaleString()} 张专辑`;
   if (playerStore.activeLibraryTab === '艺术家') return `${playerStore.artists.length.toLocaleString()} 位艺术家`;
   if (playerStore.activeLibraryTab === '文件夹') return `${playerStore.localSources.length} 个数据源`;
-  if (playerStore.activeLibraryTab === '喜欢的音乐') return `${playerStore.tracks.length.toLocaleString()} 首歌曲`;
-  if (playerStore.activeLibraryTab === '收藏的专辑') return `${playerStore.favoriteAlbums.length.toLocaleString()} 张专辑`;
-  if (playerStore.activeLibraryTab === '收藏的歌手') return `${playerStore.favoriteArtists.length.toLocaleString()} 位艺术家`;
-  return `${n.toLocaleString()} 首歌曲`;
+  if (playerStore.activeLibraryTab === '喜欢的音乐') return `${playerStore.libraryCounts.favorite_tracks.toLocaleString()} 首歌曲`;
+  if (playerStore.activeLibraryTab === '收藏的专辑') return `${playerStore.libraryCounts.favorite_albums.toLocaleString()} 张专辑`;
+  if (playerStore.activeLibraryTab === '收藏的歌手') return `${playerStore.libraryCounts.favorite_artists.toLocaleString()} 位艺术家`;
+  return `${playerStore.tracksTotalCount.toLocaleString()} 首歌曲`;
 });
 
 /* ============ 视图分支判定 ============ */

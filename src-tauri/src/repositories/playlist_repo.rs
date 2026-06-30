@@ -68,7 +68,8 @@ impl PlaylistRepo {
                     m.file_ext, 
                     m.id AS media_file_id,
                     ft.track_id IS NOT NULL AS is_favorite,
-                    al.cover_artwork_id
+                    al.cover_artwork_id,
+                    m.file_size
                 FROM playlist_items pi
                 JOIN tracks t ON pi.track_id = t.id
                 LEFT JOIN albums al ON t.album_id = al.id

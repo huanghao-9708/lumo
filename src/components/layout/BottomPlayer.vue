@@ -2,9 +2,11 @@
 import { ref, computed } from 'vue';
 import {
   Shuffle, SkipBack, Play, Pause, SkipForward, Repeat, Repeat1, ChevronDown, Disc3, Volume, Volume1, Volume2,
+  Heart, ListPlus,
 } from 'lucide-vue-next';
 import { usePlayerStore } from '../../stores/player';
 import { useArtworkSrc } from '../../composables/useArtworkSrc';
+import { libraryAddToPlaylist } from '../../api/library';
 
 const playerStore = usePlayerStore();
 const coverSrc = useArtworkSrc(() => playerStore.currentTrack?.cover_artwork_id ?? null);
@@ -152,6 +154,25 @@ if (typeof window !== 'undefined') {
     if (isDraggingProgress.value) onProgressUp();
   });
 }
+
+const showPlaylistPicker = ref(false);
+const trackIsFav = computed(() => playerStore.currentTrack?.isFavorite ?? false);
+
+function toggleFav() {
+  const t = playerStore.currentTrack;
+  if (t) playerStore.toggleFavorite(t.id);
+}
+
+async function addCurrentToPlaylist(playlistId: number) {
+  const t = playerStore.currentTrack;
+  if (!t) return;
+  try {
+    await libraryAddToPlaylist(playlistId, t.id);
+    showPlaylistPicker.value = false;
+  } catch (e) {
+    console.error('添加到歌单失败:', e);
+  }
+}
 </script>
 
 <template>
@@ -183,6 +204,34 @@ if (typeof window !== 'undefined') {
       <div v-else class="flex flex-col justify-center min-w-0">
         <span class="text-[13px] text-text-muted">未在播放</span>
         <span class="text-[11px] text-text-disabled">选择一首歌曲开始</span>
+      </div>
+    </div>
+
+    <!-- Actions: Favorite + Add to Playlist -->
+    <div v-if="playerStore.currentTrack" class="flex items-center gap-3 flex-shrink-0 mr-2">
+      <button title="收藏" @click="toggleFav">
+        <Heart v-if="trackIsFav" class="w-[16px] h-[16px] text-brand-orange fill-current cursor-pointer transition-colors-smooth" />
+        <Heart v-else class="w-[16px] h-[16px] text-text-muted hover:text-text-primary cursor-pointer transition-colors-smooth" />
+      </button>
+      <div class="relative">
+        <button title="添加到歌单" @click="showPlaylistPicker = !showPlaylistPicker">
+          <ListPlus class="w-[16px] h-[16px] text-text-muted hover:text-text-primary cursor-pointer transition-colors-smooth" />
+        </button>
+        <div
+          v-if="showPlaylistPicker"
+          class="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50 bg-bg-canvas border border-border-solid rounded-[8px] shadow-lg py-1 min-w-[160px]"
+          @click.outside="showPlaylistPicker = false"
+        >
+          <button
+            v-for="pl in playerStore.playlists"
+            :key="pl.id"
+            @click="addCurrentToPlaylist(pl.id)"
+            class="block w-full text-left px-3 py-1.5 text-[12px] text-text-primary hover:bg-list-hover transition-colors-smooth whitespace-nowrap"
+          >
+            {{ pl.name }}
+          </button>
+          <div v-if="playerStore.playlists.length === 0" class="px-3 py-2 text-[11px] text-text-muted text-center">暂无歌单</div>
+        </div>
       </div>
     </div>
 
