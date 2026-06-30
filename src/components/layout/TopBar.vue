@@ -1,5 +1,5 @@
  <script setup lang="ts">
-import { ChevronLeft, ChevronRight, Search, Sun, Moon, PanelRight, Minus, Square, X } from 'lucide-vue-next';
+import { ChevronLeft, ChevronRight, Search, Sun, Moon, PanelRight, Settings, Minus, Square, X } from 'lucide-vue-next';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useUiStore } from '../../stores/ui';
 import { usePlayerStore } from '../../stores/player';
@@ -74,6 +74,15 @@ const close = () => appWindow.close();
           @click="uiStore.toggleRightSidebar()"
         >
           <PanelRight class="w-[18px] h-[18px]" />
+        </button>
+
+        <button
+          class="w-8 h-8 flex items-center justify-center rounded-[8px] transition-colors-smooth"
+          :class="playerStore.activeLibraryTab === '设置' ? 'bg-list-selected text-text-primary' : 'text-text-muted hover:text-text-primary hover:bg-bg-hover'"
+          title="设置"
+          @click="playerStore.activeLibraryTab = '设置'; playerStore.activeAlbumId = null; playerStore.activeArtistId = null; playerStore.activePlaylistId = null;"
+        >
+          <Settings class="w-[18px] h-[18px]" />
         </button>
       </div>
 

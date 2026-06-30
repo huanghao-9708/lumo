@@ -1,4 +1,4 @@
-import { ref, computed, type Ref, onMounted, onUnmounted, watch } from 'vue';
+import { ref, computed, type Ref, watchEffect, watch } from 'vue';
 
 /**
  * 轻量级虚拟列表 composable（零依赖）。
@@ -60,7 +60,6 @@ export function useVirtualList<T = any>(options: UseVirtualListOptions): UseVirt
 
   const startIndex = ref(0);
   const endIndex = ref(0);
-  const viewportHeight = ref(0);
 
   // 真试行数 = ceil(项数 / 列数)
   const rowCount = computed(() => Math.ceil(items.value.length / Math.max(1, columnsRef.value)));
@@ -89,7 +88,6 @@ export function useVirtualList<T = any>(options: UseVirtualListOptions): UseVirt
     if (!el) return;
     const scrollTop = el.scrollTop;
     const viewH = el.clientHeight;
-    viewportHeight.value = viewH;
 
     const startRow = Math.max(0, Math.floor(scrollTop / safeItemHeight) - buffer);
     const visibleRows = Math.ceil(viewH / safeItemHeight) + buffer * 2;
@@ -110,38 +108,39 @@ export function useVirtualList<T = any>(options: UseVirtualListOptions): UseVirt
     });
   }
 
-  // 当容器尺寸变化时也要重算（窗口缩放、侧栏开合等）
+  // 用 watchEffect 管理容器元素的生命周期（支持 v-if 切换导致 DOM 重新创建）
   let resizeObserver: ResizeObserver | null = null;
-
-  onMounted(() => {
+  watchEffect((onCleanup) => {
     const el = containerRef.value;
     if (!el) return;
+
     el.addEventListener('scroll', onScroll, { passive: true });
-    // 监听容器尺寸变化，保证 viewportHeight 同步
+
     if (typeof ResizeObserver !== 'undefined') {
-      resizeObserver = new ResizeObserver(() => recalc());
+      if (!resizeObserver) {
+        resizeObserver = new ResizeObserver(() => recalc());
+      }
       resizeObserver.observe(el);
     }
-    recalc();
-  });
 
-  onUnmounted(() => {
-    const el = containerRef.value;
-    if (el) el.removeEventListener('scroll', onScroll);
-    if (resizeObserver) {
-      resizeObserver.disconnect();
-      resizeObserver = null;
-    }
+    recalc();
+
+    onCleanup(() => {
+      el.removeEventListener('scroll', onScroll);
+      if (resizeObserver) {
+        resizeObserver.unobserve(el);
+      }
+    });
   });
 
   // 数据变化时重算窗口（例如加载更多、切换 tab）
   watch(() => items.value.length, () => {
-    requestAnimationFrame(recalc);
+    recalc();
   });
 
   // 列数变化时（容器宽度改变导致重算列数）也要重算窗口
   watch(columnsRef, () => {
-    requestAnimationFrame(recalc);
+    recalc();
   });
 
   return { totalHeight, offsetY, visibleItems };

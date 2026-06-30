@@ -46,7 +46,7 @@ export const useUiStore = defineStore("ui", () => {
   }
 
   // ===== 右侧 Inspector 面板可见性 =====
-  const isRightSidebarVisible = ref(true);
+  const isRightSidebarVisible = ref(false);
 
   function toggleRightSidebar() {
     isRightSidebarVisible.value = !isRightSidebarVisible.value;

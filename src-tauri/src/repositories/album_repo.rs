@@ -10,7 +10,7 @@ impl AlbumRepo {
         let keyword_pattern = if let Some(keyword) = search_keyword {
             let kw = keyword.trim();
             if !kw.is_empty() {
-                sql.push_str(" AND (al.normalized_title LIKE ? OR EXISTS (SELECT 1 FROM artists ar WHERE ar.id = al.album_artist_id AND ar.name LIKE ?))");
+                sql.push_str(" AND (al.normalized_title LIKE ? OR EXISTS (SELECT 1 FROM album_artists aa JOIN artists ar ON aa.artist_id = ar.id WHERE aa.album_id = al.id AND ar.name LIKE ?))");
                 Some(format!("%{}%", kw.to_lowercase()))
             } else { None }
         } else { None };
@@ -32,16 +32,16 @@ impl AlbumRepo {
     
             // LEFT JOIN artwork 读取 thumbnail_blob，内联返回 base64 缩略图。
             // 这样前端网格视图不再需要逐个发 lumo://artwork 请求，消灭 N+1。
+            // 艺人名改用 album_artists GROUP_CONCAT 以支持多艺人。
             let mut sql = "
                 SELECT
                     al.id,
                     al.title,
-                    ar.name AS artist_name,
+                    (SELECT GROUP_CONCAT(aa2.name, ', ') FROM album_artists aa1 JOIN artists aa2 ON aa1.artist_id = aa2.id WHERE aa1.album_id = al.id ORDER BY aa1.position) AS artist_name,
                     al.cover_artwork_id,
                     al.track_count,
                     aw.thumbnail_blob
                 FROM albums al
-                LEFT JOIN artists ar ON al.album_artist_id = ar.id
                 LEFT JOIN artwork aw ON al.cover_artwork_id = aw.id
                 WHERE 1=1
             ".to_string();
@@ -49,12 +49,12 @@ impl AlbumRepo {
             let keyword_pattern = if let Some(keyword) = search_keyword {
                 let kw = keyword.trim();
                 if !kw.is_empty() {
-                    sql.push_str(" AND (al.normalized_title LIKE ? OR ar.name LIKE ?)");
+                    sql.push_str(" AND (al.normalized_title LIKE ? OR EXISTS (SELECT 1 FROM album_artists aa3 JOIN artists aa4 ON aa3.artist_id = aa4.id WHERE aa3.album_id = al.id AND aa4.name LIKE ?))");
                     Some(format!("%{}%", kw.to_lowercase()))
                 } else { None }
             } else { None };
     
-            sql.push_str(" ORDER BY al.normalized_title ASC LIMIT ? OFFSET ?");
+            sql.push_str(" ORDER BY al.normalized_title ASC, al.id ASC LIMIT ? OFFSET ?");
     
             let t_sql_built = t_start.elapsed();
     
@@ -161,7 +161,7 @@ impl AlbumRepo {
                     al.title AS album_title, m.duration_ms, m.file_ext, m.id AS media_file_id, ft.track_id IS NOT NULL AS is_favorite, al.cover_artwork_id
                 FROM tracks t
                 LEFT JOIN albums al ON t.album_id = al.id
-                JOIN media_files m ON t.id = m.track_id
+                JOIN media_files m ON m.id = COALESCE(t.primary_file_id, (SELECT mf.id FROM media_files mf WHERE mf.track_id = t.id ORDER BY mf.id LIMIT 1))
                 LEFT JOIN favorite_tracks ft ON t.id = ft.track_id
                 WHERE t.album_id = ?1
                 ORDER BY t.disc_no ASC, t.track_no ASC, t.title ASC

@@ -3,6 +3,8 @@ import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import {
   Search, Play, List, LayoutGrid, MoreHorizontal, Heart, Loader2, Music,
 } from 'lucide-vue-next';
+
+const SKELETON_ROWS = 8;
 import { usePlayerStore, type Album } from '../../stores/player';
 import { useVirtualList } from '../../composables/useVirtualList';
 import AlbumGrid from '../content/AlbumGrid.vue';
@@ -275,10 +277,37 @@ onMounted(() => {
             <div class="w-8 shrink-0"></div>
           </div>
 
-          <!-- 加载态（首次） -->
-          <div v-if="playerStore.isLoadingTracks && playerStore.tracks.length === 0" class="flex flex-col items-center justify-center py-20 gap-3 text-text-muted">
-            <Loader2 class="w-5 h-5 animate-spin text-brand-orange" />
-            <span class="text-[12px]">加载中…</span>
+          <!-- 加载态（首次）骨架屏 -->
+          <div v-if="playerStore.isLoadingTracks && playerStore.tracks.length === 0" class="py-2">
+            <div
+              v-for="i in SKELETON_ROWS"
+              :key="'skel-' + i"
+              class="flex items-center animate-pulse"
+              :style="{ height: ROW_HEIGHT + 'px' }"
+            >
+              <div class="w-10 text-center shrink-0 flex justify-center">
+                <div class="w-4 h-3 rounded-[3px] skeleton-bg"></div>
+              </div>
+              <div class="w-8 shrink-0 flex justify-center">
+                <div class="w-3.5 h-3.5 rounded-[3px] skeleton-bg"></div>
+              </div>
+              <div class="flex-[2] min-w-0 pl-1">
+                <div class="w-[60%] max-w-[200px] h-3 rounded-[3px] skeleton-bg"></div>
+              </div>
+              <div class="flex-[1.5] min-w-0 hidden sm:block">
+                <div class="w-[70%] max-w-[140px] h-3 rounded-[3px] skeleton-bg"></div>
+              </div>
+              <div class="flex-[1.5] min-w-0 hidden md:block">
+                <div class="w-[65%] max-w-[150px] h-3 rounded-[3px] skeleton-bg"></div>
+              </div>
+              <div class="w-[56px] shrink-0 hidden lg:block flex justify-end">
+                <div class="w-8 h-3 rounded-[3px] skeleton-bg"></div>
+              </div>
+              <div class="w-[50px] shrink-0 hidden lg:block flex justify-center">
+                <div class="w-6 h-3 rounded-[3px] skeleton-bg"></div>
+              </div>
+              <div class="w-8 shrink-0"></div>
+            </div>
           </div>
 
           <!-- 空态 -->

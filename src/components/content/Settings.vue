@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
-import { FolderOpen, Server, Trash2, Sun, Moon, Info } from 'lucide-vue-next';
+import { FolderOpen, Server, Trash2, Sun, Moon, Info, Scan } from 'lucide-vue-next';
+import { open } from '@tauri-apps/plugin-dialog';
 import { usePlayerStore, type MusicSource } from '../../stores/player';
 import { useUiStore } from '../../stores/ui';
 import { libraryGetCacheSize, libraryClearCache } from '../../api/library';
@@ -34,14 +35,25 @@ function removeSource(sourceId: number) {
   playerStore.removeSource(sourceId);
 }
 
+async function selectFolder() {
+  const selected = await open({ directory: true, multiple: false, title: '选择音乐文件夹' });
+  if (selected) {
+    newSource.value.path = selected;
+  }
+}
+
+function scanSource(sourceId: number) {
+  playerStore.scanSource(sourceId);
+}
+
 async function addSource() {
   if (!newSource.value.name.trim()) return;
   isAddingSource.value = true;
   try {
     if (newSource.value.kind === 'local') {
-      await playerStore.addSource('local', newSource.value.path, newSource.value.name);
+      await playerStore.addSource('local', newSource.value.name, newSource.value.path);
     } else {
-      await playerStore.addSource('webdav', newSource.value.url, newSource.value.name, newSource.value.username, newSource.value.password);
+      await playerStore.addSource('webdav', newSource.value.name, newSource.value.url, newSource.value.username, newSource.value.password);
     }
     newSource.value = { kind: 'local', name: '', path: '', url: '', username: '', password: '' };
   } catch { /* ignore */ }
@@ -66,11 +78,18 @@ async function addSource() {
             <div class="min-w-0">
               <p class="text-[13px] text-text-primary truncate">{{ s.name }}</p>
               <p class="text-[11px] text-text-muted truncate">{{ s.kind === 'webdav' ? s.path : s.path }}</p>
+              <p v-if="s.lastScanned" class="text-[10px] text-text-disabled mt-0.5">{{ s.lastScanned }}</p>
             </div>
           </div>
-          <button class="text-text-muted hover:text-red-500 transition-colors-smooth shrink-0 ml-2" @click="removeSource(s.id)">
-            <Trash2 class="w-4 h-4" />
-          </button>
+          <div class="flex items-center gap-2 shrink-0 ml-2">
+            <button class="flex items-center gap-1.5 text-[11px] px-2.5 py-1.5 rounded-[6px] bg-list-hover text-text-secondary hover:bg-list-selected hover:text-text-primary transition-colors-smooth" @click="scanSource(s.id)">
+              <Scan class="w-3.5 h-3.5" />
+              扫描
+            </button>
+            <button class="text-text-muted hover:text-red-500 transition-colors-smooth" @click="removeSource(s.id)">
+              <Trash2 class="w-4 h-4" />
+            </button>
+          </div>
         </div>
         <div v-if="sources.length === 0" class="text-[12px] text-text-muted/70 px-1">暂无数据源</div>
       </div>
@@ -83,7 +102,10 @@ async function addSource() {
         </div>
         <div class="space-y-2">
           <input v-model="newSource.name" placeholder="名称" class="w-full h-[34px] px-3 text-[13px] bg-bg-content border border-border-color rounded-[6px] text-text-primary placeholder:text-text-muted outline-none focus:border-brand-orange/50" />
-          <input v-if="newSource.kind === 'local'" v-model="newSource.path" placeholder="路径（如 D:\Music）" class="w-full h-[34px] px-3 text-[13px] bg-bg-content border border-border-color rounded-[6px] text-text-primary placeholder:text-text-muted outline-none focus:border-brand-orange/50" />
+          <div v-if="newSource.kind === 'local'" class="flex gap-2">
+            <input v-model="newSource.path" placeholder="路径（如 D:\Music）" class="flex-1 h-[34px] px-3 text-[13px] bg-bg-content border border-border-color rounded-[6px] text-text-primary placeholder:text-text-muted outline-none focus:border-brand-orange/50" />
+            <button class="h-[34px] px-3 rounded-[6px] text-[12px] bg-list-hover text-text-primary hover:bg-list-selected transition-colors-smooth shrink-0" @click="selectFolder">浏览…</button>
+          </div>
           <template v-else>
             <input v-model="newSource.url" placeholder="URL" class="w-full h-[34px] px-3 text-[13px] bg-bg-content border border-border-color rounded-[6px] text-text-primary placeholder:text-text-muted outline-none focus:border-brand-orange/50" />
             <input v-model="newSource.username" placeholder="用户名" class="w-full h-[34px] px-3 text-[13px] bg-bg-content border border-border-color rounded-[6px] text-text-primary placeholder:text-text-muted outline-none focus:border-brand-orange/50" />

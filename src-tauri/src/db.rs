@@ -171,6 +171,20 @@ CREATE TABLE IF NOT EXISTS track_artists (
     PRIMARY KEY (track_id, artist_id, role)
 );
 
+-- 专辑与艺人多对多关系表：一张专辑可有多个艺人（如合辑 Various Artists）
+CREATE TABLE IF NOT EXISTS album_artists (
+    album_id INTEGER NOT NULL REFERENCES albums(id) ON DELETE CASCADE,
+    artist_id INTEGER NOT NULL REFERENCES artists(id) ON DELETE CASCADE,
+    role TEXT NOT NULL DEFAULT 'album_artist'
+        CHECK (role IN ('main', 'featured', 'composer', 'album_artist', 'remixer')),
+    position INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (album_id, artist_id, role)
+);
+
+-- 专辑-艺人关联表索引
+CREATE INDEX IF NOT EXISTS idx_album_artists_artist ON album_artists(artist_id);
+CREATE INDEX IF NOT EXISTS idx_album_artists_album ON album_artists(album_id);
+
 -- 流派字典表
 CREATE TABLE IF NOT EXISTS genres (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -406,6 +420,163 @@ fn apply_migrations(conn: &Connection) -> Result<()> {
         mark_migration_applied(conn, 4)?;
         current = 4;
         tracing::info!("数据库迁移：已升级至 V4（缩略图回填标记，实际回填在后台异步执行）");
+    }
+
+    // ===== V5: album_artists 多对多表 + 拆分已有组合艺人 =====
+    // 背景：老库中可能有 "A&B" 形式的组合艺人存为单条 artist 记录，
+    // 且 track_artists / albums.album_artist_id 都引用它。V5 将其拆分为
+    // 独立的 "A" 和 "B" 艺人记录，新增 album_artists 表用于专辑-艺人多对多。
+    if current < 5 {
+        // 1. 把已有 albums.album_artist_id 迁移到 album_artists（幂等）
+        conn.execute_batch(
+            "INSERT OR IGNORE INTO album_artists (album_id, artist_id, role, position)
+             SELECT al.id, al.album_artist_id, 'album_artist', 0
+             FROM albums al
+             WHERE al.album_artist_id IS NOT NULL;"
+        )?;
+
+        // 2. 查找含有分隔符的组合艺人
+        let combined: Vec<(i64, String)> = {
+            let mut stmt = conn.prepare(
+                "SELECT id, name FROM artists
+                 WHERE name LIKE '%&%'
+                    OR name LIKE '% feat.%'
+                    OR name LIKE '% ft.%'
+                    OR name LIKE '%;%'
+                    OR name LIKE '%、%'
+                    OR name LIKE '%，%'
+                    OR name LIKE '%,%'"
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?;
+            let mut out = Vec::new();
+            for r in rows { out.push(r?); }
+            out
+        };
+
+        // 辅助：对单个艺人名做归一化（与 library.rs normalize_artist_name 一致）
+        fn normalize_name(s: &str) -> String {
+            let mut out = String::with_capacity(s.len());
+            let mut prev_space = false;
+            for ch in s.trim().chars() {
+                if ch.is_whitespace() {
+                    if !prev_space { out.push(' '); prev_space = true; }
+                } else { out.push(ch); prev_space = false; }
+            }
+            out
+        }
+
+        for (artist_id, name) in &combined {
+            // 与 split_and_upsert_artists 相同的分隔符逻辑
+            let cleaned = name
+                .replace(" feat. ", "/")
+                .replace(" ft. ", "/")
+                .replace(" Feat. ", "/")
+                .replace(" Ft. ", "/")
+                .replace(" & ", "/")
+                .replace('&', "/")
+                .replace(';', "/")
+                .replace('；', "/")
+                .replace('、', "/")
+                .replace('，', "/")
+                .replace(',', "/");
+
+            let parts: Vec<&str> = cleaned.split('/')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .collect();
+
+            if parts.len() <= 1 { continue; }
+
+            // upsert 各拆分艺人，收集 ID
+            let split_ids: Vec<i64> = parts.iter()
+                .map(|part| {
+                    let name = normalize_name(part);
+                    let normalized = name.to_lowercase();
+                    conn.execute(
+                        "INSERT OR IGNORE INTO artists (name, normalized_name, sort_name) VALUES (?1, ?2, ?2)",
+                        rusqlite::params![&name, &normalized],
+                    )?;
+                    conn.query_row(
+                        "SELECT id FROM artists WHERE normalized_name = ?1 LIMIT 1",
+                        rusqlite::params![normalized],
+                        |row| row.get(0),
+                    )
+                })
+                .collect::<Result<Vec<i64>>>()?;
+
+            // track_artists：替换为拆分后的艺人
+            let ta_rows: Vec<(i64, String, i64)> = {
+                let mut s = conn.prepare(
+                    "SELECT track_id, role, position FROM track_artists WHERE artist_id = ?1"
+                )?;
+                let rows = s.query_map(rusqlite::params![artist_id], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?))
+                })?;
+                let mut r = Vec::new();
+                for row in rows { r.push(row?); }
+                r
+            };
+            for (track_id, role, position) in &ta_rows {
+                for (off, new_id) in split_ids.iter().enumerate() {
+                    conn.execute(
+                        "INSERT OR IGNORE INTO track_artists (track_id, artist_id, role, position) VALUES (?1, ?2, ?3, ?4)",
+                        rusqlite::params![track_id, new_id, role, position + off as i64],
+                    )?;
+                }
+                conn.execute(
+                    "DELETE FROM track_artists WHERE track_id = ?1 AND artist_id = ?2 AND role = ?3",
+                    rusqlite::params![track_id, artist_id, role],
+                )?;
+            }
+
+            // album_artists：替换为拆分后的艺人
+            let aa_rows: Vec<(i64, String, i64)> = {
+                let mut s = conn.prepare(
+                    "SELECT album_id, role, position FROM album_artists WHERE artist_id = ?1"
+                )?;
+                let rows = s.query_map(rusqlite::params![artist_id], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?))
+                })?;
+                let mut r = Vec::new();
+                for row in rows { r.push(row?); }
+                r
+            };
+            for (album_id, role, position) in &aa_rows {
+                for (off, new_id) in split_ids.iter().enumerate() {
+                    conn.execute(
+                        "INSERT OR IGNORE INTO album_artists (album_id, artist_id, role, position) VALUES (?1, ?2, ?3, ?4)",
+                        rusqlite::params![album_id, new_id, role, position + off as i64],
+                    )?;
+                }
+                conn.execute(
+                    "DELETE FROM album_artists WHERE album_id = ?1 AND artist_id = ?2 AND role = ?3",
+                    rusqlite::params![album_id, artist_id, role],
+                )?;
+            }
+
+            // albums.album_artist_id 改为指向第一个拆分艺人
+            conn.execute(
+                "UPDATE albums SET album_artist_id = ?1 WHERE album_artist_id = ?2",
+                rusqlite::params![split_ids[0], artist_id],
+            )?;
+        }
+
+        // 3. 重新计算统计字段
+        conn.execute_batch(
+            "UPDATE artists
+             SET track_count = (
+                 SELECT COUNT(DISTINCT ta.track_id) FROM track_artists ta WHERE ta.artist_id = artists.id
+             ),
+             album_count = (
+                 SELECT COUNT(DISTINCT aa.album_id) FROM album_artists aa WHERE aa.artist_id = artists.id
+             );"
+        )?;
+
+        mark_migration_applied(conn, 5)?;
+        current = 5;
+        tracing::info!("数据库迁移：已升级至 V5（album_artists 多对多表 + 拆分组合艺人）");
     }
 
     let _ = current; // 当前版本号，未来可用于日志/诊断

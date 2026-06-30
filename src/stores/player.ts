@@ -389,16 +389,22 @@ const albums = shallowRef<Album[]>([]);
   const isLoadingTracks = ref(false);
   const searchQuery = ref("");
 
+  // fetchTracks 的请求代计数器：reset 时递增，用于丢弃过期响应
+  let fetchTracksGeneration = 0;
+
   // 从后端获取歌曲列表
   async function fetchTracks(reset = false) {
     if (reset) {
+      fetchTracksGeneration++;
+      isLoadingTracks.value = true;
       tracks.value = [];
       tracksOffset = 0;
       hasMoreTracks.value = true;
     }
 
-    if (!hasMoreTracks.value || isLoadingTracks.value) return;
+    if (!hasMoreTracks.value || (isLoadingTracks.value && !reset)) return;
     isLoadingTracks.value = true;
+    const gen = fetchTracksGeneration;
 
     try {
       isErrorTracks.value = false;
@@ -407,6 +413,9 @@ const albums = shallowRef<Album[]>([]);
           tracksOffset,
           searchQuery.value || undefined
       );
+
+      // 如果 reset 了（generation 变化），丢弃过期响应避免数据错乱
+      if (gen !== fetchTracksGeneration) return;
 
       if (result.length < tracksLimit) {
         hasMoreTracks.value = false;

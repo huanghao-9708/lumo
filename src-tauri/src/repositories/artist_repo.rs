@@ -24,7 +24,8 @@ impl ArtistRepo {
             } else { None };
     
             // 用 normalized_name（已有索引）代替 COLLATE NOCASE，避免函数排序
-            sql.push_str(" ORDER BY ar.normalized_name ASC LIMIT ? OFFSET ?");
+            // 加 ar.id 作 tiebreaker，避免相同 normalized_name 时分页结果重叠
+            sql.push_str(" ORDER BY ar.normalized_name ASC, ar.id ASC LIMIT ? OFFSET ?");
             
             let mut result = Vec::new();
             if let Some(pattern) = keyword_pattern {
@@ -56,7 +57,7 @@ impl ArtistRepo {
             SELECT COUNT(*) FROM (
                 SELECT al.id
                 FROM albums al
-                WHERE al.album_artist_id = ?1
+                WHERE EXISTS (SELECT 1 FROM album_artists aa WHERE aa.album_id = al.id AND aa.artist_id = ?1)
                    OR al.id IN (
                        SELECT DISTINCT t.album_id
                        FROM track_artists ta JOIN tracks t ON ta.track_id = t.id
@@ -75,11 +76,12 @@ impl ArtistRepo {
             // 但因为不再 COUNT(t.id)，分组本身极快（不需扫描 track_artists 的全部行）。
             let mut stmt = conn.prepare("
                 SELECT
-                    al.id, al.title, ar.name AS artist_name, al.cover_artwork_id, al.track_count, aw.thumbnail_blob
+                    al.id, al.title,
+                    (SELECT GROUP_CONCAT(aa2.name, ', ') FROM album_artists aa1 JOIN artists aa2 ON aa1.artist_id = aa2.id WHERE aa1.album_id = al.id ORDER BY aa1.position) AS artist_name,
+                    al.cover_artwork_id, al.track_count, aw.thumbnail_blob
                 FROM albums al
-                LEFT JOIN artists ar ON al.album_artist_id = ar.id
                 LEFT JOIN artwork aw ON al.cover_artwork_id = aw.id
-                WHERE al.album_artist_id = ?1
+                WHERE EXISTS (SELECT 1 FROM album_artists aa WHERE aa.album_id = al.id AND aa.artist_id = ?1)
                    OR al.id IN (
                        SELECT DISTINCT t.album_id
                        FROM track_artists ta JOIN tracks t ON ta.track_id = t.id
@@ -118,7 +120,7 @@ impl ArtistRepo {
                 FROM tracks t
                 JOIN track_artists ta ON ta.track_id = t.id
                 LEFT JOIN albums al ON t.album_id = al.id
-                JOIN media_files m ON t.id = m.track_id
+                JOIN media_files m ON m.id = COALESCE(t.primary_file_id, (SELECT mf.id FROM media_files mf WHERE mf.track_id = t.id ORDER BY mf.id LIMIT 1))
                 LEFT JOIN favorite_tracks ft ON t.id = ft.track_id
                 WHERE ta.artist_id = ?1
                 ORDER BY t.play_count DESC, t.title ASC

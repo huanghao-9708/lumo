@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import {
-  Activity, Disc, User, Heart, Folder, Clock, ListMusic, List, Plus, Star, Settings,
+  Activity, Disc, User, Heart, Folder, Clock, ListMusic, List, Plus, Star,
 } from 'lucide-vue-next';
 import { usePlayerStore } from '../../stores/player';
 
@@ -156,20 +156,6 @@ function selectPlaylist(id: number) {
 
     </div>
 
-    <!-- Settings Button -->
-    <div class="border-t border-border-color px-3 py-2 pointer-events-auto">
-      <button
-        class="w-full flex items-center px-3 py-[7px] rounded-[6px] transition-colors-smooth"
-        :class="playerStore.activeLibraryTab === '设置'
-          ? 'bg-list-selected text-text-primary'
-          : 'text-text-primary hover:bg-list-hover'"
-        @click="playerStore.activeLibraryTab = '设置'; playerStore.activeAlbumId = null; playerStore.activeArtistId = null; playerStore.activePlaylistId = null;"
-      >
-        <Settings class="w-[16px] h-[16px] mr-3 flex-shrink-0"
-          :class="playerStore.activeLibraryTab === '设置' ? 'text-brand-orange' : 'text-text-muted'" />
-        <span class="text-[13px] flex-1" :class="playerStore.activeLibraryTab === '设置' ? 'font-medium' : ''">设置</span>
-        <div v-if="playerStore.activeLibraryTab === '设置'" class="w-[6px] h-[6px] rounded-full bg-brand-orange ml-2 flex-shrink-0"></div>
-      </button>
-    </div>
+
   </div>
 </template>

@@ -68,7 +68,9 @@ impl LibraryService {
         let album_artist_str = metadata.album_artist.as_deref()
             .or(metadata.artist.as_deref())
             .unwrap_or("Unknown Artist");
-        let album_artist_id = Self::upsert_artist(conn, album_artist_str)?;
+        let album_artist_ids = Self::split_and_upsert_artists(conn, album_artist_str)?;
+        let album_artist_id = *album_artist_ids.first()
+            .unwrap_or(&Self::upsert_artist(conn, "Unknown Artist")?);
 
         // 用于 track_artists 多对多关联的是 track 级 artist
         let track_artist_str = metadata.artist.as_deref().unwrap_or(album_artist_str);
@@ -104,14 +106,24 @@ impl LibraryService {
                     params![album_title, normalized_album_title, album_artist_id, artwork_id],
                 )?;
                 let new_id = conn.last_insert_rowid();
-                // 同步维护 album_artist 的 album_count 冗余字段
-                conn.execute(
-                    "UPDATE artists SET album_count = album_count + 1 WHERE id = ?1",
-                    params![album_artist_id],
-                )?;
+                // 同步维护所有 album_artist 的 album_count 冗余字段
+                for aid in &album_artist_ids {
+                    conn.execute(
+                        "UPDATE artists SET album_count = album_count + 1 WHERE id = ?1",
+                        params![aid],
+                    )?;
+                }
                 new_id
             }
         };
+
+        // 将专辑与所有拆分后的艺人关联写入 album_artists 多对多表
+        for (idx, aid) in album_artist_ids.iter().enumerate() {
+            conn.execute(
+                "INSERT OR IGNORE INTO album_artists (album_id, artist_id, role, position) VALUES (?1, ?2, 'album_artist', ?3)",
+                params![album_id, aid, idx as i64],
+            )?;
+        }
 
         // 4. 处理 Track（歌曲抽象信息）
         let track_title = metadata.title.as_deref().unwrap_or(&file_name);

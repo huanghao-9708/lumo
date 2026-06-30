@@ -72,7 +72,7 @@ impl PlaylistRepo {
                 FROM playlist_items pi
                 JOIN tracks t ON pi.track_id = t.id
                 LEFT JOIN albums al ON t.album_id = al.id
-                JOIN media_files m ON t.id = m.track_id
+                JOIN media_files m ON m.id = COALESCE(t.primary_file_id, (SELECT mf.id FROM media_files mf WHERE mf.track_id = t.id ORDER BY mf.id LIMIT 1))
                 LEFT JOIN favorite_tracks ft ON t.id = ft.track_id
                 WHERE pi.playlist_id = ?1
                 ORDER BY pi.position ASC

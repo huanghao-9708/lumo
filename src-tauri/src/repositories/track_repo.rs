@@ -19,7 +19,7 @@ impl TrackRepo {
                     al.cover_artwork_id
                 FROM tracks t
                 LEFT JOIN albums al ON t.album_id = al.id
-                JOIN media_files m ON t.id = m.track_id
+                JOIN media_files m ON m.id = COALESCE(t.primary_file_id, (SELECT mf.id FROM media_files mf WHERE mf.track_id = t.id ORDER BY mf.id LIMIT 1))
                 LEFT JOIN favorite_tracks ft ON t.id = ft.track_id
                 WHERE 1=1
             ".to_string();
@@ -37,7 +37,8 @@ impl TrackRepo {
             };
     
             // 默认按照添加时间倒序返回最新扫描的歌曲
-            sql.push_str(" ORDER BY t.added_at DESC LIMIT ? OFFSET ?");
+            // 加 t.id 作 tiebreaker，避免相同 added_at 时分页结果重叠
+            sql.push_str(" ORDER BY t.added_at DESC, t.id ASC LIMIT ? OFFSET ?");
     
             let mut result = Vec::new();
     
@@ -95,7 +96,7 @@ impl TrackRepo {
                     t.last_played_at
                 FROM tracks t
                 LEFT JOIN albums al ON t.album_id = al.id
-                JOIN media_files m ON t.id = m.track_id
+                JOIN media_files m ON m.id = COALESCE(t.primary_file_id, (SELECT mf.id FROM media_files mf WHERE mf.track_id = t.id ORDER BY mf.id LIMIT 1))
                 LEFT JOIN favorite_tracks ft ON t.id = ft.track_id
                 WHERE t.last_played_at IS NOT NULL
                 ORDER BY t.last_played_at DESC LIMIT ?1
@@ -128,7 +129,7 @@ impl TrackRepo {
                 FROM favorite_tracks ft
                 JOIN tracks t ON ft.track_id = t.id
                 LEFT JOIN albums al ON t.album_id = al.id
-                JOIN media_files m ON t.id = m.track_id
+                JOIN media_files m ON m.id = COALESCE(t.primary_file_id, (SELECT mf.id FROM media_files mf WHERE mf.track_id = t.id ORDER BY mf.id LIMIT 1))
                 ORDER BY ft.favorited_at DESC
             ")?;
             let rows = stmt.query_map([], crate::repositories::map_track_row)?;
@@ -180,7 +181,7 @@ impl TrackRepo {
                 FROM play_queue pq
                 JOIN tracks t ON pq.track_id = t.id
                 LEFT JOIN albums al ON t.album_id = al.id
-                JOIN media_files m ON t.id = m.track_id
+                JOIN media_files m ON m.id = COALESCE(t.primary_file_id, (SELECT mf.id FROM media_files mf WHERE mf.track_id = t.id ORDER BY mf.id LIMIT 1))
                 LEFT JOIN favorite_tracks ft ON t.id = ft.track_id
                 ORDER BY pq.position ASC
             ";
