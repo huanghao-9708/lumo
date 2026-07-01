@@ -71,7 +71,8 @@ impl PlaylistRepo {
                     m.id AS media_file_id,
                     ft.track_id IS NOT NULL AS is_favorite,
                     al.cover_artwork_id,
-                    m.file_size
+                    m.file_size,
+                    (SELECT s.kind FROM sources s JOIN media_files mf ON mf.source_id = s.id WHERE mf.id = m.id) AS source_kind
                 FROM playlist_items pi
                 JOIN tracks t ON pi.track_id = t.id
                 LEFT JOIN albums al ON t.album_id = al.id

@@ -41,6 +41,8 @@ export interface Track {
   primary_file_id?: number | null;
   playedAt?: string;
   fileSize: number | null;
+  /** 来源类型：'local' | 'webdav'，用于离线降级判断 */
+  sourceKind: 'local' | 'webdav';
 }
 
 export interface Playlist {
@@ -171,6 +173,7 @@ export const usePlayerStore = defineStore("player", () => {
       primary_file_id: t.media_file_id,
       playedAt: t.last_played_at ?? '',
       fileSize: t.file_size ?? null,
+      sourceKind: (t.source_kind === 'webdav' ? 'webdav' : 'local') as 'local' | 'webdav',
     };
   }
 
@@ -1355,6 +1358,10 @@ const albums = shallowRef<Album[]>([]);
       } else {
         if (!hasLoadedCurrentFile.value) {
           if (track.primary_file_id) {
+            // 断网保护：WebDAV 曲目在离线时不能播放
+            if (track.sourceKind === 'webdav' && !navigator.onLine) {
+              throw new Error('离线状态，无法播放云端曲目');
+            }
             await playbackPlay(track.primary_file_id);
             hasLoadedCurrentFile.value = true;
 
@@ -1487,6 +1494,11 @@ const albums = shallowRef<Album[]>([]);
       durationMs.value = track.durationSec ? track.durationSec * 1000 : 0;
       progressMs.value = 0;
       try {
+        // 断网保护：离线且为 WebDAV 来源时跳过播放
+        if (track.sourceKind === 'webdav' && !navigator.onLine) {
+          console.warn(`[Offline] Skipping WebDAV track: ${track.title} (${track.artist})`);
+          throw new Error('离线状态，无法播放云端曲目');
+        }
         const playbackDuration = await playbackPlay(track.primary_file_id);
         if (playbackDuration && playbackDuration > 0) {
           durationMs.value = playbackDuration;

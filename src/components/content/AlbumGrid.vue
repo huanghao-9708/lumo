@@ -45,6 +45,7 @@ async function playAlbum(album: Album) {
         primary_file_id: t.media_file_id,
         cover_artwork_id: t.cover_artwork_id,
         fileSize: t.file_size ?? null,
+        sourceKind: (t.source_kind === 'webdav' ? 'webdav' : 'local') as 'local' | 'webdav',
       };
     });
     if (tracks.length > 0) {

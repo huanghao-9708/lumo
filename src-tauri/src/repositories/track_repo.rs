@@ -19,7 +19,8 @@ impl TrackRepo {
                     m.id AS media_file_id,
                     ft.track_id IS NOT NULL AS is_favorite,
                     al.cover_artwork_id,
-                    m.file_size
+                    m.file_size,
+                    (SELECT s.kind FROM sources s JOIN media_files mf ON mf.source_id = s.id WHERE mf.id = m.id) AS source_kind
                 FROM tracks t
                 LEFT JOIN albums al ON t.album_id = al.id
                 JOIN media_files m ON m.id = COALESCE(t.primary_file_id, (SELECT mf.id FROM media_files mf WHERE mf.track_id = t.id ORDER BY mf.id LIMIT 1))
@@ -99,6 +100,7 @@ impl TrackRepo {
                     t.album_id,
                     al.title AS album_title, m.duration_ms, m.file_ext, m.id AS media_file_id, ft.track_id IS NOT NULL AS is_favorite, al.cover_artwork_id,
                     m.file_size,
+                    (SELECT s.kind FROM sources s JOIN media_files mf ON mf.source_id = s.id WHERE mf.id = m.id) AS source_kind,
                     t.last_played_at
                 FROM tracks t
                 LEFT JOIN albums al ON t.album_id = al.id
@@ -121,7 +123,8 @@ impl TrackRepo {
                     is_favorite: row.get(9)?,
                     cover_artwork_id: row.get(10)?,
                     file_size: row.get::<_, Option<i64>>(11)?,
-                    last_played_at: row.get(12)?,
+                    source_kind: row.get::<_, String>(12)?,
+                    last_played_at: row.get(13)?,
                 })
             })?;
             let mut result = Vec::new();
@@ -136,7 +139,8 @@ impl TrackRepo {
                     (SELECT artist_id FROM track_artists WHERE track_id = t.id ORDER BY position LIMIT 1) AS artist_id,
                     (SELECT GROUP_CONCAT(a.name, ', ') FROM track_artists ta JOIN artists a ON ta.artist_id = a.id WHERE ta.track_id = t.id ORDER BY ta.position) AS artist_name, 
                     t.album_id,
-                    al.title AS album_title, m.duration_ms, m.file_ext, m.id AS media_file_id, 1 AS is_favorite, al.cover_artwork_id, m.file_size
+                    al.title AS album_title, m.duration_ms, m.file_ext, m.id AS media_file_id, 1 AS is_favorite, al.cover_artwork_id, m.file_size,
+                    (SELECT s.kind FROM sources s JOIN media_files mf ON mf.source_id = s.id WHERE mf.id = m.id) AS source_kind
                 FROM favorite_tracks ft
                 JOIN tracks t ON ft.track_id = t.id
                 LEFT JOIN albums al ON t.album_id = al.id
@@ -156,7 +160,8 @@ impl TrackRepo {
                     (SELECT artist_id FROM track_artists WHERE track_id = t.id ORDER BY position LIMIT 1) AS artist_id,
                     (SELECT GROUP_CONCAT(a.name, ', ') FROM track_artists ta JOIN artists a ON ta.artist_id = a.id WHERE ta.track_id = t.id ORDER BY ta.position) AS artist_name,
                     t.album_id,
-                    al.title AS album_title, m.duration_ms, m.file_ext, m.id AS media_file_id, ft.track_id IS NOT NULL AS is_favorite, al.cover_artwork_id, m.file_size
+                    al.title AS album_title, m.duration_ms, m.file_ext, m.id AS media_file_id, ft.track_id IS NOT NULL AS is_favorite, al.cover_artwork_id, m.file_size,
+                    (SELECT s.kind FROM sources s JOIN media_files mf ON mf.source_id = s.id WHERE mf.id = m.id) AS source_kind
                 FROM media_files m
                 JOIN tracks t ON m.track_id = t.id
                 LEFT JOIN albums al ON t.album_id = al.id
@@ -184,14 +189,17 @@ impl TrackRepo {
                 SELECT 
                     t.id, 
                     t.title, 
+                    (SELECT artist_id FROM track_artists WHERE track_id = t.id ORDER BY position LIMIT 1) AS artist_id,
                     (SELECT GROUP_CONCAT(a.name, ', ') FROM track_artists ta JOIN artists a ON ta.artist_id = a.id WHERE ta.track_id = t.id ORDER BY ta.position) AS artist_name,
+                    t.album_id,
                     al.title AS album_title, 
                     m.duration_ms, 
                     m.file_ext, 
                     m.id AS media_file_id,
                     (ft.track_id IS NOT NULL) AS is_favorite,
                     al.cover_artwork_id,
-                    m.file_size
+                    m.file_size,
+                    (SELECT s.kind FROM sources s JOIN media_files mf ON mf.source_id = s.id WHERE mf.id = m.id) AS source_kind
                 FROM play_queue pq
                 JOIN tracks t ON pq.track_id = t.id
                 LEFT JOIN albums al ON t.album_id = al.id
@@ -365,7 +373,8 @@ impl TrackRepo {
                     m.duration_ms, m.file_ext, m.id AS media_file_id,
                     ft.track_id IS NOT NULL AS is_favorite,
                     al.cover_artwork_id,
-                    m.file_size
+                    m.file_size,
+                    (SELECT s.kind FROM sources s JOIN media_files mf ON mf.source_id = s.id WHERE mf.id = m.id) AS source_kind
                 FROM tracks t
                 JOIN media_files m ON m.id = COALESCE(t.primary_file_id, (SELECT mf.id FROM media_files mf WHERE mf.track_id = t.id ORDER BY mf.id LIMIT 1))
                 LEFT JOIN albums al ON t.album_id = al.id

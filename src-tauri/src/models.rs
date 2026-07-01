@@ -166,6 +166,8 @@ pub struct TrackDTO {
     pub last_played_at: Option<String>,
     /// 文件大小（字节）
     pub file_size: Option<i64>,
+    /// 来源类型："local" | "webdav"，用于前端离线降级判断
+    pub source_kind: String,
 }
 
 /// 传输给前端的专辑数据传输对象

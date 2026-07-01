@@ -8,6 +8,7 @@ pub mod error;
 
 use db::{init_db, DbState};
 use services::playback::PlaybackManager;
+use services::cache::AudioCache;
 use crate::commands::playback::PlaybackState;
 use tracing_subscriber;
 use std::sync::Mutex;
@@ -211,6 +212,13 @@ pub fn run() {
                 manager: Mutex::new(playback_manager),
             });
 
+            // 云端音频文件透明缓存：WebDAV 歌曲播放时后台下载完整文件到本地，
+            // 下次播放命中缓存走本地路径（零网络 + 自动 gapless）
+            let audio_cache = AudioCache::new(&app_dir);
+            app.manage(services::cache::AudioCacheState {
+                cache: Mutex::new(audio_cache),
+            });
+
             Ok(())
         })
         .plugin(tauri_plugin_opener::init())
@@ -375,6 +383,9 @@ pub fn run() {
             crate::commands::library::library_get_play_queue,
             crate::commands::library::library_get_cache_size,
             crate::commands::library::library_clear_cache,
+            crate::commands::playback::playback_is_cached,
+            crate::commands::playback::playback_clear_audio_cache,
+            crate::commands::playback::playback_get_audio_cache_size,
             crate::commands::library::library_get_folder_contents,
             crate::commands::library::library_add_folder_to_playlist,
             crate::commands::library::library_get_folder_children,

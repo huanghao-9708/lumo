@@ -1,6 +1,8 @@
 use reqwest::blocking::Client;
 use reqwest::header::RANGE;
 use std::io::{self, Read, Seek, SeekFrom};
+use std::fs::File;
+use std::path::Path;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 
@@ -147,6 +149,21 @@ impl WebdavClient {
         }
 
         files
+    }
+
+    /// 用单个 GET 请求下载完整文件到指定本地路径（带认证）。
+    /// 用于云端文件透明缓存：播放 WebDAV 歌曲时后台异步拉取完整文件，
+    /// 下次播放同一首歌即可命中本地缓存，实现「零网络请求」秒开。
+    /// 返回写入的字节数。
+    pub fn download_to_file(&self, file_url: &str, dest: &Path) -> Result<u64, String> {
+        let req = self.apply_auth(self.client.get(file_url));
+        let mut resp = req.send().map_err(|e| format!("Download request failed: {}", e))?;
+        if !resp.status().is_success() {
+            return Err(format!("Download failed: HTTP {}", resp.status()));
+        }
+        let mut file = File::create(dest).map_err(|e| format!("Failed to create cache file: {}", e))?;
+        let bytes = resp.copy_to(&mut file).map_err(|e| format!("Download write failed: {}", e))?;
+        Ok(bytes)
     }
 }
 

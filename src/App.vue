@@ -64,8 +64,16 @@ const handleGlobalKeyDown = (e: KeyboardEvent) => {
   }
 };
 
+const handleOnline = () => uiStore.setOnline(true);
+const handleOffline = () => uiStore.setOnline(false);
+
 onMounted(async () => {
   window.addEventListener('keydown', handleGlobalKeyDown);
+
+  // 网络状态监听（断网降级用）
+  window.addEventListener('online', handleOnline);
+  window.addEventListener('offline', handleOffline);
+
   // 1. 恢复播放会话（队列 / 进度 / 音量）
   await playerStore.restoreSession();
   // 2. 拉取侧边栏与库的基础数据（并行）
@@ -79,6 +87,8 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleGlobalKeyDown);
+  window.removeEventListener('online', handleOnline);
+  window.removeEventListener('offline', handleOffline);
 });
 </script>
 

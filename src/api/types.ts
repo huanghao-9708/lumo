@@ -12,6 +12,7 @@ export interface TrackDTO {
   cover_artwork_id?: number | null;
   last_played_at?: string | null;
   file_size: number | null;
+  source_kind: string; // "local" | "webdav"
 }
 
 export interface AlbumDTO {

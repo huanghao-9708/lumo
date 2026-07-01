@@ -3,3 +3,4 @@ pub mod scanner;
 pub mod library;
 pub mod playback;
 pub mod webdav;
+pub mod cache;

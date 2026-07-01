@@ -70,6 +70,13 @@ export const useUiStore = defineStore("ui", () => {
     isImmersiveView.value = !isImmersiveView.value;
   }
 
+  // ===== 网络状态（断网/弱网降级控制） =====
+  const isOnline = ref(navigator.onLine);
+
+  function setOnline(v: boolean) {
+    isOnline.value = v;
+  }
+
   return {
     isDarkMode,
     toggleDarkMode,
@@ -81,5 +88,7 @@ export const useUiStore = defineStore("ui", () => {
     openImmersiveView,
     closeImmersiveView,
     toggleImmersiveView,
+    isOnline,
+    setOnline,
   };
 });

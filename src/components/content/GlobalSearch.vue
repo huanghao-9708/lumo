@@ -75,6 +75,7 @@ function playTrack(index: number, dto: TrackDTO) {
     isFavorite: dto.is_favorite || false,
     primary_file_id: dto.media_file_id,
     fileSize: dto.file_size ?? null,
+    sourceKind: (dto.source_kind === 'webdav' ? 'webdav' : 'local') as 'local' | 'webdav',
   }], index);
 }
 

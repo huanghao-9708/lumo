@@ -58,13 +58,25 @@ impl PlaybackManager {
     }
 
     /// [Gapless Playback] 将下一首曲目直接加入到当前播放队列的末尾。
-    /// 
+    ///
     /// 与 `play_file` 不同，此方法不会调用 `self.sink.stop()`。
     /// rodio 的 Sink 会在当前曲目播放完毕后，立刻无缝开始播放这首曲目。
     pub fn enqueue_next_file(&self, path: &std::path::Path) -> Result<(), String> {
         info!("Enqueuing next file for gapless playback: {:?}", path);
         let file = File::open(path).map_err(|e| format!("Failed to open file for enqueuing: {}", e))?;
         let decoder = Decoder::new(BufReader::new(file))
+            .map_err(|e| format!("Failed to decode stream for enqueuing: {}", e))?;
+        self.sink.append(decoder);
+        Ok(())
+    }
+
+    /// [Gapless Playback] 流式版本：将 WebDAV 等远程流的下一首曲目加入队列末尾。
+    ///
+    /// 与 `enqueue_next_file` 对称，区别是数据源是任意 `Read+Seek` 流而非本地文件。
+    /// 缓存命中时走 `enqueue_next_file`，未命中走此方法，两种情况都实现无缝切歌。
+    pub fn enqueue_next_stream<R: std::io::Read + std::io::Seek + Send + Sync + 'static>(&self, reader: R) -> Result<(), String> {
+        info!("Enqueuing next stream for gapless playback");
+        let decoder = Decoder::new(BufReader::new(reader))
             .map_err(|e| format!("Failed to decode stream for enqueuing: {}", e))?;
         self.sink.append(decoder);
         Ok(())
