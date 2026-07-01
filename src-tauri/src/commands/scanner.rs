@@ -56,9 +56,9 @@ pub fn source_add_webdav(app: tauri::AppHandle, db_state: State<'_, DbState>, ur
     let _trace = ipc_trace!("source_add_webdav");
     let conn = db_state.db.get()?;
 
-    // Test connection
+    // Test connection (use empty subpath so PROPFIND hits the exact base URL, not the server root)
     let webdav = crate::services::webdav::WebdavClient::new(url.clone(), username.clone(), password.clone());
-    webdav.propfind("/").map_err(|e| AppError::Internal(format!("Failed to connect to WebDAV: {}", e)))?;
+    webdav.propfind("").map_err(|e| AppError::Internal(format!("Failed to connect to WebDAV: {}", e)))?;
 
     // credential_ref 格式：新来源存为 "username##base64_encrypted_password"
     let app_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));

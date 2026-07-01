@@ -13,6 +13,7 @@ const sources = computed(() => playerStore.sources);
 const cacheSize = ref('—');
 const isClearingCache = ref(false);
 const isAddingSource = ref(false);
+const sourceError = ref('');
 const newSource = ref({ kind: 'local' as 'local' | 'webdav', name: '', path: '', url: '', username: '', password: '' });
 
 onMounted(async () => {
@@ -46,8 +47,13 @@ function scanSource(sourceId: number) {
   playerStore.scanSource(sourceId);
 }
 
+function clearSourceError() {
+  sourceError.value = '';
+}
+
 async function addSource() {
   if (!newSource.value.name.trim()) return;
+  clearSourceError();
   isAddingSource.value = true;
   try {
     if (newSource.value.kind === 'local') {
@@ -56,7 +62,9 @@ async function addSource() {
       await playerStore.addSource('webdav', newSource.value.name, newSource.value.url, newSource.value.username, newSource.value.password);
     }
     newSource.value = { kind: 'local', name: '', path: '', url: '', username: '', password: '' };
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    sourceError.value = typeof e === 'string' ? e : e?.message || e?.toString() || '添加数据源失败';
+  }
   isAddingSource.value = false;
 }
 </script>
@@ -101,7 +109,7 @@ async function addSource() {
           <button class="text-[12px] px-3 py-1 rounded-[6px]" :class="newSource.kind === 'webdav' ? 'bg-list-selected font-medium' : 'text-text-muted'" @click="newSource.kind = 'webdav'">WebDAV</button>
         </div>
         <div class="space-y-2">
-          <input v-model="newSource.name" placeholder="名称" class="w-full h-[34px] px-3 text-[13px] bg-bg-content border border-border-color rounded-[6px] text-text-primary placeholder:text-text-muted outline-none focus:border-brand-orange/50" />
+          <input v-model="newSource.name" placeholder="名称" class="w-full h-[34px] px-3 text-[13px] bg-bg-content border border-border-color rounded-[6px] text-text-primary placeholder:text-text-muted outline-none focus:border-brand-orange/50" @input="clearSourceError" />
           <div v-if="newSource.kind === 'local'" class="flex gap-2">
             <input v-model="newSource.path" placeholder="路径（如 D:\Music）" class="flex-1 h-[34px] px-3 text-[13px] bg-bg-content border border-border-color rounded-[6px] text-text-primary placeholder:text-text-muted outline-none focus:border-brand-orange/50" />
             <button class="h-[34px] px-3 rounded-[6px] text-[12px] bg-list-hover text-text-primary hover:bg-list-selected transition-colors-smooth shrink-0" @click="selectFolder">浏览…</button>
@@ -116,6 +124,7 @@ async function addSource() {
             :disabled="isAddingSource"
             @click="addSource"
           >{{ isAddingSource ? '添加中…' : '添加数据源' }}</button>
+          <p v-if="sourceError" class="text-[11px] text-red-500 mt-1">{{ sourceError }}</p>
         </div>
       </div>
     </section>

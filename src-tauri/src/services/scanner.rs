@@ -220,8 +220,8 @@ pub fn scan_webdav_directory(app: AppHandle, source_id: i64, root_uri: String, u
     
     let webdav = WebdavClient::new(root_uri.clone(), username, password);
 
-    // Recursive propfind
-    let mut dirs_to_scan = vec!["/".to_string()];
+    // Recursive propfind (start at base URL, not server root)
+    let mut dirs_to_scan = vec!["".to_string()];
     
     while let Some(current_dir) = dirs_to_scan.pop() {
         let files = match webdav.propfind(&current_dir) {
