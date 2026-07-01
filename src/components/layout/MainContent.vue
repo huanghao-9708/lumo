@@ -54,13 +54,9 @@ const pageTitle = computed(() => {
   }
 });
 
-const trackCount = computed(() => {
-  if (playerStore.activeLibraryTab === '专辑') return playerStore.albumsTotalCount;
-  return playerStore.tracksTotalCount;
-});
 const metaText = computed(() => {
   if (playerStore.activeLibraryTab === '专辑') return `${playerStore.albumsTotalCount.toLocaleString()} 张专辑`;
-  if (playerStore.activeLibraryTab === '艺术家') return `${playerStore.artists.length.toLocaleString()} 位艺术家`;
+  if (playerStore.activeLibraryTab === '艺术家') return `${playerStore.artistsTotalCount.toLocaleString()} 位艺术家`;
   if (playerStore.activeLibraryTab === '文件夹') return `${playerStore.localSources.length} 个数据源`;
   if (playerStore.activeLibraryTab === '喜欢的音乐') return `${playerStore.libraryCounts.favorite_tracks.toLocaleString()} 首歌曲`;
   if (playerStore.activeLibraryTab === '收藏的专辑') return `${playerStore.libraryCounts.favorite_albums.toLocaleString()} 张专辑`;
@@ -411,10 +407,6 @@ onMounted(() => {
 
         </div>
 
-        <!-- 底部统计（固定在底部） -->
-        <div v-if="playerStore.tracks.length > 0" class="flex-shrink-0 px-8 py-4 border-t border-border-color text-[11px] text-text-muted font-mono bg-bg-content">
-          {{ trackCount.toLocaleString() }} 首歌曲
-        </div>
       </template>
 
       <!-- ============ 艺术家网格视图 ============ -->

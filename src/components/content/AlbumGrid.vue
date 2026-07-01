@@ -4,7 +4,6 @@ import { Play, Loader2, Disc3 } from 'lucide-vue-next';
 import { usePlayerStore, type Album } from '../../stores/player';
 import { getArtworkUrl } from '../../utils';
 import { libraryGetAlbumTracks } from '../../api/library';
-import FooterStatus from '../shared/FooterStatus.vue';
 
 const playerStore = usePlayerStore();
 
@@ -172,11 +171,6 @@ onBeforeUnmount(() => {
         <span class="text-[11px]">已显示全部 {{ totalCount.toLocaleString() }} 张专辑</span>
       </div>
 
-      <!-- Footer -->
-      </div>
-
-      <!-- Footer Status（固定在底部） -->
-      <FooterStatus :count="`${totalCount.toLocaleString()} 张专辑`" />
-
     </div>
+  </div>
 </template>

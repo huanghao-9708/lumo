@@ -11,7 +11,7 @@ const playerStore = usePlayerStore();
 const libraryNav = computed(() => [
   { key: '全部歌曲', label: '全部歌曲', icon: Activity, count: playerStore.tracksTotalCount },
   { key: '专辑', label: '专辑', icon: Disc, count: playerStore.albumsTotalCount },
-  { key: '艺术家', label: '艺术家', icon: User, count: playerStore.artists.length },
+  { key: '艺术家', label: '艺术家', icon: User, count: playerStore.artistsTotalCount },
   { key: '文件夹', label: '文件夹', icon: Folder, count: playerStore.localSources.length },
   { key: '最近播放', label: '最近播放', icon: Clock, count: playerStore.libraryCounts.recently_played },
   { key: '播放列表', label: '播放列表', icon: ListMusic, count: playerStore.playlists.length },

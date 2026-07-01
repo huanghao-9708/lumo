@@ -111,9 +111,6 @@ onUnmounted(() => {
         <!-- Region 02: Top Bar (h: 60px) -->
         <TopBar />
         
-        <!-- Divider B (Top Bar ↓ Content) -->
-        <div class="h-px w-full bg-border-color shrink-0"></div>
-
         <!-- Content & Inspector Container -->
         <div class="flex-1 flex overflow-hidden relative">
 

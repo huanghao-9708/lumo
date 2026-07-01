@@ -263,6 +263,15 @@ pub struct FolderEntryDTO {
     pub track: Option<TrackDTO>,
 }
 
+/// `library_get_artists` 的分页返回包装
+#[derive(Debug, serde::Serialize)]
+pub struct ArtistListResult {
+    /// 当前页的艺人列表
+    pub artists: Vec<ArtistDTO>,
+    /// 艺人总数（不分页）
+    pub total: i64,
+}
+
 /// `library_get_folder_contents` 的返回包装。
 /// 包含当前页的条目和总条目数，前端据此判断是否还有更多内容需要滚动加载。
 #[derive(Debug, serde::Serialize)]

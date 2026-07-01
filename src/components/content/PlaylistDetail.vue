@@ -169,14 +169,7 @@ function toggleFav(trackId: number, e: Event) {
           </div>
         </div>
 
-        <!-- 底部统计 -->
       </div>
     </template>
-  </div>
-
-  <!-- 底部统计（固定在底部） -->
-  <div v-if="tracks.length > 0" class="flex-shrink-0 flex items-center justify-between px-8 py-4 border-t border-border-color text-[11px] text-text-muted font-mono bg-bg-content">
-    <span>{{ trackCount }} 首曲目 · {{ totalDuration }}</span>
-    <span>双击播放</span>
   </div>
 </template>

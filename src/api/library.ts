@@ -3,6 +3,7 @@ import type {
   TrackDTO,
   AlbumDTO,
   ArtistDTO,
+  ArtistListResult,
   PlaylistDTOBackend,
   FolderContentsResultDTO,
   FolderChildrenResultDTO,
@@ -25,7 +26,7 @@ export function libraryGetAlbumCount(searchKeyword?: string): Promise<number> {
   return invoke('library_get_album_count', { searchKeyword });
 }
 
-export function libraryGetArtists(limit: number, offset: number, searchKeyword?: string): Promise<ArtistDTO[]> {
+export function libraryGetArtists(limit: number, offset: number, searchKeyword?: string): Promise<ArtistListResult> {
   return invoke('library_get_artists', { limit, offset, searchKeyword });
 }
 

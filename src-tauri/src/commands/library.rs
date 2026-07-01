@@ -1,7 +1,7 @@
 use crate::error::AppError;
 use tauri::{State, Manager};
 use crate::db::DbState;
-use crate::models::{TrackDTO, AlbumDTO, ArtistDTO, PlaylistDTO, ArtistStatsDTO};
+use crate::models::{TrackDTO, AlbumDTO, ArtistDTO, PlaylistDTO, ArtistStatsDTO, ArtistListResult};
 use std::path::PathBuf;
 use rusqlite::params;
 use crate::ipc_trace;
@@ -29,7 +29,7 @@ pub fn library_get_album_count(db_state: State<'_, DbState>, search_keyword: Opt
 }
 
 #[tauri::command]
-pub fn library_get_artists(db_state: State<'_, DbState>, limit: u32, offset: u32, search_keyword: Option<String>) -> Result<Vec<ArtistDTO>, AppError> {
+pub fn library_get_artists(db_state: State<'_, DbState>, limit: u32, offset: u32, search_keyword: Option<String>) -> Result<ArtistListResult, AppError> {
     let _trace = ipc_trace!("library_get_artists");
     let conn = db_state.db.get()?;
     crate::repositories::artist_repo::ArtistRepo::get_artists_paginated(&conn, limit, offset, search_keyword).map_err(|e| e.into())

@@ -4,7 +4,7 @@ use crate::models::*;
 pub struct ArtistRepo;
 
 impl ArtistRepo {
-    pub fn get_artists_paginated(conn: &Connection, limit: u32, offset: u32, search_keyword: Option<String>) -> rusqlite::Result<Vec<ArtistDTO>> {
+    pub fn get_artists_paginated(conn: &Connection, limit: u32, offset: u32, search_keyword: Option<String>) -> rusqlite::Result<ArtistListResult> {
             // 直接读 artists.track_count 冗余字段（迁移 V2 维护），去掉子查询。
             let mut sql = "
                 SELECT
@@ -15,19 +15,33 @@ impl ArtistRepo {
                 FROM artists ar
                 WHERE 1=1
             ".to_string();
-    
+
+            let mut count_sql = "
+                SELECT COUNT(*) FROM artists ar WHERE 1=1
+            ".to_string();
+
             let keyword_pattern = if let Some(keyword) = search_keyword {
                 let kw = keyword.trim();
                 if !kw.is_empty() {
-                    sql.push_str(" AND ar.name LIKE ?");
+                    let clause = " AND ar.name LIKE ?";
+                    sql.push_str(clause);
+                    count_sql.push_str(clause);
                     Some(format!("%{}%", kw))
                 } else { None }
             } else { None };
-    
+
             // 用 normalized_name（已有索引）代替 COLLATE NOCASE，避免函数排序
             // 加 ar.id 作 tiebreaker，避免相同 normalized_name 时分页结果重叠
             sql.push_str(" ORDER BY ar.normalized_name ASC, ar.id ASC LIMIT ? OFFSET ?");
-            
+
+            let total: i64 = if let Some(pattern) = &keyword_pattern {
+                let mut stmt = conn.prepare(&count_sql)?;
+                stmt.query_row(params![pattern], |row| row.get(0))?
+            } else {
+                let mut stmt = conn.prepare(&count_sql)?;
+                stmt.query_row([], |row| row.get(0))?
+            };
+
             let mut result = Vec::new();
             if let Some(pattern) = keyword_pattern {
                 let mut stmt = conn.prepare(&sql)?;
@@ -52,7 +66,7 @@ impl ArtistRepo {
                 })?;
                 for r in rows { result.push(r?); }
             }
-            Ok(result)
+            Ok(ArtistListResult { artists: result, total })
         }
 
     pub fn get_artist_album_count(conn: &Connection, artist_id: i64) -> rusqlite::Result<i64> {

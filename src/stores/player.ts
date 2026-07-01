@@ -470,6 +470,7 @@ const albums = shallowRef<Album[]>([]);
 
   // 艺人数据
   const artists = ref<Artist[]>([]);
+  const artistsTotalCount = ref(0);
 
   // 收藏的专辑和艺术家
   const favoriteAlbums = ref<Album[]>([]);
@@ -809,11 +810,12 @@ const albums = shallowRef<Album[]>([]);
     isLoadingArtists.value = true;
     try {
       isErrorArtists.value = false;
-      const result: ArtistDTO[] = await libraryGetArtists(
+      const { artists: result, total } = await libraryGetArtists(
           artistsLimit,
           artistsOffset,
           searchQuery.value || undefined
       );
+      artistsTotalCount.value = total;
       if (result.length < artistsLimit) {
         hasMoreArtists.value = false;
       }
@@ -1778,6 +1780,9 @@ const albums = shallowRef<Album[]>([]);
     // 专辑无限滚动
     albumsTotalCount,
     hasMoreAlbums,
+    // 艺人分页
+    artistsTotalCount,
+    hasMoreArtists,
     // 艺人详情页专辑分页
     nextArtistAlbumsPage,
     prevArtistAlbumsPage,

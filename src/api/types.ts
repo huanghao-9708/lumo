@@ -36,6 +36,11 @@ export interface ArtistDTO {
   avatar_artwork_id?: number | null;
 }
 
+export interface ArtistListResult {
+  artists: ArtistDTO[];
+  total: number;
+}
+
 export interface PlaylistDTOBackend {
   id: number;
   name: string;

@@ -30,14 +30,14 @@ watch(() => playerStore.globalSearchQuery, async (query) => {
   searchTimer = setTimeout(async () => {
     try {
       const q = query.trim();
-      const [tracks, albums, artists] = await Promise.all([
+      const [tracks, albums, artistResult] = await Promise.all([
         libraryGetTracks(20, 0, q),
         libraryGetAlbums(12, 0, q),
         libraryGetArtists(12, 0, q),
       ]);
       trackResults.value = tracks;
       albumResults.value = albums;
-      artistResults.value = artists;
+      artistResults.value = artistResult.artists;
     } catch (e) {
       console.error('Search failed:', e);
     } finally {
