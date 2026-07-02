@@ -10,6 +10,7 @@ const artists = computed(() => playerStore.favoriteArtists);
 const isLoading = computed(() => false);
 
 function selectArtist(artistId: number) {
+  playerStore.activeLibraryTab = '艺术家';
   playerStore.activeArtistId = artistId;
 }
 
