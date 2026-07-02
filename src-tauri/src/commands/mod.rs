@@ -1,6 +1,7 @@
 pub mod library;
 pub mod playback;
 pub mod scanner;
+pub mod sync;
 
 // Re-export PlaybackState
 pub use playback::PlaybackState;

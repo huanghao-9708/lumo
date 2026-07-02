@@ -6,7 +6,7 @@ use std::path::Path;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct WebdavFile {
     pub path: String,
     pub is_dir: bool,
@@ -164,6 +164,46 @@ impl WebdavClient {
         let mut file = File::create(dest).map_err(|e| format!("Failed to create cache file: {}", e))?;
         let bytes = resp.copy_to(&mut file).map_err(|e| format!("Download write failed: {}", e))?;
         Ok(bytes)
+    }
+
+    /// MKCOL：创建远程目录（同步目录初始化、文件夹浏览器新建文件夹用）。
+    /// 对已存在的目录返回 405，视为成功（幂等）。
+    pub fn mkcol(&self, path_url: &str) -> Result<(), String> {
+        let req = self.apply_auth(
+            self.client.request(reqwest::Method::from_bytes(b"MKCOL").unwrap(), path_url)
+        );
+        let resp = req.send().map_err(|e| format!("MKCOL request failed: {}", e))?;
+        let status = resp.status();
+        // 201 Created 或 405 Method Not Allowed（目录已存在）都视为成功
+        if status.is_success() || status.as_u16() == 405 {
+            Ok(())
+        } else {
+            Err(format!("MKCOL failed: HTTP {}", status))
+        }
+    }
+
+    /// PUT：上传文件内容到指定 URL（上传 DB 快照用）。
+    pub fn put_file(&self, file_url: &str, data: Vec<u8>) -> Result<(), String> {
+        let req = self.apply_auth(self.client.put(file_url).body(data));
+        let resp = req.send().map_err(|e| format!("PUT request failed: {}", e))?;
+        if resp.status().is_success() {
+            Ok(())
+        } else {
+            Err(format!("PUT failed: HTTP {}", resp.status()))
+        }
+    }
+
+    /// DELETE：删除远程文件（清理旧快照用）。
+    pub fn delete(&self, file_url: &str) -> Result<(), String> {
+        let req = self.apply_auth(self.client.delete(file_url));
+        let resp = req.send().map_err(|e| format!("DELETE request failed: {}", e))?;
+        // 204 No Content 或 404 Not Found 都视为成功
+        let status = resp.status();
+        if status.is_success() || status.as_u16() == 404 {
+            Ok(())
+        } else {
+            Err(format!("DELETE failed: HTTP {}", status))
+        }
     }
 }
 

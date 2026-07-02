@@ -621,6 +621,28 @@ fn apply_migrations(conn: &Connection, app_dir: &std::path::Path) -> Result<()> 
         tracing::info!("数据库迁移：已升级至 V7（artists 加 avatar_artwork_id 字段）");
     }
 
+    // ===== V8: 跨设备数据同步配置表 =====
+    // 单行表（id 固定为 1），存储 WebDAV 同步源地址、凭据、远程路径和上次同步时间。
+    // 密码用同步专用密钥加密（不依赖机器绑定的 derive_credential_key），跨设备可解密。
+    if current < 8 {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS sync_config (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                enabled INTEGER NOT NULL DEFAULT 0,
+                webdav_url TEXT,
+                username TEXT,
+                password_encrypted TEXT,
+                remote_path TEXT,
+                last_sync_at TEXT,
+                last_sync_direction TEXT
+            );
+            INSERT OR IGNORE INTO sync_config (id) VALUES (1);",
+        )?;
+        mark_migration_applied(conn, 8)?;
+        current = 8;
+        tracing::info!("数据库迁移：已升级至 V8（sync_config 同步配置表）");
+    }
+
     let _ = current;
     Ok(())
 }

@@ -392,7 +392,14 @@ pub fn run() {
             crate::commands::library::library_get_folder_tracks,
             crate::commands::library::library_get_counts,
             crate::commands::library::library_fetch_missing_album_cover,
-            crate::commands::library::library_fetch_missing_artist_cover
+            crate::commands::library::library_fetch_missing_artist_cover,
+            crate::commands::sync::sync_get_config,
+            crate::commands::sync::sync_save_config,
+            crate::commands::sync::sync_browse_webdav,
+            crate::commands::sync::sync_create_folder,
+            crate::commands::sync::sync_upload_now,
+            crate::commands::sync::sync_restore_now,
+            crate::commands::sync::sync_check_remote,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

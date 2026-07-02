@@ -322,3 +322,38 @@ pub struct LibraryCounts {
     pub favorite_artists: i64,
     pub recently_played: i64,
 }
+
+/// 跨设备数据同步配置（对应的前端配置表 sync_config）
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct SyncConfigDTO {
+    pub enabled: bool,
+    pub webdav_url: Option<String>,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub remote_path: Option<String>,
+    pub last_sync_at: Option<String>,
+    pub last_sync_direction: Option<String>,
+}
+
+/// 同步结果
+#[derive(Debug, serde::Serialize)]
+pub struct SyncResult {
+    pub bytes_uploaded: u64,
+    pub timestamp: String,
+}
+
+/// 远程检查结果
+#[derive(Debug, serde::Serialize)]
+pub struct RemoteCheckResult {
+    pub has_data: bool,
+    pub remote_size: Option<u64>,
+    pub last_modified: Option<String>,
+}
+
+/// WebDAV 目录项（用于文件夹浏览器）
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct WebdavEntry {
+    pub name: String,
+    pub is_dir: bool,
+    pub path: String,
+}
