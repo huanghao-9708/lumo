@@ -170,3 +170,12 @@ export function libraryGetCacheSize(): Promise<number> {
   return invoke('library_get_cache_size');
 }
 
+/** 智能歌单：按预设规则查询歌曲列表。kind 目前支持 "most_played" */
+export function libraryGetSmartPlaylist(kind: string, limit?: number): Promise<TrackDTO[]> {
+  return invoke('library_get_smart_playlist', { kind, limit });
+}
+
+/** 获取某首歌曲的所有可用物理文件版本（用于多音源版本切换 UI） */
+export function libraryGetTrackVersions(trackId: number): Promise<TrackFileInfoDTO[]> {
+  return invoke('library_get_track_versions', { trackId });
+}

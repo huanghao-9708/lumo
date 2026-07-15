@@ -128,21 +128,43 @@ impl LibraryService {
         // 4. 处理 Track（歌曲抽象信息）
         let track_title = metadata.title.as_deref().unwrap_or(&file_name);
         let normalized_track_title = track_title.to_lowercase();
+        let main_artist_normalized = normalize_artist_name(track_artist_str).to_lowercase();
 
-        // 复用已存在的 track（同一专辑内同名），避免重复扫描把歌单引用打成孤儿
-        let (track_id, track_is_new): (i64, bool) = match conn.query_row(
+        // 查找已有 track 的逻辑（多音源归并）
+        // 1. 同一专辑内同名完全匹配
+        let exact_match: Option<i64> = conn.query_row(
             "SELECT id FROM tracks WHERE normalized_title = ?1 AND album_id IS ?2 LIMIT 1",
             params![normalized_track_title, album_id],
             |row| row.get(0),
-        ).optional()? {
-            Some(id) => (id, false),
-            None => {
-                conn.execute(
-                    "INSERT INTO tracks (title, normalized_title, sort_title, album_id) VALUES (?1, ?2, ?2, ?3)",
-                    params![track_title, normalized_track_title, album_id],
-                )?;
-                (conn.last_insert_rowid(), true)
-            }
+        ).optional()?;
+
+        // 2. 指纹模糊匹配（标题一致 + 主艺人一致 + 时长相差不到2秒）
+        let fuzzy_match: Option<i64> = if exact_match.is_none() {
+            conn.query_row(
+                "SELECT t.id FROM tracks t
+                 JOIN media_files mf ON mf.id = t.primary_file_id
+                 WHERE t.normalized_title = ?1
+                   AND EXISTS (SELECT 1 FROM track_artists ta
+                               JOIN artists a ON a.id = ta.artist_id
+                               WHERE ta.track_id = t.id AND ta.role = 'main'
+                                 AND a.normalized_name = ?2)
+                   AND ABS(COALESCE(mf.duration_ms, 0) - ?3) <= 2000
+                 LIMIT 1",
+                params![normalized_track_title, main_artist_normalized, metadata.duration_ms.unwrap_or(0)],
+                |row| row.get(0),
+            ).optional()?
+        } else {
+            None
+        };
+
+        let (track_id, track_is_new): (i64, bool) = if let Some(id) = exact_match.or(fuzzy_match) {
+            (id, false)
+        } else {
+            conn.execute(
+                "INSERT INTO tracks (title, normalized_title, sort_title, album_id) VALUES (?1, ?2, ?2, ?3)",
+                params![track_title, normalized_track_title, album_id],
+            )?;
+            (conn.last_insert_rowid(), true)
         };
 
         // 维护 albums.track_count 冗余字段：仅在新 track 真正插入时 +1。
@@ -214,7 +236,44 @@ impl LibraryService {
         )?;
 
         // 7. 将刚刚存储成功的最优物理文件作为此歌曲的首选音源
-        conn.execute("UPDATE tracks SET primary_file_id = ?1 WHERE id = ?2", params![media_file_id, track_id])?;
+        let current_primary_file_id: Option<i64> = conn.query_row(
+            "SELECT primary_file_id FROM tracks WHERE id = ?1",
+            params![track_id],
+            |row| row.get(0),
+        ).optional()?.flatten();
+
+        let should_update_primary = if let Some(current_id) = current_primary_file_id {
+            if current_id == media_file_id {
+                false
+            } else {
+                let curr_score: i32 = conn.query_row(
+                    "SELECT s.kind, mf.file_ext FROM media_files mf JOIN sources s ON s.id = mf.source_id WHERE mf.id = ?1",
+                    params![current_id],
+                    |row| {
+                        let kind: String = row.get(0)?;
+                        let ext: String = row.get(1)?;
+                        Ok(crate::services::file_priority::file_priority_score(&kind, &ext))
+                    },
+                ).unwrap_or(-1);
+
+                let new_score: i32 = conn.query_row(
+                    "SELECT kind FROM sources WHERE id = ?1",
+                    params![source_id],
+                    |row| {
+                        let kind: String = row.get(0)?;
+                        Ok(crate::services::file_priority::file_priority_score(&kind, &ext))
+                    },
+                ).unwrap_or(0);
+
+                new_score > curr_score
+            }
+        } else {
+            true
+        };
+
+        if should_update_primary {
+            conn.execute("UPDATE tracks SET primary_file_id = ?1 WHERE id = ?2", params![media_file_id, track_id])?;
+        }
 
         // 8. 尝试提取歌词存入 lyrics 表中（优先使用同目录下同名 LRC 文件，没有则使用内嵌歌词）
         let mut lrc_content = None;

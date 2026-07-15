@@ -1,11 +1,11 @@
 import { invoke } from '../utils/tauriInvoke';
 
-export function playbackPlay(mediaFileId?: number): Promise<number | null> {
-  return invoke('playback_play', { mediaFileId });
+export function playbackPlay(mediaFileId?: number, forceLocal?: boolean): Promise<number | null> {
+  return invoke('playback_play', { mediaFileId, forceLocal });
 }
 
-export function playbackEnqueueNext(mediaFileId: number): Promise<void> {
-  return invoke('playback_enqueue_next', { mediaFileId });
+export function playbackEnqueueNext(mediaFileId: number, forceLocal?: boolean): Promise<void> {
+  return invoke('playback_enqueue_next', { mediaFileId, forceLocal });
 }
 
 export function playbackGetQueueLen(): Promise<number> {

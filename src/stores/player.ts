@@ -10,7 +10,8 @@ import {
   libraryGetLyrics, libraryGetTrackFileInfo, libraryGetCounts,
   libraryFetchMissingAlbumCover, libraryFetchMissingArtistCover,
   libraryGetAlbumById,
-  libraryGetArtistById
+  libraryGetArtistById,
+  libraryGetSmartPlaylist,
 } from '../api/library';
 import {
   playbackPlay, playbackPause, playbackResume, playbackSetVolume, playbackGetPos, playbackSeek, playbackIsFinished, playbackEnqueueNext, playbackGetQueueLen
@@ -458,6 +459,11 @@ export const usePlayerStore = defineStore("player", () => {
 
   // 歌单数据
   const playlists = ref<Playlist[]>([]);
+
+  // 智能歌单数据
+  const activeSmartPlaylistKind = ref<string | null>(null);
+  const smartPlaylistTracks = ref<Track[]>([]);
+  const isLoadingSmartPlaylist = ref(false);
 
   // 来源数据
   const sources = ref<MusicSource[]>([]);
@@ -1343,6 +1349,30 @@ const albums = shallowRef<Album[]>([]);
     }
   }
 
+  // ================= 智能歌单 Actions =================
+
+  /**
+   * 加载指定类型的智能歌单。
+   * @param kind 预设类型，目前支持 "most_played"（播放最多）
+   */
+  async function loadSmartPlaylist(kind: string) {
+    activeSmartPlaylistKind.value = kind;
+    activeLibraryTab.value = '智能歌单';
+    activeAlbumId.value = null;
+    activeArtistId.value = null;
+    activePlaylistId.value = null;
+    isLoadingSmartPlaylist.value = true;
+    try {
+      const dtos = await libraryGetSmartPlaylist(kind, 100);
+      smartPlaylistTracks.value = mapTrackList(dtos);
+    } catch (e) {
+      console.error(`[SmartPlaylist] Failed to load kind=${kind}:`, e);
+      smartPlaylistTracks.value = [];
+    } finally {
+      isLoadingSmartPlaylist.value = false;
+    }
+  }
+
   async function togglePlay() {
     if (queue.value.length === 0) return;
     if (currentIndex.value === -1) {
@@ -1357,19 +1387,21 @@ const albums = shallowRef<Album[]>([]);
         await playbackPause();
         isPlaying.value = false;
         stopProgressAutoSave();
+        // 同步系统媒体状态
+        if ('mediaSession' in navigator) {
+          navigator.mediaSession.playbackState = 'paused';
+        }
       } else {
         if (!hasLoadedCurrentFile.value) {
           if (track.primary_file_id) {
-            // 断网保护：WebDAV 曲目在离线时不能播放
-            if (track.sourceKind === 'webdav' && !navigator.onLine) {
-              throw new Error('离线状态，无法播放云端曲目');
-            }
-            await playbackPlay(track.primary_file_id);
+            await playbackPlay(track.primary_file_id, !navigator.onLine);
             hasLoadedCurrentFile.value = true;
 
             if (progressMs.value > 0) {
               await playbackSeek(progressMs.value);
             }
+            // 同步系统媒体通知
+            updateMediaSessionMetadata(track);
           }
         } else {
           await playbackResume();
@@ -1377,6 +1409,9 @@ const albums = shallowRef<Album[]>([]);
         isPlaying.value = true;
         startProgressPolling();
         startProgressAutoSave();
+        if ('mediaSession' in navigator) {
+          navigator.mediaSession.playbackState = 'playing';
+        }
       }
     } catch (e) {
       console.error("Toggle play failed:", e);
@@ -1416,9 +1451,8 @@ const albums = shallowRef<Album[]>([]);
            
            const nextTrackObj = queue.value[nextIdx];
            if (nextTrackObj && nextTrackObj.primary_file_id) {
-             console.log("[Gapless] Pre-enqueuing next track:", nextTrackObj.title);
              try {
-                await playbackEnqueueNext(nextTrackObj.primary_file_id);
+                await playbackEnqueueNext(nextTrackObj.primary_file_id, !navigator.onLine);
                 hasEnqueuedNext = true;
                                 enqueuedTrackIndex = nextIdx;
              } catch(e) {
@@ -1496,12 +1530,7 @@ const albums = shallowRef<Album[]>([]);
       durationMs.value = track.durationSec ? track.durationSec * 1000 : 0;
       progressMs.value = 0;
       try {
-        // 断网保护：离线且为 WebDAV 来源时跳过播放
-        if (track.sourceKind === 'webdav' && !navigator.onLine) {
-          console.warn(`[Offline] Skipping WebDAV track: ${track.title} (${track.artist})`);
-          throw new Error('离线状态，无法播放云端曲目');
-        }
-        const playbackDuration = await playbackPlay(track.primary_file_id);
+        const playbackDuration = await playbackPlay(track.primary_file_id, !navigator.onLine);
         if (playbackDuration && playbackDuration > 0) {
           durationMs.value = playbackDuration;
         }
@@ -1510,6 +1539,11 @@ const albums = shallowRef<Album[]>([]);
         startProgressPolling();
         startProgressAutoSave();
         persistPlayQueueIfNeeded();
+        // 同步系统媒体通知元数据
+        updateMediaSessionMetadata(track);
+        if ('mediaSession' in navigator) {
+          navigator.mediaSession.playbackState = 'playing';
+        }
       } catch (e) {
         console.error("Play failed:", e);
       }
@@ -1670,6 +1704,61 @@ const albums = shallowRef<Album[]>([]);
 
   initEventListeners();
 
+  // ===== MediaSession API：接管系统媒体键与系统媒体通知 =====
+
+  /**
+   * 更新系统媒体通知（Windows SMTC / macOS Now Playing）中的曲目元数据。
+   * 切歌时调用，将当前曲目的标题、艺人、专辑和封面同步给操作系统。
+   */
+  function updateMediaSessionMetadata(track: Track) {
+    if (!('mediaSession' in navigator)) return;
+    const artwork: MediaImage[] = [];
+    if (track.cover_artwork_id) {
+      artwork.push({
+        src: `lumo://artwork/${track.cover_artwork_id}`,
+        sizes: '512x512',
+        type: 'image/jpeg',
+      });
+    }
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: track.title,
+      artist: track.artist,
+      album: track.album,
+      artwork,
+    });
+  }
+
+  /**
+   * 初始化 MediaSession action handler。
+   * 将键盘多媒体键（播放/暂停/上一首/下一首/快进快退）映射到 store 中的对应操作。
+   * Tauri 的 WebView 原生支持 MediaSession，注册后操作系统会自动接管。
+   */
+  function setupMediaSession() {
+    if (!('mediaSession' in navigator)) return;
+
+    navigator.mediaSession.setActionHandler('play', () => {
+      if (!isPlaying.value) togglePlay();
+    });
+    navigator.mediaSession.setActionHandler('pause', () => {
+      if (isPlaying.value) togglePlay();
+    });
+    navigator.mediaSession.setActionHandler('previoustrack', () => {
+      prevTrack();
+    });
+    navigator.mediaSession.setActionHandler('nexttrack', () => {
+      nextTrack(false);
+    });
+    navigator.mediaSession.setActionHandler('seekto', (details) => {
+      if (details.seekTime != null) {
+        seek(details.seekTime * 1000);
+      }
+    });
+
+    console.log('[MediaSession] 已注册媒体键 handler');
+  }
+
+  setupMediaSession();
+
   // 页面关闭前保存播放进度（P0-3 兜底）
   if (typeof window !== 'undefined') {
     window.addEventListener('beforeunload', saveProgressToStorage);
@@ -1787,5 +1876,10 @@ const albums = shallowRef<Album[]>([]);
     nextArtistAlbumsPage,
     prevArtistAlbumsPage,
     goToArtistAlbumsPage,
+    // 智能歌单
+    activeSmartPlaylistKind,
+    smartPlaylistTracks,
+    isLoadingSmartPlaylist,
+    loadSmartPlaylist,
   };
 });

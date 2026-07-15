@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { ref } from 'vue';
-import { Heart, MoreHorizontal, ListMusic, Disc3 } from 'lucide-vue-next';
+import { ref, watch, onMounted } from 'vue';
+import { Heart, MoreHorizontal, ListMusic, Disc3, Settings2 } from 'lucide-vue-next';
 import { usePlayerStore } from '../../stores/player';
 import { useUiStore } from '../../stores/ui';
 import { useArtworkSrc } from '../../composables/useArtworkSrc';
 import LyricsView from '../shared/LyricsView.vue';
+import { libraryGetTrackVersions } from '../../api/library';
+import type { TrackFileInfoDTO } from '../../api/types';
 
 const playerStore = usePlayerStore();
 const uiStore = useUiStore();
@@ -34,6 +36,39 @@ function fileInfoText(): string {
 function toggleFav() {
   const t = playerStore.currentTrack;
   if (t) playerStore.toggleFavorite(t.id);
+}
+
+/* ============ 多版本 ============ */
+const trackVersions = ref<TrackFileInfoDTO[]>([]);
+const isVersionsOpen = ref(false);
+
+async function fetchVersions(trackId: number) {
+  try {
+    trackVersions.value = await libraryGetTrackVersions(trackId);
+  } catch (e) {
+    console.error('Failed to fetch track versions', e);
+    trackVersions.value = [];
+  }
+}
+
+watch(() => playerStore.currentTrack?.id, (newId) => {
+  if (newId) {
+    fetchVersions(newId);
+  } else {
+    trackVersions.value = [];
+  }
+}, { immediate: true });
+
+async function switchVersion(fileId: number) {
+  isVersionsOpen.value = false;
+  const t = playerStore.currentTrack;
+  if (!t) return;
+  // 直接通过新的 primary_file_id 重新播放（这需要我们在 store 提供一个切换底层流的方法，或者直接给后端发请求，目前最简单的是直接改 currentTrack.primary_file_id = fileId，然后重新 playQueue 或者让 playbackPlay 支持 fileId）
+  // 因为我们的播放逻辑是依赖 track.primary_file_id 的，我们可以先临时覆盖它并触发重新播放
+  t.primary_file_id = fileId;
+  const currentIdx = playerStore.currentIndex;
+  // 会重新触发 playQueue 并在后台执行播放
+  await playerStore.playQueue(playerStore.queue, currentIdx, true);
 }
 </script>
 
@@ -100,9 +135,36 @@ function toggleFav() {
 
             <p class="text-[14px] text-text-primary mb-0 truncate">{{ playerStore.currentTrack.artist }}</p>
             <p class="text-[13px] text-text-muted mb-1.5 truncate">{{ playerStore.currentTrack.album }}</p>
-            <p class="text-[10px] text-text-muted font-mono uppercase tracking-wider leading-relaxed">
-              {{ fileInfoText() }}
-            </p>
+            
+            <div class="flex items-center justify-between mb-4 mt-2">
+              <p class="text-[10px] text-text-muted font-mono uppercase tracking-wider leading-relaxed">
+                {{ fileInfoText() }}
+              </p>
+              
+              <div class="relative" v-if="trackVersions.length > 1">
+                <button 
+                  @click="isVersionsOpen = !isVersionsOpen" 
+                  class="flex items-center gap-1 text-[10px] bg-bg-hover text-text-secondary px-2 py-1 rounded-[4px] hover:text-text-primary transition-colors-smooth uppercase tracking-widest"
+                >
+                  <Settings2 class="w-3 h-3" />
+                  {{ trackVersions.length }} 版本
+                </button>
+                
+                <div v-if="isVersionsOpen" class="absolute right-0 top-[120%] bg-bg-surface border border-border-color rounded-[8px] shadow-lg w-[180px] z-50 py-1 flex flex-col max-h-[160px] overflow-y-auto">
+                  <button 
+                    v-for="v in trackVersions" :key="v.id"
+                    @click="switchVersion(v.id)"
+                    class="text-left px-3 py-2 text-[11px] hover:bg-list-hover transition-colors-smooth flex flex-col border-b border-border-color last:border-0"
+                    :class="v.id === playerStore.currentTrack.primary_file_id ? 'text-brand-orange bg-brand-orange/5' : 'text-text-primary'"
+                  >
+                    <span class="font-medium truncate block">{{ v.source_kind === 'webdav' ? 'WebDAV' : 'Local' }} - {{ (v.file_ext || 'unknown').toUpperCase() }}</span>
+                    <span class="text-text-muted font-mono truncate block mt-0.5">
+                      {{ v.bits_per_sample ? `${v.bits_per_sample}bit / ` : '' }}{{ v.sample_rate ? (v.sample_rate/1000).toFixed(0)+'kHz' : '' }}
+                    </span>
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
 
           <!-- Lyrics -->

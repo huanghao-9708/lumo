@@ -7,6 +7,7 @@ use crate::services::cache::{AudioCache, AudioCacheState, is_downloading, mark_d
 use crate::services::webdav::WebdavClient;
 use std::sync::Mutex;
 use std::path::PathBuf;
+use rusqlite::OptionalExtension;
 
 pub struct PlaybackState {
     pub manager: Mutex<PlaybackManager>,
@@ -24,10 +25,31 @@ pub struct PlaybackState {
 fn resolve_media_file(
     db_state: &State<'_, DbState>,
     audio_cache: &AudioCache,
-    media_file_id: i64,
+    mut media_file_id: i64,
     key: &[u8; 32],
+    force_local: bool,
 ) -> Result<(Option<PathBuf>, Option<crate::services::webdav::HttpRangeReader>, WebdavResolveInfo), AppError> {
     let conn = db_state.db.get()?;
+    
+    // 如果要求强行使用本地版本（断网降级），我们查找当前 track_id 下最好的 local 音源
+    if force_local {
+        let local_fallback_id: Option<i64> = conn.query_row(
+            "SELECT mf.id FROM media_files mf 
+             JOIN sources s ON s.id = mf.source_id 
+             WHERE mf.track_id = (SELECT track_id FROM media_files WHERE id = ?1) 
+               AND s.kind = 'local' 
+               AND mf.availability = 'available' 
+             ORDER BY mf.file_size DESC LIMIT 1",
+            rusqlite::params![media_file_id],
+            |row| row.get(0)
+        ).optional()?;
+        
+        if let Some(id) = local_fallback_id {
+            media_file_id = id;
+            tracing::info!("Offline auto-degraded to local media_file_id={}", id);
+        }
+    }
+
     let (relative_path, root_uri, kind, cred, size): (String, String, String, Option<String>, i64) = conn.query_row(
         "SELECT mf.relative_path, s.root_uri, s.kind, s.credential_ref, mf.file_size
          FROM media_files mf JOIN sources s ON mf.source_id = s.id
@@ -157,13 +179,14 @@ pub fn playback_play(
     db_state: State<'_, DbState>,
     cache_state: State<'_, AudioCacheState>,
     media_file_id: i64,
+    force_local: Option<bool>,
 ) -> Result<Option<u64>, AppError> {
     let _trace = ipc_trace!("playback_play");
     let app_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
     let key = crate::commands::scanner::derive_credential_key(&app_dir);
 
     let audio_cache = cache_state.cache.lock().map_err(|e| AppError::Internal(e.to_string()))?;
-    let (path_buf, webdav_reader, webdav_info) = resolve_media_file(&db_state, &audio_cache, media_file_id, &key)?;
+    let (path_buf, webdav_reader, webdav_info) = resolve_media_file(&db_state, &audio_cache, media_file_id, &key, force_local.unwrap_or(false))?;
     drop(audio_cache); // 释放缓存锁，不阻塞后续播放
 
     let manager = playback_state.manager.lock().map_err(|e| AppError::Internal(e.to_string()))?;
@@ -195,13 +218,14 @@ pub fn playback_enqueue_next(
     db_state: State<'_, DbState>,
     cache_state: State<'_, AudioCacheState>,
     media_file_id: i64,
+    force_local: Option<bool>,
 ) -> Result<(), AppError> {
     let _trace = ipc_trace!("playback_enqueue_next");
     let app_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
     let key = crate::commands::scanner::derive_credential_key(&app_dir);
 
     let audio_cache = cache_state.cache.lock().map_err(|e| AppError::Internal(e.to_string()))?;
-    let (path_buf, webdav_reader, webdav_info) = resolve_media_file(&db_state, &audio_cache, media_file_id, &key)?;
+    let (path_buf, webdav_reader, webdav_info) = resolve_media_file(&db_state, &audio_cache, media_file_id, &key, force_local.unwrap_or(false))?;
     drop(audio_cache);
 
     let manager = playback_state.manager.lock().map_err(|e| AppError::Internal(e.to_string()))?;

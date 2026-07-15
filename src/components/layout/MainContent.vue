@@ -19,6 +19,7 @@ import Settings from '../content/Settings.vue';
 import ArtistGrid from '../content/ArtistGrid.vue';
 import ArtistDetail from '../content/ArtistDetail.vue';
 import FolderView from '../content/FolderView.vue';
+import SmartPlaylistView from '../content/SmartPlaylistView.vue';
 
 const playerStore = usePlayerStore();
 
@@ -49,6 +50,7 @@ const pageTitle = computed(() => {
     case '艺术家': return '艺术家';
     case '文件夹': return '文件夹';
     case '播放列表': return '播放列表';
+    case '智能歌单': return '智能歌单';
     case '设置': return '设置';
     default: return '全部歌曲';
   }
@@ -213,6 +215,9 @@ onMounted(() => {
 
     <!-- ============ 设置页 ============ -->
     <Settings v-else-if="playerStore.activeLibraryTab === '设置'" />
+
+    <!-- ============ 智能歌单 ============ -->
+    <SmartPlaylistView v-else-if="playerStore.activeLibraryTab === '智能歌单'" />
 
     <!-- ============ 其他视图（共享 Header + Toolbar） ============ -->
     <template v-else>

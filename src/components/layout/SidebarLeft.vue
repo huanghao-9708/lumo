@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import {
-  Activity, Disc, User, Heart, Folder, Clock, ListMusic, List, Plus, Star,
+  Activity, Disc, User, Heart, Folder, Clock, ListMusic, List, Plus, Star, Zap
 } from 'lucide-vue-next';
 import { usePlayerStore } from '../../stores/player';
 
@@ -42,6 +42,10 @@ function selectPlaylist(id: number) {
   playerStore.activeLibraryTab = '播放列表';
   playerStore.activePlaylistId = id;
   playerStore.refreshCurrentPlaylistTracks(id);
+}
+
+function selectSmartPlaylist(kind: string) {
+  playerStore.loadSmartPlaylist(kind);
 }
 </script>
 
@@ -147,6 +151,24 @@ function selectPlaylist(id: number) {
               <List class="w-[16px] h-[16px] mr-3 text-text-muted flex-shrink-0" />
               <span class="text-[13px] flex-1 truncate">{{ pl.name }}</span>
               <span class="text-[11px] font-mono text-text-muted tabular-nums">{{ pl.count }}</span>
+            </a>
+          </li>
+        </ul>
+      </div>
+
+      <!-- SMART PLAYLISTS -->
+      <div class="mt-6">
+        <h2 class="px-3 text-[10px] font-semibold text-text-muted mb-2 uppercase tracking-widest">
+          Smart Playlists
+        </h2>
+        <ul class="space-y-[2px]">
+          <li>
+            <a href="#" class="flex items-center px-3 py-[7px] rounded-[6px] transition-colors-smooth"
+               :class="playerStore.activeLibraryTab === '智能歌单' && playerStore.activeSmartPlaylistKind === 'most_played'
+                 ? 'bg-list-selected text-text-primary' : 'text-text-primary hover:bg-list-hover'"
+               @click.prevent="selectSmartPlaylist('most_played')">
+              <Zap class="w-[16px] h-[16px] mr-3 flex-shrink-0" :class="playerStore.activeLibraryTab === '智能歌单' && playerStore.activeSmartPlaylistKind === 'most_played' ? 'text-brand-orange' : 'text-text-muted'" />
+              <span class="text-[13px] flex-1" :class="playerStore.activeLibraryTab === '智能歌单' && playerStore.activeSmartPlaylistKind === 'most_played' ? 'font-medium' : ''">播放最多</span>
             </a>
           </li>
         </ul>

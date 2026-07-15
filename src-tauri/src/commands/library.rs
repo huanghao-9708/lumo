@@ -280,23 +280,34 @@ pub fn library_get_track_file_info(db_state: State<'_, DbState>, track_id: i64) 
     use rusqlite::OptionalExtension;
     let conn = db_state.db.get()?;
     let mut stmt = conn.prepare("
-        SELECT id, relative_path, file_size, duration_ms, bitrate, sample_rate, bit_depth, channels, file_ext
-        FROM media_files
-        WHERE track_id = ?1
+        SELECT 
+            mf.id, s.id, mf.track_id, s.root_uri || '/' || mf.relative_path, mf.relative_path, 
+            mf.file_name, mf.file_ext, mf.file_size, mf.modified_at, mf.duration_ms, mf.bitrate, mf.sample_rate, 
+            mf.bit_depth, mf.channels, mf.file_ext, s.kind
+        FROM media_files mf
+        JOIN sources s ON s.id = mf.source_id
+        WHERE mf.track_id = ?1
         LIMIT 1
     ")?;
     
     let info = stmt.query_row(params![track_id], |row| {
         Ok(crate::models::TrackFileInfoDTO {
             id: row.get(0)?,
-            path: row.get(1)?,
-            file_size: row.get(2)?,
-            duration_ms: row.get(3)?,
-            bitrate: row.get(4)?,
-            sample_rate: row.get(5)?,
-            bit_depth: row.get(6)?,
-            channels: row.get(7)?,
-            format: row.get(8)?,
+            source_id: row.get(1)?,
+            track_id: row.get(2).unwrap_or(0),
+            path: row.get(3)?,
+            relative_path: row.get(4)?,
+            file_name: row.get(5)?,
+            file_ext: row.get(6)?,
+            file_size: row.get(7)?,
+            modified_at: row.get(8)?,
+            duration_ms: row.get(9)?,
+            bitrate: row.get(10)?,
+            sample_rate: row.get(11)?,
+            bit_depth: row.get(12)?,
+            channels: row.get(13)?,
+            format: row.get(14)?,
+            source_kind: row.get(15)?,
         })
     }).optional()?;
     
@@ -688,4 +699,85 @@ pub async fn library_fetch_missing_artist_cover(app: tauri::AppHandle, db_state:
     )?;
 
     Ok(Some(artwork_id))
+}
+
+/// 智能歌单查询 command。
+/// 通过 `kind` 参数选择不同预设规则，返回对应的 TrackDTO 列表：
+/// - `"most_played"`：按 play_count 降序，返回播放次数最多的 Top N 歌曲
+///
+/// `limit` 默认为 50，前端可传入自定义值。
+#[tauri::command]
+pub fn library_get_smart_playlist(
+    db_state: State<'_, DbState>,
+    kind: String,
+    limit: Option<i64>,
+) -> Result<Vec<TrackDTO>, AppError> {
+    let _trace = ipc_trace!("library_get_smart_playlist");
+    let conn = db_state.db.get()?;
+    let limit = limit.unwrap_or(50);
+    match kind.as_str() {
+        "most_played" => {
+            crate::repositories::track_repo::TrackRepo::get_most_played_tracks(&conn, limit)
+                .map_err(|e| AppError::Internal(e.to_string()))
+        }
+        _ => Err(AppError::Internal(format!("Unknown smart playlist kind: {}", kind))),
+    }
+}
+
+/// 获取某一首歌的所有可用物理文件版本（用于多音源版本切换 UI）
+#[tauri::command]
+pub fn library_get_track_versions(
+    db_state: State<'_, DbState>,
+    track_id: i64,
+) -> Result<Vec<crate::models::TrackFileInfoDTO>, AppError> {
+    let _trace = ipc_trace!("library_get_track_versions");
+    let conn = db_state.db.get()?;
+    
+    // 查询所有属于该 track 的 media_files，按 file_priority_score 降序排序
+    let mut stmt = conn.prepare("
+        SELECT 
+            mf.id, s.id as source_id, mf.track_id, s.root_uri || '/' || mf.relative_path as path, mf.relative_path, 
+            mf.file_name, mf.file_ext, mf.file_size, mf.modified_at, mf.duration_ms, mf.bitrate, mf.sample_rate, 
+            mf.bit_depth, mf.channels, mf.file_ext as format, s.kind as source_kind
+        FROM media_files mf
+        JOIN sources s ON s.id = mf.source_id
+        WHERE mf.track_id = ?1 AND mf.availability = 'available'
+    ")?;
+    
+    use rusqlite::OptionalExtension;
+    
+    let rows = stmt.query_map(rusqlite::params![track_id], |row| {
+        Ok(crate::models::TrackFileInfoDTO {
+            id: row.get(0)?,
+            source_id: row.get(1)?,
+            track_id: row.get(2).unwrap_or(0),
+            path: row.get(3)?,
+            relative_path: row.get(4)?,
+            file_name: row.get(5)?,
+            file_ext: row.get(6)?,
+            file_size: row.get(7)?,
+            modified_at: row.get(8)?,
+            duration_ms: row.get(9)?,
+            bitrate: row.get(10)?,
+            sample_rate: row.get(11)?,
+            bit_depth: row.get(12)?,
+            channels: row.get(13)?,
+            format: row.get(14)?,
+            source_kind: row.get(15)?,
+        })
+    })?;
+    
+    let mut result = Vec::new();
+    for r in rows {
+        result.push(r?);
+    }
+    
+    // 在内存中排序（复用我们写好的 file_priority_score 逻辑）
+    result.sort_by(|a, b| {
+        let score_a = crate::services::file_priority::file_priority_score(&a.source_kind, &a.file_ext.clone().unwrap_or_default());
+        let score_b = crate::services::file_priority::file_priority_score(&b.source_kind, &b.file_ext.clone().unwrap_or_default());
+        score_b.cmp(&score_a) // 降序
+    });
+    
+    Ok(result)
 }
