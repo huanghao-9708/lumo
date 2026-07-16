@@ -1,6 +1,16 @@
 import { defineStore } from "pinia";
 import { ref, watch } from "vue";
 
+/**
+ * 移动端底部 Tab Bar 的 4 个一级导航。
+ *
+ *   library   → 曲库（对应桌面 Sidebar Library 组：全部歌曲/专辑/艺术家/…）
+ *   search    → 搜索（对应桌面 Content Toolbar 搜索 + GlobalSearch 视图）
+ *   favorites → 收藏（对应桌面 Sidebar Favorites 组：喜欢的音乐/收藏专辑/收藏歌手）
+ *   settings  → 设置（对应桌面 TopBar 更多菜单中的设置页）
+ */
+export type MobileTab = 'library' | 'search' | 'favorites' | 'settings';
+
 
 
 /**
@@ -13,8 +23,19 @@ import { ref, watch } from "vue";
 export const useUiStore = defineStore("ui", () => {
   // ===== 夜间模式 =====
   const DARK_KEY = "lumo_dark_mode";
+  const FOLLOW_SYSTEM_KEY = "lumo_follow_system";
+
+  function readFollowSystem(): boolean {
+    return localStorage.getItem(FOLLOW_SYSTEM_KEY) === "1";
+  }
+
+  /** 是否跟随系统暗色模式 */
+  const followSystem = ref(readFollowSystem());
 
   function readDarkPref(): boolean {
+    if (followSystem.value) {
+      return window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
+    }
     const saved = localStorage.getItem(DARK_KEY);
     if (saved !== null) return saved === "1";
     return window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
@@ -34,7 +55,10 @@ export const useUiStore = defineStore("ui", () => {
 
   watch(isDarkMode, (dark) => {
     applyThemeToDom(dark);
-    localStorage.setItem(DARK_KEY, dark ? "1" : "0");
+    // 仅在非跟随系统模式下持久化手动偏好
+    if (!followSystem.value) {
+      localStorage.setItem(DARK_KEY, dark ? "1" : "0");
+    }
   });
 
   function toggleDarkMode() {
@@ -43,6 +67,17 @@ export const useUiStore = defineStore("ui", () => {
 
   function setDarkMode(dark: boolean) {
     isDarkMode.value = dark;
+  }
+
+  /** 设置是否跟随系统暗色模式 */
+  function setFollowSystem(follow: boolean) {
+    followSystem.value = follow;
+    localStorage.setItem(FOLLOW_SYSTEM_KEY, follow ? "1" : "0");
+    if (follow) {
+      const prefersDark = window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
+      isDarkMode.value = prefersDark;
+      localStorage.removeItem(DARK_KEY);
+    }
   }
 
   // ===== 右侧 Inspector 面板可见性 =====
@@ -77,10 +112,21 @@ export const useUiStore = defineStore("ui", () => {
     isOnline.value = v;
   }
 
+  // ===== 移动端视图状态 =====
+  // 移动端底部 Tab Bar 的 4 个一级导航（类型见模块顶层 MobileTab）。
+  // Tab 切换时会同步设置 playerStore.activeLibraryTab，使现有视图逻辑无缝复用。
+  const activeMobileTab = ref<MobileTab>('library');
+
+  function setMobileTab(tab: MobileTab) {
+    activeMobileTab.value = tab;
+  }
+
   return {
     isDarkMode,
     toggleDarkMode,
     setDarkMode,
+    followSystem,
+    setFollowSystem,
     isRightSidebarVisible,
     toggleRightSidebar,
     setRightSidebarVisible,
@@ -90,5 +136,8 @@ export const useUiStore = defineStore("ui", () => {
     toggleImmersiveView,
     isOnline,
     setOnline,
+    // 移动端
+    activeMobileTab,
+    setMobileTab,
   };
 });

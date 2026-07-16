@@ -96,6 +96,24 @@ Hover / Selected / Active 通过背景色变化表达"被选中"的状态，无�
 | Token | `--shadow-toast`（待注册） |
 | 用途 | 顶部/底部短暂提示 |
 
+### 3.5 Mobile Now Playing 浮层（v2.1 新增）
+
+| 项 | 值 |
+|---|---|
+| **Token** | `--shadow-mobile-overlay` |
+| **亮色** | `0 -4px 16px rgba(0,0,0,0.12)` |
+| **暗色** | `0 -4px 16px rgba(0,0,0,0.4)` |
+| **用途** | 移动端 Now Playing 全屏覆盖层顶部分隔 |
+
+```css
+/* 亮色 */
+--shadow-mobile-overlay: 0 -4px 16px rgba(0, 0, 0, 0.12);
+/* 暗色 */
+--shadow-mobile-overlay: 0 -4px 16px rgba(0, 0, 0, 0.4);
+```
+
+**理由**：移动端 Now Playing 是底部上滑的全屏浮层，顶部需 4px 阴影产生「浮层 vs 底层」的深度分界（与桌面 Canvas/Content 色温微差策略互补）。是 LDL 中**第 5 个受控阴影例外**。
+
 ---
 
 ## 4. z-index 阶梯
@@ -154,6 +172,7 @@ LDL 用**边框**替代阴影定义控件边界：
 |---|---|---|
 | `--shadow-overlay` | `rgba(0,0,0,0.15)` | `rgba(0,0,0,0.4)` |
 | `--shadow-knob-inset` | `rgba(0,0,0,0.06)` | `rgba(0,0,0,0.3)` |
+| `--shadow-mobile-overlay` | `rgba(0,0,0,0.12)` | `rgba(0,0,0,0.4)` |
 
 **规则**：暗色阴影透明度约为亮色的 2.5 倍，确保可见。
 
@@ -164,7 +183,7 @@ LDL 用**边框**替代阴影定义控件边界：
 ### Do
 
 - ✅ 用 Canvas / Content 色温微差 + Divider 分层
-- ✅ 阴影仅用于 4 个受控例外
+- ✅ 阴影仅用于 5 个受控例外
 - ✅ 阴影值来自 token，不自创
 - ✅ z-index 严格用阶梯值
 

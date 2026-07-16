@@ -130,6 +130,46 @@ body {
 - 进度条 width 跟随播放进度实时变化，**不加 transition**（每秒更新会卡）
 - Hover 时拖拽点 opacity 150ms 显隐
 
+### 4.8 移动端页面 Push/Pop（v2.1 新增）
+
+```css
+.page-push-enter-active,
+.page-push-leave-active {
+  transition: transform 250ms cubic-bezier(0.4, 0, 0.2, 1), opacity 250ms ease-out;
+}
+.page-push-enter-from {
+  transform: translateX(100%);
+  opacity: 0;
+}
+.page-push-leave-to {
+  transform: translateX(-30%);
+  opacity: 0.5;
+}
+```
+
+- 详情页 push：新页从右滑入，旧页左移让位，250ms
+
+### 4.9 移动端 Now Playing 抽屉
+
+- 复用桌面 `np-drawer` 动画（`translateY(100%) → 0`，250ms ease-out）
+- 下滑手势收起：`touchstart→touchend deltaY > 80px` → `closeImmersiveView()`
+
+### 4.10 ActionSheet 底部菜单（v2.1 新增）
+
+```css
+.sheet-slide-enter-active,
+.sheet-slide-leave-active {
+  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.sheet-slide-enter-from,
+.sheet-slide-leave-to {
+  transform: translateY(100%);
+}
+```
+
+- 底部菜单从下上滑（`translateY(100%) → 0`），250ms
+- 遮罩 fade 同步：`opacity 0 → 1`，250ms ease-out
+
 ---
 
 ## 5. transition 工具类
@@ -173,7 +213,7 @@ LDL 在 `style.css` 定义两个工具类，组件中优先使用：
 
 ### 实现位置
 
-在 `style.css` 末尾添加此媒体查询（token 对齐轮次落地）。
+已在 `style.css` 末尾落地 ✅（v2.1 对齐）。
 
 ---
 

@@ -315,4 +315,50 @@ LDL 默认无阴影。以下为**受控例外**：
 
 ---
 
+## 12. Mobile Tokens（v2.1 新增）
+
+移动端（`< 768px`）继承所有亮/暗色 token、字族、动效曲线。以下为移动端**专用新增 token**。
+
+### 12.1 触摸目标
+
+| Token | 值 | 用途 |
+|---|---|---|
+| `--touch-min` | 44px | 最小触摸目标（Apple HIG / Material） |
+| `--touch-icon-btn` | 44px | 图标按钮触控尺寸（桌面 32px） |
+| `--touch-row` | 56px | 列表行高（桌面 40px） |
+
+### 12.2 区域高度
+
+| Token | 值 | 用途 |
+|---|---|---|
+| `--height-mobile-header` | 56px | 顶栏（桌面 TopBar 60px）+ safe-area-inset-top |
+| `--height-mobile-tabbar` | 56px | 底部 Tab Bar + safe-area-inset-bottom |
+| `--height-mobile-miniplayer` | 64px | Mini Player（播放时显示于 Tab Bar 上方） |
+
+### 12.3 图标尺寸
+
+| Token | 值 | 用途 |
+|---|---|---|
+| `--icon-tab` | 22px | Tab Bar 导航图标（桌面 Sidebar 16px） |
+| `--icon-transport-mobile` | 24px | Transport Skip 图标（桌面 18px） |
+| `--icon-play-mobile` | 28px | Transport Play 图标（桌面 20px） |
+
+### 12.4 移动端字号
+
+| Token | 值 | 用途 |
+|---|---|---|
+| `--text-mobile-body` | 15px | 移动正文基准（桌面 13px） |
+| `--text-mobile-title` | 20px | Now Playing 曲名 |
+| `--text-mobile-page-title` | 24px | Page Title（桌面 32px） |
+
+### 12.5 移动端阴影（受控例外 #5）
+
+| Token | 亮色 | 暗色 | 用途 |
+|---|---|---|---|
+| `--shadow-mobile-overlay` | `0 -4px 16px rgba(0,0,0,0.12)` | `0 -4px 16px rgba(0,0,0,0.4)` | Now Playing 浮层顶部分隔 |
+
+> 详见 [06 Elevation](06-elevation.md) §3.5。
+
+---
+
 *End of Tokens.*

@@ -47,6 +47,20 @@ v2.0 相对 v1.0 的主要变更见 [`00-foundation.md` Changelog](00-foundation
 | [09-components/playback-bar.md](09-components/playback-bar.md) | 进度条 / 波形 / 旋钮 / Transport |
 | [09-components/inspector.md](09-components/inspector.md) | Now Playing / Queue / Lyrics |
 
+### Mobile Components（v2.1，对应 `src/components/mobile/`）
+
+移动端组件继承全部 LDL token，仅扩展触控尺寸/手势交互。详见 [mobile/README.md](09-components/mobile/README.md)。
+
+| 文件 | 组件 |
+|---|---|
+| [09-components/mobile/mobile-song-row.md](09-components/mobile/mobile-song-row.md) | 56px 触控行 / 单击播放 / 长按菜单 |
+| [09-components/mobile/mobile-album-card.md](09-components/mobile/mobile-album-card.md) | 2 列卡片 / 常驻播放按钮 |
+| [09-components/mobile/mobile-now-playing.md](09-components/mobile/mobile-now-playing.md) | 全屏沉浸 / 取色背景 / 下滑收起 |
+| [09-components/mobile/mobile-mini-player.md](09-components/mobile/mobile-mini-player.md) | 64px Mini Player / 点击展开 |
+| [09-components/mobile/mobile-tab-bar.md](09-components/mobile/mobile-tab-bar.md) | 4 Tab 底部导航 |
+| [09-components/mobile/mobile-search.md](09-components/mobile/mobile-search.md) | 独立搜索 / 防抖 / 分段结果 |
+| [09-components/mobile/mobile-action-sheet.md](09-components/mobile/mobile-action-sheet.md) | 底部菜单 / 长按触发 |
+
 ### Reference
 
 | 文件 | 内容 |

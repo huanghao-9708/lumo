@@ -30,9 +30,57 @@
   /* LDL v1.0 Accent — 唯一强调色 */
   --brand-orange: #E28A23;
 
+  /* LDL v2.0 Typography Tokens（01-tokens.md §3.1 字号阶梯） */
+  --text-9: 9px;
+  --text-10: 10px;
+  --text-11: 11px;
+  --text-12: 12px;
+  --text-13: 13px;
+  --text-14: 14px;
+  --text-15: 15px;
+  --text-18: 18px;
+  --text-22: 22px;
+  --text-28: 28px;
+  --text-32: 32px;
+
+  /* LDL v2.0 Status Colors（03-color.md §4 状态色） */
+  --status-info: #4A7FB8;
+  --status-success: #5B8C5A;
+  --status-warning: #C08A3E;
+  --status-error: #C24E4E;
+
   /* 滚动条（暖灰，不出现冷灰） */
   --scrollbar-thumb: #D8D4CB;
   --scrollbar-thumb-hover: #BCB7AB;
+
+  /* ============================================================
+     LDL Mobile Tokens — 移动端专用（M1 骨架）
+     继承所有颜色/字体/圆角/动效 token，仅新增尺寸/间距/高度。
+     断点：< 768px → MobileLayout
+     ============================================================ */
+
+  /* 触摸目标（Apple HIG / Material 标准 ≥ 44px） */
+  --touch-min: 44px;           /* 最小触摸目标 */
+  --touch-icon-btn: 44px;      /* 图标按钮（桌面 32px） */
+  --touch-row: 56px;           /* 列表行高（桌面 40px） */
+
+  /* 移动端区域高度 */
+  --height-mobile-header: 56px;      /* 顶栏（桌面 TopBar 60px） */
+  --height-mobile-tabbar: 56px;      /* 底部 Tab Bar */
+  --height-mobile-miniplayer: 64px;  /* Mini Player */
+
+  /* 移动端图标尺寸 */
+  --icon-tab: 22px;            /* Tab Bar 图标（桌面 Sidebar 16px） */
+  --icon-transport-mobile: 24px; /* Transport Skip（桌面 18px） */
+  --icon-play-mobile: 28px;     /* Transport Play 图标（桌面 20px） */
+
+  /* 移动端字号（触屏阅读距离远，略放大） */
+  --text-mobile-body: 15px;       /* 移动正文（桌面 13px） */
+  --text-mobile-title: 20px;      /* Now Playing 曲名 */
+  --text-mobile-page-title: 24px; /* Page Title（桌面 32px） */
+
+  /* Mobile overlay shadow（第 5 个受控阴影例外，Now Playing 浮层顶部） */
+  --shadow-mobile-overlay: 0 -4px 16px rgba(0, 0, 0, 0.12);
 }
 
 /* ===== 夜间模式：覆盖 LDL token =====
@@ -56,8 +104,17 @@
   --border-color: rgba(255, 255, 255, 0.07);
   --border-solid: #36332D;
 
+  /* LDL v2.0 Status Colors（暗色提亮，03-color.md §4） */
+  --status-info: #6B9FD4;
+  --status-success: #7AB07A;
+  --status-warning: #D9A85C;
+  --status-error: #D96B6B;
+
   --scrollbar-thumb: #3F3C35;
   --scrollbar-thumb-hover: #534F47;
+
+  /* Mobile overlay shadow（第 5 个受控阴影例外，暗色加深） */
+  --shadow-mobile-overlay: 0 -4px 16px rgba(0, 0, 0, 0.4);
 }
 
 @theme {
@@ -83,6 +140,11 @@
 
   --color-border-color: var(--border-color);
   --color-border-solid: var(--border-solid);
+
+  --color-status-info: var(--status-info);
+  --color-status-success: var(--status-success);
+  --color-status-warning: var(--status-warning);
+  --color-status-error: var(--status-error);
 }
 
 body {
@@ -165,4 +227,18 @@ input:focus, textarea:focus, select:focus {
 @keyframes skeleton-pulse {
   0%, 100% { opacity: 0.3; }
   50% { opacity: 0.12; }
+}
+
+/* ===== prefers-reduced-motion（LDL 07-motion §6） =====
+   尊重用户系统设置，禁用所有非必要动效。
+   例外：Loader2 animate-spin 保留（"加载中"的唯一视觉信号） */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

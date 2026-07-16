@@ -423,4 +423,84 @@ grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
 
 ---
 
+## 15. Mobile Spatial System（v2.1 新增）
+
+移动端（`< 768px`，Tailwind `md` 以下）采用**单栏栈式布局**，从桌面五区固定工作台转变为：
+
+```
+┌──────────────────┐
+│   MobileHeader    │  56px + safe-area-inset-top
+├──────────────────┤
+│                   │
+│   Content Area    │  flex-1（列表/网格/详情/搜索/设置）
+│   (scroll)        │
+│                   │
+├──────────────────┤
+│   Mini Player     │  64px（播放时显示）
+├──────────────────┤
+│   Tab Bar         │  56px + safe-area-inset-bottom
+└──────────────────┘
+```
+
+### 15.1 桌面 → 移动区域映射
+
+| 桌面区域 | 移动端替代 | 说明 |
+|---|---|---|
+| Sidebar (240px) | **Tab Bar** (56px, 4 Tab) | Library/Favorites 导航 → 「曲库」/「搜索」/「收藏」/「设置」 |
+| TopBar (60px) | **MobileHeader** (56px) | 页面标题 + 返回 + 更多，无窗口控制 |
+| Content (flex-1) | **Content Area** (flex-1) | 同桌面，单列适配 |
+| Inspector (360px) | **Now Playing overlay** | 全屏覆盖，从底部上滑展开 |
+| Playback (110px) | **Mini Player** (64px) | 简化 Transport，点击展开 Now Playing |
+
+### 15.2 内边距
+
+| 区域 | 移动端 | 桌面端 |
+|---|---|---|
+| Content 水平边距 | `px-4` (16px) | `px-8` (32px) |
+| 网格间距 | `gap-4` (16px) | `gap-6` (24px) |
+| Album Grid 列数 | 2 列（手机）/ 3 列（平板） | 自适应（minmax 180px） |
+
+### 15.3 页面栈
+
+移动端详情页通过**页面栈**导航（非桌面并列/覆盖）：
+
+```
+Tab 根级 → 详情页（进入：← 返回按钮出现）
+       ← 返回（清除 detail ID）
+```
+
+- Album 详情：设置 `activeAlbumId`
+- Artist 详情：设置 `activeArtistId`
+- Playlist 详情：设置 `activePlaylistId`
+
+### 15.4 Now Playing 浮层
+
+全屏覆盖层（`z-[200]`），复用桌面 `np-drawer` 动画（底部上滑 250ms）：
+
+- 封面取色动态背景（`useCoverColor`）
+- 单列纵向布局（封面 → 曲名 → 进度条 → Transport → 歌词）
+- 下滑手势收起（`touchstart→touchend deltaY > 80px`）
+- 安全区：`padding-top: env(safe-area-inset-top)` / `padding-bottom: env(safe-area-inset-bottom)`
+
+### 15.5 安全区
+
+```css
+/* 顶栏 */
+padding-top: env(safe-area-inset-top);    /* 刘海 / 状态栏 */
+
+/* Tab Bar / ActionSheet */
+padding-bottom: env(safe-area-inset-bottom); /* Home indicator */
+```
+
+### 15.6 平台切换
+
+```html
+<MobileLayout v-if="isMobile" />
+<template v-else><!-- DesktopLayout --></template>
+```
+
+`usePlatform()` composable 基于 `window.innerWidth < 768` 响应式检测。
+
+---
+
 *End of Spatial System.*

@@ -9,10 +9,14 @@ import SidebarRight from './components/layout/SidebarRight.vue';
 import BottomPlayer from './components/layout/BottomPlayer.vue';
 import NowPlayingImmersive from './components/layout/NowPlayingImmersive.vue';
 import CreatePlaylistModal from './components/shared/CreatePlaylistModal.vue';
+import MobileLayout from './components/mobile/MobileLayout.vue';
+import MobileNowPlaying from './components/mobile/MobileNowPlaying.vue';
 import { useUiStore } from './stores/ui';
+import { usePlatform } from './composables/usePlatform';
 
 const playerStore = usePlayerStore();
 const uiStore = useUiStore();
+const { isMobile } = usePlatform();
 
 // 键盘快捷键监听
 const handleGlobalKeyDown = (e: KeyboardEvent) => {
@@ -95,46 +99,61 @@ onUnmounted(() => {
 <template>
   <!-- Global Workspace -->
   <div class="h-screen w-screen flex flex-col bg-bg-canvas text-text-primary overflow-hidden font-sans">
-    
-    <!-- Top Area -->
-    <div class="flex-1 flex overflow-hidden">
-      
-      <!-- Region 01: Sidebar (w: 240px) -->
-      <SidebarLeft />
-      
-      <!-- Divider A (Sidebar ↓ Content/TopBar) -->
-      <div class="w-px h-full bg-border-color shrink-0"></div>
 
-      <!-- Right Side Container -->
-      <div class="flex-1 flex flex-col min-w-0">
-        
-        <!-- Region 02: Top Bar (h: 60px) -->
-        <TopBar />
-        
-        <!-- Content & Inspector Container -->
-        <div class="flex-1 flex overflow-hidden relative">
+    <!-- ===== 移动端布局（< 768px） ===== -->
+    <template v-if="isMobile">
+      <MobileLayout />
 
-          <!-- Region 03: Content Area (flex-1) -->
-          <MainContent />
+      <!-- 移动端 Now Playing 覆盖层 -->
+      <Transition name="np-drawer">
+        <MobileNowPlaying v-if="uiStore.isImmersiveView" />
+      </Transition>
+    </template>
 
-          <!-- Region 04: Inspector Panel (浮层，不占内容区空间) -->
-          <SidebarRight />
+    <!-- ===== 桌面端布局（≥ 768px，五区工作台） ===== -->
+    <template v-else>
+
+      <!-- Top Area -->
+      <div class="flex-1 flex overflow-hidden">
+
+        <!-- Region 01: Sidebar (w: 240px) -->
+        <SidebarLeft />
+
+        <!-- Divider A (Sidebar ↓ Content/TopBar) -->
+        <div class="w-px h-full bg-border-color shrink-0"></div>
+
+        <!-- Right Side Container -->
+        <div class="flex-1 flex flex-col min-w-0">
+
+          <!-- Region 02: Top Bar (h: 60px) -->
+          <TopBar />
+
+          <!-- Content & Inspector Container -->
+          <div class="flex-1 flex overflow-hidden relative">
+
+            <!-- Region 03: Content Area (flex-1) -->
+            <MainContent />
+
+            <!-- Region 04: Inspector Panel (浮层，不占内容区空间) -->
+            <SidebarRight />
+          </div>
         </div>
       </div>
-    </div>
 
-    <!-- Divider D (Playback ↓ Workspace) -->
-    <div class="h-px w-full bg-border-color shrink-0"></div>
+      <!-- Divider D (Playback ↓ Workspace) -->
+      <div class="h-px w-full bg-border-color shrink-0"></div>
 
-    <!-- Region 05: Playback Bar (h: 110px) -->
-    <BottomPlayer />
+      <!-- Region 05: Playback Bar (h: 110px) -->
+      <BottomPlayer />
 
-    <!-- 沉浸式播放页（覆盖整窗，z-[200]；进/出为抽屉式上下滑动） -->
-    <Transition name="np-drawer">
-      <NowPlayingImmersive v-if="uiStore.isImmersiveView" />
-    </Transition>
+      <!-- 沉浸式播放页（覆盖整窗，z-[200]；进/出为抽屉式上下滑动） -->
+      <Transition name="np-drawer">
+        <NowPlayingImmersive v-if="uiStore.isImmersiveView" />
+      </Transition>
 
-    <CreatePlaylistModal v-if="playerStore.isCreatePlaylistModalOpen" />
+      <CreatePlaylistModal v-if="playerStore.isCreatePlaylistModalOpen" />
+
+    </template>
 
   </div>
 </template>
