@@ -77,8 +77,8 @@ function fileInfoText(): string {
   const parts: string[] = [];
   if (fi?.release_year) parts.push(String(fi.release_year));
   if (playerStore.currentTrack?.format) parts.push(playerStore.currentTrack.format);
-  if (fi?.bits_per_sample && fi?.sample_rate) {
-    parts.push(`${fi.bits_per_sample}bit / ${(fi.sample_rate / 1000).toFixed(0)}kHz`);
+  if (fi?.bit_depth && fi?.sample_rate) {
+    parts.push(`${fi.bit_depth}bit / ${(fi.sample_rate / 1000).toFixed(0)}kHz`);
   }
   return parts.join(' · ');
 }

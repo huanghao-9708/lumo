@@ -1,4 +1,4 @@
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use crate::models::*;
 
 pub struct TrackRepo;
@@ -74,19 +74,38 @@ impl TrackRepo {
             Ok(())
         }
 
-    pub fn record_play(conn: &Connection, track_id: i64, duration_ms: i64) -> rusqlite::Result<()> {
+    pub fn record_play(conn: &Connection, track_id: i64, duration_ms: i64, requested_media_file_id: Option<i64>) -> rusqlite::Result<()> {
             // 更新总体计数字段
             conn.execute(
                 "UPDATE tracks SET play_count = play_count + 1, last_played_at = datetime('now') WHERE id = ?1",
                 rusqlite::params![track_id],
             )?;
             
-            let media_file_id: Option<i64> = conn.query_row("SELECT primary_file_id FROM tracks WHERE id = ?1", params![track_id], |row| row.get(0)).unwrap_or(None);
+            let media_file_id: Option<i64> = match requested_media_file_id {
+                Some(id) => conn.query_row(
+                    "SELECT id FROM media_files WHERE id = ?1 AND track_id = ?2",
+                    params![id, track_id],
+                    |row| row.get(0),
+                ).optional()?,
+                None => conn.query_row(
+                    "SELECT primary_file_id FROM tracks WHERE id = ?1",
+                    params![track_id],
+                    |row| row.get(0),
+                ).optional()?,
+            };
+            let source_kind: Option<String> = match media_file_id {
+                Some(id) => conn.query_row(
+                    "SELECT s.kind FROM sources s JOIN media_files mf ON mf.source_id = s.id WHERE mf.id = ?1",
+                    params![id],
+                    |row| row.get(0),
+                ).optional()?,
+                None => None,
+            };
             
             // 生成流水账单记录，用于复杂的统计
             conn.execute(
-                "INSERT INTO play_history (track_id, media_file_id, source_kind, play_duration_ms) VALUES (?1, ?2, 'local', ?3)",
-                params![track_id, media_file_id, duration_ms],
+                "INSERT INTO play_history (track_id, media_file_id, source_kind, play_duration_ms) VALUES (?1, ?2, ?3, ?4)",
+                params![track_id, media_file_id, source_kind, duration_ms],
             )?;
             Ok(())
         }

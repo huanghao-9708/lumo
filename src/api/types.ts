@@ -90,14 +90,21 @@ export interface ArtistStatsDTO {
 
 export interface TrackFileInfoDTO {
   id: number;
+  source_id?: number;
+  track_id?: number;
   path: string;
+  relative_path?: string;
+  file_name?: string;
+  file_ext?: string | null;
   file_size: number | null;
+  modified_at?: string | null;
   duration_ms: number | null;
   bitrate: number | null;
   sample_rate: number | null;
   bit_depth: number | null;
   channels: number | null;
   format: string | null;
+  source_kind?: string;
 }
 
 export interface SourceDTO {

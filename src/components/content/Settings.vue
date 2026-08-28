@@ -6,6 +6,7 @@ import { usePlayerStore } from '../../stores/player';
 import { useUiStore } from '../../stores/ui';
 import { useSyncStore } from '../../stores/sync';
 import { libraryGetCacheSize, libraryClearCache } from '../../api/library';
+import { playbackGetAudioCacheSize, playbackClearAudioCache } from '../../api/playback';
 import WebdavFolderPicker from '../shared/WebdavFolderPicker.vue';
 
 const playerStore = usePlayerStore();
@@ -26,7 +27,11 @@ const isFirstLoad = ref(true);
 
 onMounted(async () => {
   try {
-    const size = await libraryGetCacheSize();
+    const [artworkSize, audioSize] = await Promise.all([
+      libraryGetCacheSize(),
+      playbackGetAudioCacheSize(),
+    ]);
+    const size = artworkSize + audioSize;
     cacheSize.value = size > 0 ? `${(size / 1024 / 1024).toFixed(1)} MB` : '0 MB';
   } catch { cacheSize.value = '—'; }
 
@@ -46,7 +51,7 @@ onMounted(async () => {
 async function clearCache() {
   isClearingCache.value = true;
   try {
-    await libraryClearCache();
+    await Promise.all([libraryClearCache(), playbackClearAudioCache()]);
     cacheSize.value = '0 MB';
   } catch { /* ignore */ }
   isClearingCache.value = false;

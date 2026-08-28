@@ -14,7 +14,7 @@ import {
   libraryGetSmartPlaylist,
 } from '../api/library';
 import {
-  playbackPlay, playbackPause, playbackResume, playbackSetVolume, playbackGetPos, playbackSeek, playbackIsFinished, playbackEnqueueNext, playbackGetQueueLen
+  playbackPlay, playbackPause, playbackResume, playbackStop, playbackSetVolume, playbackGetPos, playbackSeek, playbackIsFinished, playbackEnqueueNext, playbackGetQueueLen
 } from '../api/playback';
 import {
   sourceAddLocal, sourceAddWebdav, sourceList, sourceRemove, sourceScan
@@ -631,10 +631,10 @@ const albums = shallowRef<Album[]>([]);
     }
   }
 
-  async function recordPlay(trackId: number, durationPlayed: number) {
+  async function recordPlay(trackId: number, durationPlayed: number, mediaFileId?: number | null) {
     if (durationPlayed < 1000) return; // 忽略极短的切歌
     try {
-      await libraryRecordPlay(trackId, durationPlayed);
+      await libraryRecordPlay(trackId, durationPlayed, mediaFileId);
     } catch(e) {
       console.error("Failed to record play:", e);
     }
@@ -1440,17 +1440,22 @@ const albums = shallowRef<Album[]>([]);
          * 倒数 5 秒时，将下一首歌送入底层解码器队列。
          */
         if (!hasEnqueuedNext && durationMs.value > 0 && pos >= durationMs.value - 5000) {
-           let nextIdx = currentIndex.value;
-           if (playMode.value === 'shuffle') {
-             nextIdx = Math.floor(Math.random() * queue.value.length);
-           } else if (playMode.value === 'repeat-one') {
-             nextIdx = currentIndex.value;
-           } else {
-             nextIdx = (currentIndex.value + 1) % queue.value.length;
-           }
-           
-           const nextTrackObj = queue.value[nextIdx];
-           if (nextTrackObj && nextTrackObj.primary_file_id) {
+            let nextIdx: number | null = currentIndex.value;
+            if (playMode.value === 'shuffle') {
+              nextIdx = Math.floor(Math.random() * queue.value.length);
+            } else if (playMode.value === 'repeat-one') {
+              nextIdx = currentIndex.value;
+            } else if (playMode.value === 'repeat') {
+              nextIdx = (currentIndex.value + 1) % queue.value.length;
+            } else if (currentIndex.value + 1 < queue.value.length) {
+              nextIdx = currentIndex.value + 1;
+            } else {
+              // Normal mode ends at the last track; do not enqueue the first one again.
+              nextIdx = null;
+            }
+
+            const nextTrackObj = nextIdx === null ? undefined : queue.value[nextIdx];
+            if (nextIdx !== null && nextTrackObj && nextTrackObj.primary_file_id) {
              try {
                 await playbackEnqueueNext(nextTrackObj.primary_file_id, !navigator.onLine);
                 hasEnqueuedNext = true;
@@ -1472,15 +1477,16 @@ const albums = shallowRef<Album[]>([]);
              if (queueLen === 1) {
                 console.log("[Gapless] Silent transition to next track!");
                 if (queue.value && queue.value[currentIndex.value] && actualListenMs > 0) {
-                   recordPlay(queue.value[currentIndex.value].id, actualListenMs);
+                    recordPlay(queue.value[currentIndex.value].id, actualListenMs, queue.value[currentIndex.value].primary_file_id);
                 }
 
                 currentIndex.value = enqueuedTrackIndex as number;
                 const newTrack = queue.value[currentIndex.value];
                 actualListenMs = 0;
-                durationMs.value = newTrack.durationSec ? newTrack.durationSec * 1000 : 0;
-                progressMs.value = 0;
-                hasEnqueuedNext = false;
+                 durationMs.value = newTrack.durationSec ? newTrack.durationSec * 1000 : 0;
+                 progressMs.value = 0;
+                 updateMediaSessionMetadata(newTrack);
+                 hasEnqueuedNext = false;
                                 enqueuedTrackIndex = null;
 
                 return;
@@ -1511,7 +1517,7 @@ const albums = shallowRef<Album[]>([]);
   async function playQueue(newQueue: Track[], index: number, skipHistoryPush = false) {
     // 切歌前记录上一首的播放时长
     if (queue.value && queue.value[currentIndex.value] && actualListenMs > 0) {
-      recordPlay(queue.value[currentIndex.value].id, actualListenMs);
+      recordPlay(queue.value[currentIndex.value].id, actualListenMs, queue.value[currentIndex.value].primary_file_id);
     }
 
     // 记录播放历史（用于 shuffle 模式 prevTrack 精确回退）
@@ -1557,6 +1563,25 @@ const albums = shallowRef<Album[]>([]);
     if (queue.value.length === 0) return;
     if (isAuto && playMode.value === 'repeat-one') {
       await playQueue(queue.value, currentIndex.value, true);
+      return;
+    }
+    if (isAuto && playMode.value === 'normal' && currentIndex.value >= queue.value.length - 1) {
+      try {
+        await playbackStop();
+      } catch (e) {
+        console.error("Failed to stop playback at end of queue:", e);
+      }
+      isPlaying.value = false;
+      hasLoadedCurrentFile.value = false;
+      actualListenMs = 0;
+      if (progressTimer) {
+        clearInterval(progressTimer);
+        progressTimer = null;
+      }
+      stopProgressAutoSave();
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.playbackState = 'paused';
+      }
       return;
     }
     if (playMode.value === 'shuffle') {

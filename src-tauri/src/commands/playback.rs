@@ -47,6 +47,8 @@ fn resolve_media_file(
         if let Some(id) = local_fallback_id {
             media_file_id = id;
             tracing::info!("Offline auto-degraded to local media_file_id={}", id);
+        } else if !audio_cache.is_cached(media_file_id) {
+            return Err(AppError::Internal("离线模式下没有可用的本地文件或音频缓存".to_string()));
         }
     }
 

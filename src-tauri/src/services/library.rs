@@ -361,13 +361,24 @@ impl LibraryService {
             params![hash],
             |row| row.get(0),
         ).optional()? {
-            // 检查 thumbnail_blob 是否需要补生成
-            let needs_thumb: Option<Option<Vec<u8>>> = conn.query_row(
-                "SELECT thumbnail_blob FROM artwork WHERE id = ?1",
+            // Cache files can be removed independently from the DB; recreate them on
+            // the next scan instead of returning a dangling artwork reference.
+            let cache_meta: Option<(String, Option<Vec<u8>>)> = conn.query_row(
+                "SELECT cache_path, thumbnail_blob FROM artwork WHERE id = ?1",
                 params![id],
-                |row| row.get::<_, Option<Vec<u8>>>(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             ).ok();
-            if let Some(None) = needs_thumb {
+            if let Some((cache_path, _)) = &cache_meta {
+                let path = std::path::Path::new(cache_path);
+                if !path.exists() {
+                    if let Some(parent) = path.parent() {
+                        let _ = fs::create_dir_all(parent);
+                    }
+                    let _ = fs::write(path, picture_data);
+                }
+            }
+            let needs_thumb = cache_meta.as_ref().map(|(_, thumb)| thumb.is_none()).unwrap_or(true);
+            if needs_thumb {
                 if let Some(blob) = Self::generate_thumbnail(picture_data) {
                     let _ = conn.execute(
                         "UPDATE artwork SET thumbnail_blob = ?1 WHERE id = ?2",

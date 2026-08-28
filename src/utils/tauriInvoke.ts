@@ -27,11 +27,28 @@ interface InFlightRecord {
 }
 const inFlightRecords: InFlightRecord[] = [];
 
+const SENSITIVE_KEY = /pass(word)?|token|secret|credential|authorization|api[_-]?key/i;
+
+/** Remove credentials before serialising IPC arguments/results for diagnostics. */
+function redactForLog(value: unknown, key?: string): unknown {
+  if (key && SENSITIVE_KEY.test(key)) return '[REDACTED]';
+  if (Array.isArray(value)) return value.map(item => redactForLog(item));
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([entryKey, entryValue]) => [
+        entryKey,
+        redactForLog(entryValue, entryKey),
+      ]),
+    );
+  }
+  return value;
+}
+
 function summarizeArgs(args: unknown): string {
   if (args === undefined || args === null) return '∅';
   if (typeof args === 'object') {
     try {
-      const json = JSON.stringify(args);
+      const json = JSON.stringify(redactForLog(args));
       // 参数太长就截断，避免日志爆炸
       return json.length > 200 ? json.slice(0, 200) + '…(' + json.length + 'B)' : json;
     } catch {
@@ -46,7 +63,7 @@ function summarizeResult(result: unknown): string {
   if (Array.isArray(result)) return `${result.length}items`;
   if (typeof result === 'object') {
     try {
-      const json = JSON.stringify(result);
+      const json = JSON.stringify(redactForLog(result));
       if (json.length > 300) return `${json.length}B`;
       return json;
     } catch {

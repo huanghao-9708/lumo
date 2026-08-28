@@ -92,8 +92,8 @@ export function libraryToggleFavorite(trackId: number, isFavorite: boolean): Pro
   return invoke('library_toggle_favorite', { trackId, isFavorite });
 }
 
-export function libraryRecordPlay(trackId: number, durationMs: number): Promise<void> {
-  return invoke('library_record_play', { trackId, durationMs });
+export function libraryRecordPlay(trackId: number, durationMs: number, mediaFileId?: number | null): Promise<void> {
+  return invoke('library_record_play', { trackId, durationMs, mediaFileId });
 }
 
 export function libraryGetRecentlyPlayed(limit: number): Promise<TrackDTO[]> {
@@ -178,4 +178,8 @@ export function libraryGetSmartPlaylist(kind: string, limit?: number): Promise<T
 /** 获取某首歌曲的所有可用物理文件版本（用于多音源版本切换 UI） */
 export function libraryGetTrackVersions(trackId: number): Promise<TrackFileInfoDTO[]> {
   return invoke('library_get_track_versions', { trackId });
+}
+
+export function librarySetPrimaryFile(trackId: number, mediaFileId: number): Promise<void> {
+  return invoke('library_set_primary_file', { trackId, mediaFileId });
 }

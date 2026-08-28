@@ -402,6 +402,7 @@ pub fn run() {
             crate::commands::sync::sync_check_remote,
             crate::commands::library::library_get_smart_playlist,
             crate::commands::library::library_get_track_versions,
+            crate::commands::library::library_set_primary_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

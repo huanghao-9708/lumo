@@ -158,6 +158,24 @@ pub fn source_remove(db_state: State<'_, DbState>, source_id: i64) -> Result<(),
 
     tx.execute("DELETE FROM sources WHERE id = ?1", rusqlite::params![source_id])?;
 
+    // primary_file_id is intentionally not a hard foreign key because it is a
+    // denormalised preference. Re-point it before orphan cleanup so removing one
+    // source cannot hide a track that still has another available file.
+    tx.execute(
+        "UPDATE tracks
+         SET primary_file_id = (
+             SELECT mf.id FROM media_files mf
+             WHERE mf.track_id = tracks.id AND mf.availability = 'available'
+             ORDER BY mf.id LIMIT 1
+         )
+         WHERE primary_file_id IS NULL
+            OR NOT EXISTS (
+                SELECT 1 FROM media_files mf
+                WHERE mf.id = tracks.primary_file_id AND mf.availability = 'available'
+            )",
+        [],
+    )?;
+
     tx.execute(
         "DELETE FROM tracks WHERE id NOT IN (SELECT track_id FROM media_files WHERE track_id IS NOT NULL)",
         [],

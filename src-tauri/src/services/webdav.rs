@@ -5,6 +5,7 @@ use std::fs::File;
 use std::path::Path;
 use quick_xml::events::Event;
 use quick_xml::Reader;
+use std::time::Duration;
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct WebdavFile {
@@ -24,8 +25,13 @@ pub struct WebdavClient {
 
 impl WebdavClient {
     pub fn new(base_url: String, username: Option<String>, password: Option<String>) -> Self {
+        let client = Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(60))
+            .build()
+            .unwrap_or_else(|_| Client::new());
         Self {
-            client: Client::new(),
+            client,
             base_url: base_url.trim_end_matches('/').to_string(),
             username,
             password,
@@ -286,9 +292,9 @@ impl Read for HttpRangeReader {
                     }
                 };
                 
-                if !resp.status().is_success() {
+                if resp.status() != reqwest::StatusCode::PARTIAL_CONTENT {
                     tracing::error!("HttpRangeReader fetch failed for url: {} with status: {}", self.url, resp.status());
-                    return Err(io::Error::new(io::ErrorKind::Other, format!("HTTP Error: {}", resp.status())));
+                    return Err(io::Error::new(io::ErrorKind::Unsupported, format!("WebDAV server did not honor Range request (HTTP {})", resp.status())));
                 }
 
                 self.current_resp = Some(resp);

@@ -32,20 +32,37 @@ pub fn scan_local_directory(app: AppHandle, source_id: i64, path: &Path, app_dat
     info!("Starting async scan for directory: {:?}", path);
     let mut scanned_count = 0usize;
     let mut skipped_count = 0usize;
+    let mut scan_failed = false;
+
+    match std::fs::metadata(path) {
+        Ok(metadata) if metadata.is_dir() => {}
+        Ok(_) => {
+            let message = "扫描根路径不是目录";
+            update_scan_status(&app, source_id, false, Some(message));
+            let _ = app.emit("scan-complete", source_id);
+            return;
+        }
+        Err(e) => {
+            let message = format!("无法访问扫描根路径: {}", e);
+            update_scan_status(&app, source_id, false, Some(&message));
+            let _ = app.emit("scan-complete", source_id);
+            return;
+        }
+    }
 
     // Load existing files for incremental scan
-    let mut file_cache: HashMap<String, (i64, i64)> = HashMap::new();
+    let mut file_cache: HashMap<String, (i64, i64, String)> = HashMap::new();
     if let Some(db_state) = app.try_state::<DbState>() {
         if let Ok(conn) = db_state.db.get() {
-            if let Ok(mut stmt) = conn.prepare("SELECT normalized_path, modified_at, file_size FROM media_files WHERE source_id = ?1") {
+            if let Ok(mut stmt) = conn.prepare("SELECT normalized_path, modified_at, file_size, availability FROM media_files WHERE source_id = ?1") {
                 if let Ok(rows) = stmt.query_map(rusqlite::params![source_id], |row| {
                     let mtime_str: Option<String> = row.get(1)?;
                     let mtime = mtime_str.and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
                     let size: Option<i64> = row.get(2)?;
-                    Ok((row.get::<_, String>(0)?, mtime, size.unwrap_or(0)))
+                    Ok((row.get::<_, String>(0)?, mtime, size.unwrap_or(0), row.get::<_, String>(3)?))
                 }) {
                     for r in rows.filter_map(Result::ok) {
-                        file_cache.insert(r.0, (r.1, r.2));
+                        file_cache.insert(r.0, (r.1, r.2, r.3));
                     }
                 }
             }
@@ -58,7 +75,15 @@ pub fn scan_local_directory(app: AppHandle, source_id: i64, path: &Path, app_dat
     // Batch to hold extracted metadata before inserting into DB
     let mut batch: Vec<(PathBuf, crate::services::metadata::AudioMetadata, i64, i64)> = Vec::with_capacity(50);
 
-    for entry in WalkDir::new(path).into_iter().filter_map(|e| e.ok()) {
+    for entry_result in WalkDir::new(path).into_iter() {
+        let entry = match entry_result {
+            Ok(entry) => entry,
+            Err(e) => {
+                scan_failed = true;
+                warn!("Failed to read local scan entry: {}", e);
+                continue;
+            }
+        };
         let entry_path = entry.path();
         if !entry_path.is_file() {
             continue;
@@ -86,8 +111,8 @@ pub fn scan_local_directory(app: AppHandle, source_id: i64, path: &Path, app_dat
         scanned_paths.insert(normalized_path.clone());
 
         // 增量判定：如果数据库中已经有且大小和修改时间均一致，则跳过解析
-        if let Some(&(db_mtime, db_size)) = file_cache.get(&normalized_path) {
-            if db_mtime == fs_mtime && db_size == fs_size {
+        if let Some(&(db_mtime, db_size, ref availability)) = file_cache.get(&normalized_path) {
+            if db_mtime == fs_mtime && db_size == fs_size && availability == "available" {
                 skipped_count += 1;
                 
                 // 每 50 个 skipped 也发一次进度，避免长久卡顿感
@@ -147,11 +172,18 @@ pub fn scan_local_directory(app: AppHandle, source_id: i64, path: &Path, app_dat
     let mut missing_count = 0;
     if let Some(db_state) = app.try_state::<DbState>() {
         if let Ok(mut conn) = db_state.db.get() {
+            // A partial/inaccessible walk must never turn unseen files into "missing".
+            if scan_failed {
+                warn!("Skipping missing-file cleanup because the local scan was incomplete");
+            }
+
             // Find files in db that are not in scanned_paths
             let mut to_delete = Vec::new();
-            for (db_path, _) in file_cache.iter() {
-                if !scanned_paths.contains(db_path) {
-                    to_delete.push(db_path.clone());
+            if !scan_failed {
+                for (db_path, _) in file_cache.iter() {
+                    if !scanned_paths.contains(db_path) {
+                        to_delete.push(db_path.clone());
+                    }
                 }
             }
             
@@ -178,8 +210,12 @@ pub fn scan_local_directory(app: AppHandle, source_id: i64, path: &Path, app_dat
             // Also update last_seen_at for all scanned paths to keep them 'available'
             // To do it efficiently, since we touched all, we can just bulk update the ones not missing
             let _ = conn.execute(
-                "UPDATE media_files SET availability = 'available', last_seen_at = datetime('now') WHERE source_id = ?1 AND availability != 'missing'",
+                "UPDATE media_files SET last_seen_at = datetime('now') WHERE source_id = ?1 AND availability = 'available'",
                 rusqlite::params![source_id]
+            );
+            let _ = conn.execute(
+                "UPDATE sources SET last_scan_at = datetime('now'), last_error = ?1 WHERE id = ?2",
+                rusqlite::params![if scan_failed { Some("扫描未完成，已跳过缺失文件清理") } else { None }, source_id],
             );
         }
     }
@@ -194,19 +230,20 @@ pub fn scan_webdav_directory(app: AppHandle, source_id: i64, root_uri: String, u
     info!("Starting async scan for WebDAV: {}", root_uri);
     let mut scanned_count = 0usize;
     let mut skipped_count = 0usize;
+    let mut scan_failed = false;
 
-    let mut file_cache: HashMap<String, (i64, i64)> = HashMap::new();
+    let mut file_cache: HashMap<String, (i64, i64, String)> = HashMap::new();
     if let Some(db_state) = app.try_state::<DbState>() {
         if let Ok(conn) = db_state.db.get() {
-            if let Ok(mut stmt) = conn.prepare("SELECT normalized_path, modified_at, file_size FROM media_files WHERE source_id = ?1") {
+            if let Ok(mut stmt) = conn.prepare("SELECT normalized_path, modified_at, file_size, availability FROM media_files WHERE source_id = ?1") {
                 if let Ok(rows) = stmt.query_map(rusqlite::params![source_id], |row| {
                     let mtime_str: Option<String> = row.get(1)?;
                     let mtime = mtime_str.and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
                     let size: Option<i64> = row.get(2)?;
-                    Ok((row.get::<_, String>(0)?, mtime, size.unwrap_or(0)))
+                    Ok((row.get::<_, String>(0)?, mtime, size.unwrap_or(0), row.get::<_, String>(3)?))
                 }) {
                     for r in rows.filter_map(Result::ok) {
-                        file_cache.insert(r.0, (r.1, r.2));
+                        file_cache.insert(r.0, (r.1, r.2, r.3));
                     }
                 }
             }
@@ -228,6 +265,7 @@ pub fn scan_webdav_directory(app: AppHandle, source_id: i64, root_uri: String, u
             Ok(f) => f,
             Err(e) => {
                 error!("Failed to propfind {}: {}", current_dir, e);
+                scan_failed = true;
                 continue;
             }
         };
@@ -257,8 +295,8 @@ pub fn scan_webdav_directory(app: AppHandle, source_id: i64, root_uri: String, u
             let normalized_path = relative_path.to_lowercase();
             scanned_paths.insert(normalized_path.clone());
 
-            if let Some(&(db_mtime, db_size)) = file_cache.get(&normalized_path) {
-                if db_mtime == fs_mtime && db_size == fs_size {
+            if let Some(&(db_mtime, db_size, ref availability)) = file_cache.get(&normalized_path) {
+                if db_mtime == fs_mtime && db_size == fs_size && availability == "available" {
                     skipped_count += 1;
                     if skipped_count % 50 == 0 {
                         let _ = app.emit("scan-progress", ScanProgressPayload {
@@ -317,9 +355,11 @@ pub fn scan_webdav_directory(app: AppHandle, source_id: i64, root_uri: String, u
             let mut to_delete = Vec::new();
             if let Ok(mut stmt) = conn.prepare("SELECT normalized_path FROM media_files WHERE source_id = ?1") {
                 if let Ok(rows) = stmt.query_map(rusqlite::params![source_id], |row| row.get::<_, String>(0)) {
-                    for db_path in rows.filter_map(Result::ok) {
-                        if !scanned_paths.contains(&db_path) {
-                            to_delete.push(db_path);
+                    if !scan_failed {
+                        for db_path in rows.filter_map(Result::ok) {
+                            if !scanned_paths.contains(&db_path) {
+                                to_delete.push(db_path);
+                            }
                         }
                     }
                 }
@@ -339,8 +379,14 @@ pub fn scan_webdav_directory(app: AppHandle, source_id: i64, root_uri: String, u
                 }
             }
 
-            let _ = conn.execute("UPDATE sources SET last_scan_at = datetime('now') WHERE id = ?1", rusqlite::params![source_id]);
-            let _ = conn.execute("UPDATE media_files SET availability = 'available', last_seen_at = datetime('now') WHERE source_id = ?1 AND availability != 'missing'", rusqlite::params![source_id]);
+            let _ = conn.execute(
+                "UPDATE media_files SET last_seen_at = datetime('now') WHERE source_id = ?1 AND availability = 'available'",
+                rusqlite::params![source_id],
+            );
+            let _ = conn.execute(
+                "UPDATE sources SET last_scan_at = datetime('now'), last_error = ?1 WHERE id = ?2",
+                rusqlite::params![if scan_failed { Some("WebDAV 扫描未完成，已跳过缺失文件清理") } else { None }, source_id],
+            );
         }
     }
 
@@ -352,6 +398,16 @@ pub fn scan_webdav_directory(app: AppHandle, source_id: i64, root_uri: String, u
 /// 让用户在文件浏览器里能看到"有这个文件但无法解析"，而不会污染曲库。
 /// 解析单个音频文件的元数据，如果包含封面则将其缓存到本地临时目录。
 /// 返回解析后的属性集合。
+fn update_scan_status(app: &AppHandle, source_id: i64, success: bool, error_message: Option<&str>) {
+    let Some(db_state) = app.try_state::<DbState>() else { return };
+    let Ok(conn) = db_state.db.get() else { return };
+    let message = if success { None } else { error_message };
+    let _ = conn.execute(
+        "UPDATE sources SET last_scan_at = datetime('now'), last_error = ?1 WHERE id = ?2",
+        rusqlite::params![message, source_id],
+    );
+}
+
 fn mark_scan_error(app: &AppHandle, source_id: i64, path: &Path, err: &str) {
     let Some(db_state) = app.try_state::<DbState>() else { return };
     let Ok(conn) = db_state.db.get() else { return };

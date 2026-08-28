@@ -134,10 +134,15 @@ pub fn library_get_playlist_tracks(db_state: State<'_, DbState>, playlist_id: i6
 }
 
 #[tauri::command]
-pub fn library_record_play(db_state: State<'_, DbState>, track_id: i64, duration_ms: i64) -> Result<(), AppError> {
+pub fn library_record_play(
+    db_state: State<'_, DbState>,
+    track_id: i64,
+    duration_ms: i64,
+    media_file_id: Option<i64>,
+) -> Result<(), AppError> {
     let _trace = ipc_trace!("library_record_play");
     let conn = db_state.db.get()?;
-    crate::repositories::track_repo::TrackRepo::record_play(&conn, track_id, duration_ms).map_err(|e| e.into())
+    crate::repositories::track_repo::TrackRepo::record_play(&conn, track_id, duration_ms, media_file_id).map_err(|e| e.into())
 }
 
 #[tauri::command]
@@ -375,8 +380,14 @@ pub fn library_clear_cache(app: tauri::AppHandle, db_state: State<'_, DbState>) 
     }
     
     let conn = db_state.db.get()?;
-    let _ = conn.execute("DELETE FROM artwork", []);
-    let _ = conn.execute("UPDATE albums SET cover_artwork_id = NULL", []);
+    // Keep artwork identities/references, but invalidate the materialised cache and
+    // mark media for the next scan. Deleting artwork rows would make unchanged files
+    // permanently lose their covers because incremental scanning skips them.
+    let _ = conn.execute("UPDATE artwork SET thumbnail_blob = NULL", []);
+    let _ = conn.execute(
+        "UPDATE media_files SET modified_at = NULL, availability = 'offline'",
+        [],
+    );
     
     Ok(())
 }
@@ -744,8 +755,6 @@ pub fn library_get_track_versions(
         WHERE mf.track_id = ?1 AND mf.availability = 'available'
     ")?;
     
-    use rusqlite::OptionalExtension;
-    
     let rows = stmt.query_map(rusqlite::params![track_id], |row| {
         Ok(crate::models::TrackFileInfoDTO {
             id: row.get(0)?,
@@ -780,4 +789,30 @@ pub fn library_get_track_versions(
     });
     
     Ok(result)
+}
+
+#[tauri::command]
+pub fn library_set_primary_file(
+    db_state: State<'_, DbState>,
+    track_id: i64,
+    media_file_id: i64,
+) -> Result<(), AppError> {
+    let _trace = ipc_trace!("library_set_primary_file");
+    let conn = db_state.db.get()?;
+    let belongs_to_track: bool = conn.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM media_files
+            WHERE id = ?1 AND track_id = ?2 AND availability = 'available'
+        )",
+        rusqlite::params![media_file_id, track_id],
+        |row| row.get(0),
+    )?;
+    if !belongs_to_track {
+        return Err(AppError::Internal("所选音频版本不可用或不属于该歌曲".to_string()));
+    }
+    conn.execute(
+        "UPDATE tracks SET primary_file_id = ?1 WHERE id = ?2",
+        rusqlite::params![media_file_id, track_id],
+    )?;
+    Ok(())
 }

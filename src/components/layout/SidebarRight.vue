@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { ref, watch, onMounted } from 'vue';
+import { ref, watch } from 'vue';
 import { Heart, MoreHorizontal, ListMusic, Disc3, Settings2 } from 'lucide-vue-next';
 import { usePlayerStore } from '../../stores/player';
 import { useUiStore } from '../../stores/ui';
 import { useArtworkSrc } from '../../composables/useArtworkSrc';
 import LyricsView from '../shared/LyricsView.vue';
-import { libraryGetTrackVersions } from '../../api/library';
+import { libraryGetTrackVersions, librarySetPrimaryFile } from '../../api/library';
 import type { TrackFileInfoDTO } from '../../api/types';
 
 const playerStore = usePlayerStore();
@@ -26,8 +26,8 @@ function fileInfoText(): string {
   parts.push('1 TRACK');
   if (track()?.duration) parts.push(track()!.duration);
   if (track()?.format) parts.push(track()!.format);
-  if (fi?.bits_per_sample && fi?.sample_rate) {
-    parts.push(`${fi.bits_per_sample}bit / ${(fi.sample_rate / 1000).toFixed(0)}kHz`);
+  if (fi?.bit_depth && fi?.sample_rate) {
+    parts.push(`${fi.bit_depth}bit / ${(fi.sample_rate / 1000).toFixed(0)}kHz`);
   }
   return parts.join(' · ');
 }
@@ -63,8 +63,8 @@ async function switchVersion(fileId: number) {
   isVersionsOpen.value = false;
   const t = playerStore.currentTrack;
   if (!t) return;
-  // 直接通过新的 primary_file_id 重新播放（这需要我们在 store 提供一个切换底层流的方法，或者直接给后端发请求，目前最简单的是直接改 currentTrack.primary_file_id = fileId，然后重新 playQueue 或者让 playbackPlay 支持 fileId）
-  // 因为我们的播放逻辑是依赖 track.primary_file_id 的，我们可以先临时覆盖它并触发重新播放
+  // 先持久化首选文件，再让当前队列重新从该物理文件播放。
+  await librarySetPrimaryFile(t.id, fileId);
   t.primary_file_id = fileId;
   const currentIdx = playerStore.currentIndex;
   // 会重新触发 playQueue 并在后台执行播放
@@ -159,7 +159,7 @@ async function switchVersion(fileId: number) {
                   >
                     <span class="font-medium truncate block">{{ v.source_kind === 'webdav' ? 'WebDAV' : 'Local' }} - {{ (v.file_ext || 'unknown').toUpperCase() }}</span>
                     <span class="text-text-muted font-mono truncate block mt-0.5">
-                      {{ v.bits_per_sample ? `${v.bits_per_sample}bit / ` : '' }}{{ v.sample_rate ? (v.sample_rate/1000).toFixed(0)+'kHz' : '' }}
+                      {{ v.bit_depth ? `${v.bit_depth}bit / ` : '' }}{{ v.sample_rate ? (v.sample_rate/1000).toFixed(0)+'kHz' : '' }}
                     </span>
                   </button>
                 </div>

@@ -41,6 +41,43 @@ fn decrypt_sync_password(encoded: &str) -> Option<String> {
 pub struct SyncService;
 
 impl SyncService {
+    /// Validate and migrate a downloaded snapshot before it can touch the live database.
+    pub fn validate_snapshot(path: &Path, app_dir: &Path) -> Result<(), String> {
+        let _ = crate::db::init_db(path.to_path_buf())
+            .map_err(|e| format!("无法初始化同步数据库快照: {}", e))?;
+        let conn = Connection::open(path)
+            .map_err(|e| format!("无法打开同步数据库快照: {}", e))?;
+        let integrity: String = conn
+            .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+            .map_err(|e| format!("同步数据库完整性检查失败: {}", e))?;
+        if !integrity.eq_ignore_ascii_case("ok") {
+            return Err(format!("同步数据库完整性检查未通过: {}", integrity));
+        }
+
+        let required_tables = ["schema_migrations", "sources", "tracks", "media_files", "sync_config"];
+        for table in required_tables {
+            let exists: bool = conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+                [table],
+                |row| row.get(0),
+            ).map_err(|e| format!("检查同步数据库结构失败: {}", e))?;
+            if !exists {
+                return Err(format!("同步数据库缺少必要表: {}", table));
+            }
+        }
+
+        let version: i64 = conn.query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+            [],
+            |row| row.get(0),
+        ).map_err(|e| format!("读取同步数据库版本失败: {}", e))?;
+        if version < 8 {
+            return Err(format!("同步数据库版本过旧（{}），需要至少 V8", version));
+        }
+        let _ = app_dir;
+        Ok(())
+    }
+
     /// 读取同步配置（密码解密后返回）
     pub fn get_config(conn: &Connection) -> rusqlite::Result<SyncConfigDTO> {
         let row = conn.query_row(
