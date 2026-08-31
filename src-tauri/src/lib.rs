@@ -179,8 +179,48 @@ fn format_http_date(unix_secs: u64) -> Option<String> {
     Some(dt.format("%a, %d %b %Y %H:%M:%S GMT").to_string())
 }
 
+/// 把 Android Context / JavaVM 注入 ndk_context，供 cpal/oboe 音频栈使用。
+///
+/// 由 MainActivity.onCreate 经 JNI 调用（gen/android 的 LUMO-CUSTOM 段）。
+/// Tauri 2 的 wry 胶水不初始化 ndk-glue 风格的上下文，缺失时 cpal 在
+/// `OutputStream::try_default()` 处 panic: "android context was not initialized"。
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_com_hao_lumo_MainActivity_initLumoAudioContext<'local>(
+    env: jni::JNIEnv<'local>,
+    _this: jni::objects::JObject<'local>,
+    context: jni::objects::JObject<'local>,
+) {
+    let vm = match env.get_java_vm() {
+        Ok(vm) => vm,
+        Err(e) => {
+            tracing::error!("[LumoContext] get_java_vm 失败: {e}");
+            return;
+        }
+    };
+    let global = match env.new_global_ref(&context) {
+        Ok(g) => g,
+        Err(e) => {
+            tracing::error!("[LumoContext] new_global_ref 失败: {e}");
+            return;
+        }
+    };
+    let ctx_raw = global.as_obj().as_raw();
+    let vm_raw = vm.get_java_vm_pointer();
+    // GlobalRef 故意泄漏：ndk_context 要求指针全进程有效，仅此一份。
+    std::mem::forget(global);
+    unsafe {
+        ndk_context::initialize_android_context(vm_raw.cast(), ctx_raw.cast());
+    }
+    tracing::info!("[LumoContext] ndk_context 已初始化（cpal/oboe 可用）");
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // debug 构建下让 panic 输出 backtrace 到 logcat（RustStdoutStderr）
+    #[cfg(all(debug_assertions, target_os = "android"))]
+    std::env::set_var("RUST_BACKTRACE", "1");
+
     tracing_subscriber::fmt::init();
 
     // ADR-1(MA0)：reqwest 以 rustls-no-provider 构建，需在任意 TLS 使用前

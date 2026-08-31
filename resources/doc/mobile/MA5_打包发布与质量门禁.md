@@ -69,6 +69,7 @@ signingConfigs {
 1. **PR CI 门禁（新增 `ci.yml`，桌面+移动共用）**：`npm ci` → `npm run build` → `cargo fmt --check` → `cargo clippy --all-targets -- -D warnings` → `cargo test --all-targets`（Windows runner）；Android job（ubuntu runner）：装 Rust android targets + cargo-ndk + JDK17 → `cargo ndk -t arm64-v8a -p 24 check`。
    > clippy/fmt 历史遗留（审计 §11）若未清零：先在 MA5 开始前集中清一次（预估 0.5d，计入 P80），否则门禁降级为「不新增警告」并登记债务。
 2. **Android Release job**：tag `v*` 触发（依赖桌面平台构建成功后才执行发布，审计 P2-06 原则）；ubuntu runner：Android SDK/NDK（GH 预装）+ rust targets + cargo-ndk → `npm run tauri android build -- --target aarch64 --apk` → 从 Secrets 恢复 keystore 签名 → `apksigner verify` → 计算 SHA256 → 上传 artifact + 附加到 GitHub Release（含权限说明与安装指引的 release notes 模板）。
+   > ⚠️ MA0 遗留（见 MA0 执行记录偏差 3）：`gen/android/gradle.properties` 的 `org.gradle.java.home` 是本机 Windows 路径，CI 构建前必须剔除该行（workflow 中 `sed -i '/org.gradle.java.home/d'` 或等价处理），否则 ubuntu runner 上 gradle 直接失败。
 3. **密钥注入**：secrets → 临时 `key.properties` + jks 文件（构建后清理，job 环境本身销毁）。
 
 **验收**：打测试 tag 走通全流程；PR 上门禁生效；Release 页面出现带 SHA256 的签名 APK。
