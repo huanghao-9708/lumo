@@ -183,6 +183,12 @@ fn format_http_date(unix_secs: u64) -> Option<String> {
 pub fn run() {
     tracing_subscriber::fmt::init();
 
+    // ADR-1(MA0)：reqwest 以 rustls-no-provider 构建，需在任意 TLS 使用前
+    // 进程级安装加密后端。ring 为纯 Rust 实现，Windows/Android 构建路径一致。
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("failed to install rustls ring crypto provider");
+
     tauri::Builder::default()
         .setup(|app| {
             let app_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -403,6 +409,9 @@ pub fn run() {
             crate::commands::library::library_get_smart_playlist,
             crate::commands::library::library_get_track_versions,
             crate::commands::library::library_set_primary_file,
+            // [MA0 Spike] 技术验证命令，MA1 收尾时移除
+            crate::commands::debug::debug_play_tone,
+            crate::commands::debug::debug_webdav_probe,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

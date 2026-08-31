@@ -121,4 +121,68 @@ impl PlaybackManager {
     pub fn is_finished(&self) -> bool {
         self.sink.empty()
     }
+
+    /// [MA0 Spike] 播放正弦测试音，验证移动端音频输出链路。
+    /// 刻意与正式播放共用 PlaybackManager 的初始化与 Sink 路径，
+    /// 使 Spike 的结论（能否出声、采样率是否正确）可直接迁移到正式链路。
+    /// 仅 debug 构建编译；MA1 收尾时随 debug 命令一并移除。
+    #[cfg(debug_assertions)]
+    pub fn play_tone(&self, freq: f32, seconds: u32) -> Result<Option<u64>, String> {
+        let sample_rate = 48_000u32;
+        let total = sample_rate as usize * seconds as usize;
+        self.sink.stop();
+        self.sink.append(DebugTone {
+            freq,
+            sample_rate,
+            sample_idx: 0,
+            total,
+        });
+        self.sink.play();
+        info!("Playing debug tone: {}Hz for {}s", freq, seconds);
+        Ok(Some(seconds as u64 * 1000))
+    }
+}
+
+/// [MA0 Spike] 正弦波测试音源（仅 debug 构建），避免依赖 rodio::source::SineWave 的 API 漂移。
+#[cfg(debug_assertions)]
+struct DebugTone {
+    freq: f32,
+    sample_rate: u32,
+    sample_idx: usize,
+    total: usize,
+}
+
+#[cfg(debug_assertions)]
+impl Iterator for DebugTone {
+    type Item = f32;
+
+    fn next(&mut self) -> Option<f32> {
+        if self.sample_idx >= self.total {
+            return None;
+        }
+        let t = self.sample_idx as f32 / self.sample_rate as f32;
+        self.sample_idx += 1;
+        Some((t * self.freq * std::f32::consts::TAU).sin() * 0.35)
+    }
+}
+
+#[cfg(debug_assertions)]
+impl rodio::Source for DebugTone {
+    fn current_frame_len(&self) -> Option<usize> {
+        None
+    }
+
+    fn channels(&self) -> u16 {
+        1
+    }
+
+    fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+
+    fn total_duration(&self) -> Option<std::time::Duration> {
+        Some(std::time::Duration::from_secs_f32(
+            self.total as f32 / self.sample_rate as f32,
+        ))
+    }
 }

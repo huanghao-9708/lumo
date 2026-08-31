@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed } from 'vue';
-import { Sun, Moon, Monitor, Disc3, HardDrive, Server, Info, Scan } from 'lucide-vue-next';
+import { computed, ref } from 'vue';
+import { Sun, Moon, Monitor, Disc3, HardDrive, Server, Info, Scan, Volume2, Wifi } from 'lucide-vue-next';
+import { invoke } from '../../utils/tauriInvoke';
 import { usePlayerStore } from '../../stores/player';
 import { useUiStore } from '../../stores/ui';
 
@@ -39,6 +40,49 @@ const appVersion = 'v1.1.0';
 const isScanning = computed(() =>
   playerStore.sources.some(s => s.lastScanned === 'Scanning...')
 );
+
+/* ============ MA0 Spike（仅开发构建渲染） ============ */
+
+const isDev = import.meta.env.DEV;
+const toneBusy = ref(false);
+const toneResult = ref('');
+
+async function playTone() {
+  toneBusy.value = true;
+  toneResult.value = '';
+  try {
+    await invoke('debug_play_tone', {});
+    toneResult.value = '✓ 测试音已播放 3 秒，听见了 = 音频链路 Go';
+  } catch (e) {
+    toneResult.value = '✗ 播放失败: ' + e;
+  } finally {
+    toneBusy.value = false;
+  }
+}
+
+const probeUrl = ref('');
+const probeUser = ref('');
+const probePass = ref('');
+const probeBusy = ref(false);
+const probeResult = ref('');
+
+async function runProbe() {
+  if (!probeUrl.value) return;
+  probeBusy.value = true;
+  probeResult.value = '探测中…';
+  try {
+    const r = await invoke('debug_webdav_probe', {
+      baseUrl: probeUrl.value,
+      username: probeUser.value || null,
+      password: probePass.value || null,
+    });
+    probeResult.value = '✓ ' + JSON.stringify(r, null, 2);
+  } catch (e) {
+    probeResult.value = '✗ ' + e;
+  } finally {
+    probeBusy.value = false;
+  }
+}
 </script>
 
 <template>
@@ -143,6 +187,59 @@ const isScanning = computed(() =>
             扫描
           </button>
         </div>
+      </div>
+    </section>
+
+    <!-- ===== MA0 Spike（仅开发构建） ===== -->
+    <section v-if="isDev" class="px-4 py-1">
+      <h2 class="text-text-muted font-semibold uppercase tracking-widest px-1 py-2" style="font-size: var(--text-10);">
+        MA0 Spike · 仅开发构建
+      </h2>
+
+      <div class="rounded-[10px] bg-bg-canvas border border-border-color px-4 py-3 space-y-2">
+        <button
+          class="w-full h-10 rounded-[8px] bg-brand-orange text-white text-[14px] font-medium active:opacity-80 transition-opacity flex items-center justify-center gap-2"
+          :disabled="toneBusy"
+          @click="playTone"
+        >
+          <Volume2 class="w-[16px] h-[16px]" aria-hidden="true" />
+          {{ toneBusy ? '播放中…' : '播放测试音（440Hz · 3s）' }}
+        </button>
+
+        <div class="h-px bg-border-color"></div>
+
+        <input
+          v-model="probeUrl"
+          placeholder="WebDAV 地址（https://…）"
+          class="w-full h-9 px-3 rounded-[8px] bg-transparent border border-border-color text-[13px] text-text-primary placeholder:text-text-disabled outline-none focus:border-brand-orange"
+        />
+        <input
+          v-model="probeUser"
+          placeholder="用户名（可空）"
+          autocomplete="off"
+          class="w-full h-9 px-3 rounded-[8px] bg-transparent border border-border-color text-[13px] text-text-primary placeholder:text-text-disabled outline-none focus:border-brand-orange"
+        />
+        <input
+          v-model="probePass"
+          type="password"
+          placeholder="密码（可空）"
+          autocomplete="new-password"
+          class="w-full h-9 px-3 rounded-[8px] bg-transparent border border-border-color text-[13px] text-text-primary placeholder:text-text-disabled outline-none focus:border-brand-orange"
+        />
+        <button
+          class="w-full h-10 rounded-[8px] border border-border-solid text-[14px] font-medium text-text-secondary active:bg-list-hover transition-colors-smooth flex items-center justify-center gap-2"
+          :disabled="probeBusy || !probeUrl"
+          @click="runProbe"
+        >
+          <Wifi class="w-[16px] h-[16px]" aria-hidden="true" />
+          {{ probeBusy ? '探测中…' : 'WebDAV 连通性探测（PROPFIND）' }}
+        </button>
+
+        <pre
+          v-if="toneResult || probeResult"
+          class="text-text-muted whitespace-pre-wrap break-all font-mono pt-1"
+          style="font-size: var(--text-11);"
+        >{{ toneResult }}{{ probeResult }}</pre>
       </div>
     </section>
 
