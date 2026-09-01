@@ -6,6 +6,7 @@ import { useArtworkSrc } from '../../composables/useArtworkSrc';
 import MobileSongRow from './MobileSongRow.vue';
 import MobileAlbumCard from './MobileAlbumCard.vue';
 import MobileSettings from './MobileSettings.vue';
+import MobileAddLocalSource from './MobileAddLocalSource.vue';
 import MobileArtistDetail from './MobileArtistDetail.vue';
 import ActionSheet from './ActionSheet.vue';
 import type { ActionItem } from './ActionSheet.vue';
@@ -65,6 +66,13 @@ const isFavoriteArtistsView = computed(() =>
 const isSettingsView = computed(() =>
   playerStore.activeLibraryTab === '设置'
 );
+const showAddLocalSource = ref(false);
+function openAddLocalSource() {
+  showAddLocalSource.value = true;
+}
+function closeAddLocalSource() {
+  showAddLocalSource.value = false;
+}
 
 /* ============ 数据拉取：Tab 切换时加载对应数据 ============ */
 
@@ -281,7 +289,7 @@ function onAlbumTrackLongPress(trackId: number) {
 </script>
 
 <template>
-  <div class="flex-1 flex flex-col bg-bg-content overflow-hidden" style="min-height: 0;">
+  <div class="flex-1 flex flex-col bg-bg-content overflow-hidden relative" style="min-height: 0;">
 
     <!-- ===== 专辑详情 ===== -->
     <template v-if="isAlbumDetailView">
@@ -535,7 +543,7 @@ function onAlbumTrackLongPress(trackId: number) {
     </div>
 
     <!-- ===== 设置 ===== -->
-    <MobileSettings v-else-if="isSettingsView" />
+    <MobileSettings v-else-if="isSettingsView" @add-local="openAddLocalSource" />
 
     <!-- ===== 其他视图占位 ===== -->
     <div v-else class="flex-1 flex flex-col items-center justify-center gap-4 text-center px-8">
@@ -550,6 +558,14 @@ function onAlbumTrackLongPress(trackId: number) {
       :actions="sheetActions"
       @close="onSheetClose"
     />
+
+    <!-- ===== 添加本地来源（MA1 A1-3）：覆盖层，不受 v-else-if 链限制 ===== -->
+    <div
+      v-if="showAddLocalSource"
+      class="absolute inset-0 z-[60] bg-bg-canvas"
+    >
+      <MobileAddLocalSource @close="closeAddLocalSource" />
+    </div>
 
   </div>
 </template>

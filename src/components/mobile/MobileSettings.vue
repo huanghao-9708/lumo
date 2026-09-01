@@ -1,9 +1,13 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
-import { Sun, Moon, Monitor, Disc3, HardDrive, Server, Info, Scan, Volume2, Wifi } from 'lucide-vue-next';
+import { computed, onMounted, ref } from 'vue';
+import { Sun, Moon, Monitor, Disc3, HardDrive, Server, Info, Scan, Volume2, Wifi, Plus, Trash2, Database, Image, Music2 } from 'lucide-vue-next';
 import { invoke } from '../../utils/tauriInvoke';
+import { libraryGetCacheSize } from '../../api/library';
+import { playbackGetAudioCacheSize } from '../../api/playback';
+import { getAppVersion } from '../../api/platform';
 import { usePlayerStore } from '../../stores/player';
 import { useUiStore } from '../../stores/ui';
+import { registerBackHandler } from '../../composables/useMobileBack';
 
 const playerStore = usePlayerStore();
 const uiStore = useUiStore();
@@ -34,12 +38,62 @@ function getSourceIcon(kind: 'local' | 'webdav') {
   return kind === 'webdav' ? Server : HardDrive;
 }
 
+/* ===== 添加来源（MA1 A1-3） ===== */
+const emit = defineEmits<{ (e: 'add-local'): void }>();
+
+/* ===== 删除来源：二次确认（P1-10 移动端落地） ===== */
+const removeTarget = ref<{ id: number; name: string; kind: string } | null>(null);
+function askRemove(source: { id: number; name: string; kind: 'local' | 'webdav' }) {
+  removeTarget.value = { id: source.id, name: source.name, kind: source.kind };
+}
+async function confirmRemove() {
+  if (!removeTarget.value) return;
+  const target = removeTarget.value;
+  removeTarget.value = null;
+  try {
+    await playerStore.removeSource(target.id);
+  } catch (e) {
+    console.error('remove source failed', e);
+  }
+}
+
+/* ============ 存储占用（MA1 A1-5） ============ */
+
+const storageInfo = ref<{ db: number; cover: number; audio: number } | null>(null);
+async function refreshStorage() {
+  const [cover, audio] = await Promise.all([
+    libraryGetCacheSize().catch(() => 0),
+    playbackGetAudioCacheSize().catch(() => 0),
+  ]);
+  storageInfo.value = { db: 0, cover, audio };
+}
+function fmtBytes(n: number): string {
+  if (n >= 1024 * 1024 * 1024) return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+  if (n >= 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB';
+  if (n >= 1024) return (n / 1024).toFixed(0) + ' KB';
+  return n + ' B';
+}
+
 /* ============ 关于 ============ */
 
-const appVersion = 'v1.1.0';
+const appVersion = ref('...');
+onMounted(async () => {
+  appVersion.value = await getAppVersion().catch(() => '');
+  refreshStorage();
+});
+
 const isScanning = computed(() =>
   playerStore.sources.some(s => s.lastScanned === 'Scanning...')
 );
+
+/* ===== 返回拦截：删除确认弹层打开时优先关闭弹层 ===== */
+registerBackHandler(() => {
+  if (removeTarget.value) {
+    removeTarget.value = null;
+    return true;
+  }
+  return false;
+});
 
 /* ============ MA0 Spike（仅开发构建渲染） ============ */
 
@@ -174,7 +228,7 @@ async function runProbe() {
           <div class="flex-1 min-w-0">
             <p class="text-[15px] text-text-primary truncate">{{ source.name }}</p>
             <p class="text-text-muted font-mono uppercase truncate" style="font-size: var(--text-11);">
-              {{ source.kind === 'webdav' ? 'WebDAV' : '本地' }}
+              {{ source.kind === 'webdav' ? 'WebDAV' : '本地' }} · {{ source.lastScanned }}
             </p>
           </div>
           <button
@@ -186,6 +240,49 @@ async function runProbe() {
             <Scan class="w-[14px] h-[14px]" :class="isScanning ? 'animate-spin' : ''" aria-hidden="true" />
             扫描
           </button>
+          <button
+            class="flex-shrink-0 p-1.5 rounded-[6px] text-text-muted active:bg-list-hover transition-colors-smooth"
+            :aria-label="`删除来源 ${source.name}`"
+            @click="askRemove(source)"
+          >
+            <Trash2 class="w-[16px] h-[16px]" aria-hidden="true" />
+          </button>
+        </div>
+      </div>
+
+      <!-- 添加本地来源（MA1 A1-3） -->
+      <button
+        class="mt-3 w-full h-11 rounded-[10px] border border-dashed border-border-solid text-[14px] font-medium text-text-secondary active:bg-list-hover transition-colors-smooth flex items-center justify-center gap-2"
+        @click="emit('add-local')"
+      >
+        <Plus class="w-[16px] h-[16px]" aria-hidden="true" />
+        添加本地音乐目录
+      </button>
+    </section>
+
+    <!-- ===== 存储占用（MA1 A1-5） ===== -->
+    <section class="px-4 py-1">
+      <div class="flex items-center justify-between px-1 py-2">
+        <h2 class="text-text-muted font-semibold uppercase tracking-widest" style="font-size: var(--text-10);">
+          存储占用
+        </h2>
+        <button class="text-brand-orange text-[12px] font-medium" @click="refreshStorage">刷新</button>
+      </div>
+      <div class="rounded-[10px] bg-bg-canvas border border-border-color px-4 py-3 space-y-2">
+        <div class="flex items-center gap-3">
+          <Database class="w-[18px] h-[18px] text-text-muted flex-shrink-0" aria-hidden="true" />
+          <span class="text-[14px] text-text-primary flex-1">曲库数据库</span>
+          <span class="text-[13px] text-text-muted font-mono">{{ storageInfo ? fmtBytes(storageInfo.db) : '…' }}</span>
+        </div>
+        <div class="flex items-center gap-3">
+          <Image class="w-[18px] h-[18px] text-text-muted flex-shrink-0" aria-hidden="true" />
+          <span class="text-[14px] text-text-primary flex-1">封面缓存</span>
+          <span class="text-[13px] text-text-muted font-mono">{{ storageInfo ? fmtBytes(storageInfo.cover) : '…' }}</span>
+        </div>
+        <div class="flex items-center gap-3">
+          <Music2 class="w-[18px] h-[18px] text-text-muted flex-shrink-0" aria-hidden="true" />
+          <span class="text-[14px] text-text-primary flex-1">音频缓存</span>
+          <span class="text-[13px] text-text-muted font-mono">{{ storageInfo ? fmtBytes(storageInfo.audio) : '…' }}</span>
         </div>
       </div>
     </section>
@@ -265,5 +362,37 @@ async function runProbe() {
 
     <!-- 底部留白 -->
     <div class="h-8"></div>
+
+    <!-- ===== 删除来源确认（P1-10 移动端落地） ===== -->
+    <Teleport to="body">
+      <div
+        v-if="removeTarget"
+        class="fixed inset-0 z-[100] bg-black/50 flex items-end justify-center"
+        @click.self="removeTarget = null"
+      >
+        <div class="w-full max-w-[420px] bg-bg-canvas rounded-t-[16px] px-5 pt-5 pb-8 animate-rise">
+          <div class="w-10 h-1 rounded-full bg-border-solid mx-auto mb-4"></div>
+          <h3 class="text-[16px] font-semibold text-text-primary text-center">删除来源</h3>
+          <p class="text-[13px] text-text-muted text-center mt-2 leading-relaxed">
+            删除「{{ removeTarget.name }}」将从曲库移除其全部歌曲索引，
+            本机已缓存的音频不会删除。此操作不可撤销。
+          </p>
+          <div class="flex gap-3 mt-5">
+            <button
+              class="flex-1 h-11 rounded-[10px] bg-bg-hover text-text-secondary text-[15px] font-medium active:opacity-85"
+              @click="removeTarget = null"
+            >
+              取消
+            </button>
+            <button
+              class="flex-1 h-11 rounded-[10px] bg-red-500/90 text-white text-[15px] font-semibold active:opacity-85"
+              @click="confirmRemove"
+            >
+              确认删除
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>

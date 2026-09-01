@@ -4,10 +4,14 @@ import { Disc3, Play, Pause, SkipBack, SkipForward } from 'lucide-vue-next';
 import { usePlayerStore } from '../../stores/player';
 import { useUiStore } from '../../stores/ui';
 import { useArtworkSrc } from '../../composables/useArtworkSrc';
+import { initMobileBackNavigation } from '../../composables/useMobileBack';
 import MobileHeader from './MobileHeader.vue';
 import MobileContentView from './MobileContentView.vue';
 import MobileSearch from './MobileSearch.vue';
 import MobileTabBar from './MobileTabBar.vue';
+
+// A1-7：Android 返回键 → 视图栈（在 setup 中初始化一次）
+void initMobileBackNavigation();
 
 /**
  * 移动端布局外壳。

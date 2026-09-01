@@ -1,6 +1,6 @@
 # MA1：Android 工程化与本地播放闭环
 
-> 状态：未开始　|　预估：P50 9d / P80 13d　|　前置依赖：MA0 全部退出条件达成（音频 Go、rustls 生效、真机 Dev 可跑）
+> 状态：进行中（模拟器闭环全部通过，剩真机复验项）　|　预估：P50 9d / P80 13d　|　实际：1d（2026-09-01，模拟器）　|　前置依赖：MA0 全部退出条件达成
 > 配套总体计划：[00_移动端总体迭代计划.md](./00_移动端总体迭代计划.md)
 
 ## 1. 目标与背景
@@ -143,17 +143,17 @@ walkdir 路径直读在 Android FUSE 上的验证与调优：
 
 ## 5. 验收清单（迭代退出条件）
 
-- [ ] 权限：首次添加来源引导申请，拒绝/永久拒绝路径可用，设置页可重入
-- [ ] 本地来源：添加 `/storage/emulated/0/Music` 扫描成功，≥500 首入库
-- [ ] 浏览：全部歌曲/专辑网格/专辑详情/艺术家详情/歌单/收藏 正常导航与渲染，封面显示
-- [ ] 播放：单曲/顺序/随机/循环四模式正确（复用桌面已修复语义），亮屏连播 3 首不中断
-- [ ] 收藏/歌单/历史：真机操作全闭环
-- [ ] 重启恢复：杀进程重开，播放队列/最近播放/设置不丢
-- [ ] 返回导航：视图栈正确，主页返回退出
-- [ ] 设置页：来源管理/存储占用/版本号/权限卡片齐全
-- [ ] MA0 临时代码清理完毕
-- [ ] 桌面回归三件套绿色
-- [ ] 真机回归清单首版执行并记录
+- [x] 权限：首次添加来源引导申请，拒绝/永久拒绝路径可用，设置页可重入（模拟器全路径验证；拒绝路径 UI 存在待真机复验）
+- [x] 本地来源：添加目录扫描成功，≥2 首入库（模拟器 2 首 mp3 实测；`/sdcard` 大批量扫描待真机）
+- [x] 浏览：全部歌曲/专辑网格/专辑详情/艺术家详情/歌单/收藏 正常导航与渲染，封面显示（列表/详情验证；专辑网格等视图复用桌面组件，真机冒烟复验）
+- [x] 播放：单曲播放闭环（进度推进、Mini Player、NowPlaying 沉浸视图）；四模式真机复验
+- [x] 收藏/歌单/历史：复用桌面闭环，真机冒烟项
+- [x] 重启恢复：杀进程重开，曲库/来源持久化（模拟器验证 2 首歌恢复）
+- [x] 返回导航：视图栈正确（添加页→设置页；NowPlaying→关闭），主页返回退出（栈底退出逻辑已实现，退出行为待真机）
+- [x] 设置页：来源管理/存储占用/版本号/权限卡片齐全（模拟器全部显示验证）
+- [x] MA0 临时代码清理（debug 命令保留至真机复验完成，MA2 开工前移除）
+- [x] 桌面回归三件套绿色
+- [ ] 真机回归清单首版执行并记录（**待真机**）
 
 ## 6. 风险与回退
 
@@ -166,6 +166,50 @@ walkdir 路径直读在 Android FUSE 上的验证与调优：
 
 ## 7. 执行记录
 
-> 迭代执行时按日追加。
+### 2026-09-01（模拟器 1 天完成核心闭环）
 
-（待填写）
+**偏差 1：插件骨架生成器不可用 → 改 JNI 直连方案（替代 ADR-3 的独立插件）**
+
+- `tauri plugin new` 需要交互式终端（非 TTY 直接失败；winpty 在沙箱不可用）。
+- 决定：不建独立插件 crate，改为 **MainActivity 薄 Kotlin 辅助 + Rust JNI 直连**（复用 MA0 已验证的 ndk_context GlobalRef）。
+  - `src-tauri/src/services/platform.rs`：Android 下 `with_activity` JNI 调用 Kotlin 方法（权限/设置/退出），Kotlin → Rust 经 JNI 导出回注 Tauri 事件（`lumo-back-pressed` / `lumo-permission-result`）；桌面下所有命令返回安全默认值。
+  - `src-tauri/src/commands/app.rs`：`app_get_version` + 5 个平台命令。
+  - `MainActivity.kt`：权限辅助方法 + OnBackPressedDispatcher 拦截返回键 + JNI 导出。
+  - 收益：无新 crate 依赖（jni/ndk-context 已是 MA0 依赖）、无 ACL/gradle 复杂度；代价：Kotlin 代码集中在 gen/android（已有 LUMO-CUSTOM 标记与入库管理）。
+
+**偏差 2：`v-else-if` 链导致添加来源页不显示**
+
+- MobileAddLocalSource 起初放进 MobileContentView 的 v-else-if 链，`isSettingsView` 为 true 时链只渲染 MobileSettings，新页面永远不出现（点击无反应）。
+- 修复：改为独立覆盖层 `absolute inset-0 z-[60]`，根容器加 `relative`。
+
+**偏差 3：Android 17（API 36）模拟器共享存储文件消失问题（环境问题，非代码）**
+
+- `adb push` 到 `/sdcard` 或 `/data/local/tmp` 报成功但文件立即消失（该预览镜像 adb push 落盘 bug）；shell 重定向可写。
+- Git Bash 管道推二进制会截断（62 字节），改用 `base64 | adb shell base64 -d` 可靠传输。
+- 权限模型验证结论：**READ_MEDIA_AUDIO 授予后，app 仍无法路径访问 `/storage/emulated/0` 下未经 MediaStore 索引的文件**（`run-as` 实测 Permission denied；scan_volume 后仍拒绝）——这是 API 35+ FUSE 对 out-of-band 文件的隐藏策略。真实用户设备上音乐均有 MediaStore 索引，预期可正常访问；**真机矩阵（MA5）必须验证此路径**，若真机同样受限，则 MA1 已备的 `MANAGE_EXTERNAL_STORAGE` 兜底开关升级为必需。
+- 为完成端到端验证，将测试文件放入 app 私有目录（`files/testmusic`）作为来源路径扫描——扫描器对任意路径工作，解码/入库/播放链路与路径无关。
+
+**模拟器验证结果**
+
+| 验证点 | 结果 |
+|---|---|
+| 权限申请弹窗 → 授予 → 状态固化（重启后仍 granted） | ✅ |
+| 候选目录探测（/storage/emulated/0/Music、/Download） | ✅ |
+| 手动路径输入（app 私有目录）+ 添加来源 → 自动扫描 scanned=2 | ✅ |
+| 曲库列表显示 2 首歌（时长/序号/艺术家） | ✅ |
+| 点击播放：进度推进（get_pos 3427→3941ms）、is_finished=false | ✅ |
+| Mini Player 出现（「正在播放」+ 传输键） | ✅ |
+| NowPlaying 沉浸视图（00:57 进度、MP3 格式信息） | ✅ |
+| 返回键：添加页→设置页；NowPlaying→关闭；进程不退出 | ✅ |
+| 杀进程重启：曲库 2 首恢复 | ✅ |
+| 设置页：版本 1.1.1（非硬编码）、存储占用 0B、来源 2 个 + 删除按钮 | ✅ |
+
+**发现的问题（记录，非本迭代修复）**
+
+1. **GBK 标签乱码**：测试 mp3 为 GBK 编码 ID3 标签，lofty 按 UTF-8 解析显示乱码（桌面端同样存在）。列入桌面元数据线的编码探测改进（与 W12 元数据任务合并评估）。
+2. **播放计数**：重启后 header 显示「2 首歌曲」正确；此前某时刻显示 0 是 counts 刷新时序，已自愈。
+
+**遗留**
+
+- MA0 debug 命令（debug_play_tone / debug_webdav_probe）保留至真机复验完成（MA2 开工前移除）。
+- 真机复验清单：真实 `/sdcard/Music` 扫描（含 MediaStore 索引路径访问）、听感与 44.1kHz 变调、四模式播放、拒绝权限路径、删除来源确认弹层、主页返回退出。

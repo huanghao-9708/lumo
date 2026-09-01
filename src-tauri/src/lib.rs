@@ -5,7 +5,6 @@ pub mod repositories;
 pub mod commands;
 pub mod ipc_trace;
 pub mod error;
-
 use db::{init_db, DbState};
 use services::playback::PlaybackManager;
 use services::cache::AudioCache;
@@ -212,6 +211,8 @@ pub extern "system" fn Java_com_hao_lumo_MainActivity_initLumoAudioContext<'loca
     unsafe {
         ndk_context::initialize_android_context(vm_raw.cast(), ctx_raw.cast());
     }
+    // 同一份引用共享给平台桥（MA1：权限/返回键/退出等 JNI 调用）
+    services::platform::set_context(vm_raw as isize, ctx_raw as isize);
     tracing::info!("[LumoContext] ndk_context 已初始化（cpal/oboe 可用）");
 }
 
@@ -231,6 +232,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .setup(|app| {
+            services::platform::set_app_handle(app.handle().clone());
             let app_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
             std::fs::create_dir_all(&app_dir).unwrap();
             let db_path = app_dir.join("lumo.sqlite");
@@ -449,6 +451,13 @@ pub fn run() {
             crate::commands::library::library_get_smart_playlist,
             crate::commands::library::library_get_track_versions,
             crate::commands::library::library_set_primary_file,
+            // MA1：应用信息与移动平台桥
+            crate::commands::app::app_get_version,
+            crate::commands::app::platform_check_audio_permission,
+            crate::commands::app::platform_request_audio_permission,
+            crate::commands::app::platform_open_app_settings,
+            crate::commands::app::platform_storage_suggestions,
+            crate::commands::app::platform_finish_app,
             // [MA0 Spike] 技术验证命令，MA1 收尾时移除
             crate::commands::debug::debug_play_tone,
             crate::commands::debug::debug_webdav_probe,

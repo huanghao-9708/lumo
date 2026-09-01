@@ -6,3 +6,4 @@ pub mod webdav;
 pub mod cache;
 pub mod sync;
 pub mod file_priority;
+pub mod platform;

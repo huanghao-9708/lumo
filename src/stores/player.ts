@@ -1669,6 +1669,16 @@ const albums = shallowRef<Album[]>([]);
     }
   }
 
+  // MA1（A1-3）：添加本地来源 → 自动开始扫描
+  async function addLocalSource(path: string, name?: string) {
+    const sourceName = name?.trim() || path.split(/[\\/]/).filter(Boolean).pop() || path;
+    await sourceAddLocal(path, sourceName);
+    await fetchSources();
+    const created = sources.value.find(s => s.path === path || s.name === sourceName);
+    if (created) await scanSource(created.id);
+    return created?.id;
+  }
+
   function toggleSource(id: number) {
     const source = sources.value.find(s => s.id === id);
     if (source) {
@@ -1875,6 +1885,7 @@ const albums = shallowRef<Album[]>([]);
     setVolume,
     seek,
     addSource,
+    addLocalSource,
     removeSource,
     toggleSource,
     scanSource,
