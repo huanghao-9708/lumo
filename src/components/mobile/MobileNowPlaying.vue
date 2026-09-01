@@ -135,6 +135,42 @@ function exit() {
   uiStore.closeImmersiveView();
 }
 
+/* ============ 封面左右横滑切歌（MA4 A4-5） ============ */
+
+const coverTouchStartX = ref(0);
+const coverOffsetX = ref(0);
+const isSwipingCover = ref(false);
+
+function onCoverTouchStart(e: TouchEvent) {
+  if (e.touches.length === 1) {
+    coverTouchStartX.value = e.touches[0].clientX;
+    isSwipingCover.value = true;
+    coverOffsetX.value = 0;
+  }
+}
+
+function onCoverTouchMove(e: TouchEvent) {
+  if (!isSwipingCover.value || !e.touches.length) return;
+  const deltaX = e.touches[0].clientX - coverTouchStartX.value;
+  coverOffsetX.value = Math.max(-50, Math.min(50, deltaX * 0.4));
+}
+
+function onCoverTouchEnd(e: TouchEvent) {
+  if (!isSwipingCover.value) return;
+  isSwipingCover.value = false;
+  if (!e.changedTouches.length) {
+    coverOffsetX.value = 0;
+    return;
+  }
+  const deltaX = e.changedTouches[0].clientX - coverTouchStartX.value;
+  coverOffsetX.value = 0;
+  if (deltaX < -80) {
+    playerStore.nextTrack();
+  } else if (deltaX > 80) {
+    playerStore.prevTrack();
+  }
+}
+
 /* ============ 键盘 ============ */
 
 function onKey(e: KeyboardEvent) {
@@ -174,7 +210,7 @@ function onKey(e: KeyboardEvent) {
     <!-- ===== 顶部：收起按钮 ===== -->
     <div
       class="relative z-10 flex items-center flex-shrink-0 px-4"
-      :style="{ height: '56px', paddingTop: 'env(safe-area-inset-top)' }"
+      :style="{ height: 'calc(56px + env(safe-area-inset-top, 0px))', paddingTop: 'env(safe-area-inset-top, 0px)' }"
     >
       <button
         class="w-10 h-10 flex items-center justify-center rounded-[8px] text-white/70 active:text-white active:bg-white/10 transition-colors-smooth"
@@ -197,15 +233,19 @@ function onKey(e: KeyboardEvent) {
 
     <!-- ===== 内容：单列纵向布局 ===== -->
     <div v-else class="relative z-10 flex-1 overflow-y-auto flex flex-col items-center px-6">
-      <!-- 封面 -->
+      <!-- 封面（支持横滑切歌） -->
       <div
-        class="relative aspect-square w-[75%] max-w-[280px] rounded-[10px] overflow-hidden bg-white/10 mb-5 flex-shrink-0"
+        class="relative aspect-square w-[75%] max-w-[280px] rounded-[10px] overflow-hidden bg-white/10 mb-5 flex-shrink-0 transition-transform duration-150 ease-out"
+        :style="{ transform: `translateX(${coverOffsetX}px)` }"
+        @touchstart.stop="onCoverTouchStart"
+        @touchmove.stop="onCoverTouchMove"
+        @touchend.stop="onCoverTouchEnd"
       >
         <img
           v-if="coverSrc"
           :src="coverSrc"
           alt="cover"
-          class="w-full h-full object-cover"
+          class="w-full h-full object-cover select-none pointer-events-none"
         />
         <Disc3
           v-else

@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
-import { Loader2, Disc3, Music, Shuffle, Play, Heart, ListMusic, Folder } from 'lucide-vue-next';
+import { Loader2, Disc3, Shuffle, Play, Heart, ListMusic, Folder } from 'lucide-vue-next';
 import { usePlayerStore, type Album, type Track } from '../../stores/player';
 import { useArtworkSrc } from '../../composables/useArtworkSrc';
 import MobileSongRow from './MobileSongRow.vue';
 import MobileAlbumCard from './MobileAlbumCard.vue';
 import MobileSettings from './MobileSettings.vue';
 import MobileAddLocalSource from './MobileAddLocalSource.vue';
+import MobileWebdavSourceEditor from './MobileWebdavSourceEditor.vue';
 import MobileArtistDetail from './MobileArtistDetail.vue';
 import ActionSheet from './ActionSheet.vue';
 import type { ActionItem } from './ActionSheet.vue';
@@ -72,6 +73,14 @@ function openAddLocalSource() {
 }
 function closeAddLocalSource() {
   showAddLocalSource.value = false;
+}
+
+const showAddWebdavSource = ref(false);
+function openAddWebdavSource() {
+  showAddWebdavSource.value = true;
+}
+function closeAddWebdavSource() {
+  showAddWebdavSource.value = false;
 }
 
 /* ============ 数据拉取：Tab 切换时加载对应数据 ============ */
@@ -381,9 +390,21 @@ function onAlbumTrackLongPress(trackId: number) {
         <Loader2 class="w-5 h-5 animate-spin text-brand-orange" aria-hidden="true" />
         <span class="text-[12px]">加载中…</span>
       </div>
-      <div v-else-if="playerStore.tracks.length === 0" class="flex flex-col items-center justify-center py-20 gap-3 text-text-muted">
-        <Music class="w-8 h-8 text-text-disabled" aria-hidden="true" />
-        <span class="text-[13px]">没有找到歌曲</span>
+      <div v-else-if="playerStore.tracks.length === 0" class="flex flex-col items-center justify-center py-16 px-6 text-center text-text-muted space-y-3">
+        <div class="w-14 h-14 rounded-full bg-bg-hover flex items-center justify-center text-text-disabled mb-1">
+          <Disc3 class="w-7 h-7" aria-hidden="true" />
+        </div>
+        <p class="text-[16px] font-semibold text-text-primary">曲库暂无音乐</p>
+        <p class="text-[13px] text-text-muted max-w-[260px] leading-relaxed">
+          添加本地音乐文件夹或 WebDAV 网盘，随时随地畅享无损音乐。
+        </p>
+        <button
+          v-if="playerStore.sources.length === 0"
+          class="mt-2 h-10 px-5 rounded-[8px] bg-brand-orange text-white text-[14px] font-medium active:opacity-85 transition-opacity"
+          @click="openAddLocalSource"
+        >
+          添加音乐目录
+        </button>
       </div>
       <div v-else class="py-1">
         <MobileSongRow
@@ -543,7 +564,11 @@ function onAlbumTrackLongPress(trackId: number) {
     </div>
 
     <!-- ===== 设置 ===== -->
-    <MobileSettings v-else-if="isSettingsView" @add-local="openAddLocalSource" />
+    <MobileSettings
+      v-else-if="isSettingsView"
+      @add-local="openAddLocalSource"
+      @add-webdav="openAddWebdavSource"
+    />
 
     <!-- ===== 其他视图占位 ===== -->
     <div v-else class="flex-1 flex flex-col items-center justify-center gap-4 text-center px-8">
@@ -565,6 +590,14 @@ function onAlbumTrackLongPress(trackId: number) {
       class="absolute inset-0 z-[60] bg-bg-canvas"
     >
       <MobileAddLocalSource @close="closeAddLocalSource" />
+    </div>
+
+    <!-- ===== 添加 WebDAV 来源（MA3 A3-2）：覆盖层 ===== -->
+    <div
+      v-if="showAddWebdavSource"
+      class="absolute inset-0 z-[60] bg-bg-canvas"
+    >
+      <MobileWebdavSourceEditor @close="closeAddWebdavSource" />
     </div>
 
   </div>

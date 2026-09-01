@@ -22,7 +22,7 @@ pub struct PlaybackState {
 ///   - webdav → 返回 HttpRangeReader（流播），同时调用方会 spawn 后台线程下载缓存
 ///
 /// 返回 (本地路径, WebDAV 流)。两者互斥：命中缓存或本地文件时 stream 为 None。
-fn resolve_media_file(
+pub fn resolve_media_file(
     db_state: &State<'_, DbState>,
     audio_cache: &AudioCache,
     mut media_file_id: i64,
@@ -109,14 +109,14 @@ fn resolve_media_file(
 /// WebDAV 解析附加信息：用于流播失败后后台缓存下载。
 /// 仅在 WebDAV 未命中缓存时填充。
 #[derive(Default)]
-struct WebdavResolveInfo {
-    webdav_client: Option<WebdavClient>,
-    file_url: Option<String>,
+pub struct WebdavResolveInfo {
+    pub webdav_client: Option<WebdavClient>,
+    pub file_url: Option<String>,
 }
 
 /// 在后台线程异步下载 WebDAV 文件到缓存（播放同时进行，不阻塞音频）。
 /// 下载完成或失败都不影响当前播放，仅影响「下次播放这首歌」的缓存命中。
-fn spawn_background_cache_download(
+pub fn spawn_background_cache_download(
     audio_cache_state: &State<'_, AudioCacheState>,
     media_file_id: i64,
     webdav_client: WebdavClient,
@@ -157,7 +157,13 @@ fn spawn_background_cache_download(
                 } else {
                     let final_path = cache_dir.join(format!("{}", media_file_id));
                     match std::fs::rename(&tmp_path, &final_path) {
-                        Ok(_) => tracing::info!("Audio cache stored media_file_id={} ({} bytes)", media_file_id, bytes),
+                        Ok(_) => {
+                            tracing::info!("Audio cache stored media_file_id={} ({} bytes)", media_file_id, bytes);
+                            if let Some(parent) = cache_dir.parent() {
+                                let cache_obj = crate::services::cache::AudioCache::new(parent);
+                                cache_obj.prune_to_max_bytes(2 * 1024 * 1024 * 1024);
+                            }
+                        }
                         Err(e) => {
                             tracing::warn!("Audio cache rename failed: {}", e);
                             let _ = std::fs::remove_file(&tmp_path);
@@ -258,18 +264,50 @@ pub fn playback_get_queue_len(playback_state: State<'_, PlaybackState>) -> Resul
 
 
 #[tauri::command]
-pub fn playback_pause(playback_state: State<'_, PlaybackState>) -> Result<(), AppError> {
+pub fn playback_pause(
+    playback_state: State<'_, PlaybackState>,
+    queue_state: State<'_, crate::services::queue::QueueState>,
+) -> Result<(), AppError> {
     let _trace = ipc_trace!("playback_pause");
     let manager = playback_state.manager.lock().map_err(|e| AppError::Internal(e.to_string()))?;
     manager.pause();
+    let pos = manager.get_pos();
+    if let Ok(q) = queue_state.queue.lock() {
+        if let Some(item) = q.items.get(q.index) {
+            let _ = crate::services::platform::update_foreground(
+                &item.title,
+                &item.artist,
+                &item.album,
+                false,
+                pos,
+                item.duration_ms.unwrap_or(0),
+            );
+        }
+    }
     Ok(())
 }
 
 #[tauri::command]
-pub fn playback_resume(playback_state: State<'_, PlaybackState>) -> Result<(), AppError> {
+pub fn playback_resume(
+    playback_state: State<'_, PlaybackState>,
+    queue_state: State<'_, crate::services::queue::QueueState>,
+) -> Result<(), AppError> {
     let _trace = ipc_trace!("playback_resume");
     let manager = playback_state.manager.lock().map_err(|e| AppError::Internal(e.to_string()))?;
     manager.resume();
+    let pos = manager.get_pos();
+    if let Ok(q) = queue_state.queue.lock() {
+        if let Some(item) = q.items.get(q.index) {
+            let _ = crate::services::platform::update_foreground(
+                &item.title,
+                &item.artist,
+                &item.album,
+                true,
+                pos,
+                item.duration_ms.unwrap_or(0),
+            );
+        }
+    }
     Ok(())
 }
 
@@ -278,6 +316,7 @@ pub fn playback_stop(playback_state: State<'_, PlaybackState>) -> Result<(), App
     let _trace = ipc_trace!("playback_stop");
     let manager = playback_state.manager.lock().map_err(|e| AppError::Internal(e.to_string()))?;
     manager.stop();
+    let _ = crate::services::platform::stop_foreground();
     Ok(())
 }
 

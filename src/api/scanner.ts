@@ -9,6 +9,18 @@ export function sourceAddWebdav(url: string, name: string, username?: string, pa
   return invoke('source_add_webdav', { url, name, username, password });
 }
 
+export interface WebdavProbeResult {
+  ok: boolean;
+  latencyMs: number;
+  serverHeader?: string;
+  statusCode?: number;
+  error?: string;
+}
+
+export function scannerTestWebdav(url: string, username?: string, password?: string): Promise<WebdavProbeResult> {
+  return invoke('scanner_test_webdav', { url, username, password });
+}
+
 export function sourceList(): Promise<SourceDTO[]> {
   return invoke('source_list');
 }

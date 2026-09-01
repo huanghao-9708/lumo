@@ -109,10 +109,31 @@ npm run tauri build
 
 ---
 
-## 📅 开发路线图
+### 4. 移动端 (Android) 构建与运行
 
-- **Phase 0：技术验证** (当前阶段：已验证数据库、音频输出和 Tauri 通信，高保真交互 Demo UI 完成)
-- **Phase 1：本地 MVP** (本地音乐目录扫描、SQLite 库管理、多来源文件解析、单曲/随机播放流打通)
-- **Phase 2：本地体验完善** (增量扫描、封面自动提取缓存、LRC 歌词流动支持)
-- **Phase 3：WebDAV 支持** (网络环境能力探测、远程文件分片缓存、网络降级控制)
-- **Phase 4：统一曲库增强** (重复文件多音源归并、智能歌单)
+Lumo 原生支持 Android 移动端，具备原生后台服务保活、通知栏/锁屏五键控制、来电暂停与拔耳机自动暂停、WebDAV 云端流播与透明缓存等能力。
+
+1. **添加 Rust Android 目标架构**：
+   ```powershell
+   rustup target add aarch64-linux-android
+   ```
+2. **连接手机或模拟器进行调试**：
+   ```powershell
+   npm run tauri android dev
+   ```
+3. **打包 Release 架构 APK**：
+   ```powershell
+   npm run tauri android build -- --target aarch64 --apk
+   ```
+   产物 APK 位于：`src-tauri/gen/android/app/build/outputs/apk/release/`。
+
+---
+
+## 📅 移动端迭代开发状态（MA0 - MA5）
+
+- [x] **MA0：技术验证与工程基线**（移动自适应布局渲染、rodio 纯 Rust 解码输出、WebDAV 连通）
+- [x] **MA1：Android 工程化与本地播放闭环**（运行时权限、存储建议、本地扫描入库、首尾循环、冷启动恢复）
+- [x] **MA2：后台播放与系统媒体集成**（Rust 权威队列下沉、Kotlin 前台服务、MediaSession、音频焦点抢占、拔耳机自动暂停）
+- [x] **MA3：WebDAV 与跨端数据同步**（WebDAV 来源管理与探测、透明缓存、离线置灰、统一 SecretStore 凭据安全、二次防误触云端恢复）
+- [x] **MA4：移动体验打磨与性能优化**（安全区避让、列表虚拟排版、封面横滑切歌、空态引导、本地化名称）
+- [x] **MA5：打包发布与质量门禁**（Release 签名构建体系、发布检查清单、应用内更新检查、诊断导出）

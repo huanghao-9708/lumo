@@ -19,7 +19,7 @@ function onSelect(key: MobileTab) {
 <template>
   <nav
     class="flex items-center justify-around bg-bg-canvas border-t border-border-color flex-shrink-0"
-    style="height: var(--height-mobile-tabbar); padding-bottom: env(safe-area-inset-bottom);"
+    style="height: calc(var(--height-mobile-tabbar) + env(safe-area-inset-bottom, 0px)); padding-bottom: env(safe-area-inset-bottom, 0px);"
     aria-label="主导航"
   >
     <button

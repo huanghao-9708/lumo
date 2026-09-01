@@ -85,7 +85,7 @@ function onTouchMove() {
     :class="{
       'playing-row bg-list-selected': isCurrent,
     }"
-    :style="{ height: 'var(--touch-row)' }"
+    :style="{ height: 'var(--touch-row)', contentVisibility: 'auto', containIntrinsicSize: 'var(--touch-row)' }"
     @click="onRowClick"
     @touchstart="onTouchStart"
     @touchend="onTouchEnd"

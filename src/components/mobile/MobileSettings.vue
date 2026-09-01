@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
-import { Sun, Moon, Monitor, Disc3, HardDrive, Server, Info, Scan, Volume2, Wifi, Plus, Trash2, Database, Image, Music2 } from 'lucide-vue-next';
+import { computed, onMounted, onBeforeUnmount, ref } from 'vue';
+import { Sun, Moon, Monitor, Disc3, HardDrive, Server, Info, Scan, Volume2, Wifi, Plus, Trash2, Database, Image, Music2, CloudUpload, CloudDownload, RefreshCw, AlertCircle } from 'lucide-vue-next';
 import { invoke } from '../../utils/tauriInvoke';
 import { libraryGetCacheSize } from '../../api/library';
 import { playbackGetAudioCacheSize } from '../../api/playback';
-import { getAppVersion } from '../../api/platform';
+import { getAppVersion, restartApp } from '../../api/platform';
+import { syncGetConfig, syncUploadNow, syncRestoreNow, type SyncConfig } from '../../api/sync';
 import { usePlayerStore } from '../../stores/player';
 import { useUiStore } from '../../stores/ui';
 import { registerBackHandler } from '../../composables/useMobileBack';
@@ -38,8 +39,11 @@ function getSourceIcon(kind: 'local' | 'webdav') {
   return kind === 'webdav' ? Server : HardDrive;
 }
 
-/* ===== 添加来源（MA1 A1-3） ===== */
-const emit = defineEmits<{ (e: 'add-local'): void }>();
+/* ===== 添加来源（MA1 A1-3, MA3 A3-2） ===== */
+const emit = defineEmits<{
+  (e: 'add-local'): void;
+  (e: 'add-webdav'): void;
+}>();
 
 /* ===== 删除来源：二次确认（P1-10 移动端落地） ===== */
 const removeTarget = ref<{ id: number; name: string; kind: string } | null>(null);
@@ -74,26 +78,152 @@ function fmtBytes(n: number): string {
   return n + ' B';
 }
 
+/* ============ 云端备份与恢复（MA3 A3-5） ============ */
+
+const syncConfig = ref<SyncConfig | null>(null);
+const syncing = ref(false);
+const syncFeedback = ref<{ type: 'ok' | 'err'; text: string } | null>(null);
+
+async function refreshSyncConfig() {
+  syncConfig.value = await syncGetConfig().catch(() => null);
+}
+
+async function onUploadBackup() {
+  if (syncing.value) return;
+  syncing.value = true;
+  syncFeedback.value = null;
+  try {
+    const res = await syncUploadNow();
+    syncFeedback.value = { type: 'ok', text: `备份成功（${fmtBytes(res.bytes_uploaded)}）` };
+    await refreshSyncConfig();
+  } catch (e: any) {
+    syncFeedback.value = { type: 'err', text: e?.message || '备份失败，请先在电脑端或设置中配置 WebDAV 同步' };
+  } finally {
+    syncing.value = false;
+  }
+}
+
+const showRestoreDialog = ref(false);
+const restoreInput = ref('');
+const restoring = ref(false);
+const showRestartConfirm = ref(false);
+
+function askRestore() {
+  restoreInput.value = '';
+  showRestoreDialog.value = true;
+}
+
+async function confirmRestore() {
+  if (restoreInput.value.trim() !== '恢复' || restoring.value) return;
+  restoring.value = true;
+  try {
+    await syncRestoreNow();
+    showRestoreDialog.value = false;
+    showRestartConfirm.value = true;
+  } catch (e: any) {
+    syncFeedback.value = { type: 'err', text: e?.message || '恢复失败，远端可能未备份或数据已损坏' };
+  } finally {
+    restoring.value = false;
+  }
+}
+
+function onRestartNow() {
+  restartApp();
+}
+
+/* ============ 检查更新与诊断（MA5 A5-4, A5-5） ============ */
+
+const checkingUpdate = ref(false);
+const updateInfo = ref<{ version: string; notes: string; url: string } | null>(null);
+const updateMsg = ref('');
+
+async function onCheckUpdate() {
+  if (checkingUpdate.value) return;
+  checkingUpdate.value = true;
+  updateMsg.value = '';
+  try {
+    const res = await fetch('https://api.github.com/repos/huanghao-9708/lumo/releases/latest');
+    if (!res.ok) {
+      updateMsg.value = '暂无法连接到更新服务器';
+      return;
+    }
+    const data = await res.json();
+    const latestTag = (data.tag_name || '').replace(/^v/, '');
+    const current = (appVersion.value || '').replace(/^v/, '');
+    if (latestTag && latestTag !== current) {
+      updateInfo.value = {
+        version: data.tag_name,
+        notes: data.body || '新版本已发布，包含体验改进与稳定性优化。',
+        url: data.html_url || 'https://github.com/huanghao-9708/lumo/releases',
+      };
+    } else {
+      updateMsg.value = '当前已是最新版本';
+    }
+  } catch (_e) {
+    updateMsg.value = '检查失败：请检查网络连接';
+  } finally {
+    checkingUpdate.value = false;
+  }
+}
+
+function openDownloadUrl(url: string) {
+  window.open(url, '_blank');
+}
+
+const logExported = ref(false);
+async function onExportDiagnostics() {
+  try {
+    const info = [
+      `=== LUMO 移动端诊断信息 ===`,
+      `应用版本: ${appVersion.value}`,
+      `数据源数量: ${playerStore.sources.length}`,
+      `曲库歌曲总数: ${playerStore.tracksTotalCount}`,
+      `存储占用: 封面 ${fmtBytes(storageInfo.value?.cover || 0)}, 音频缓存 ${fmtBytes(storageInfo.value?.audio || 0)}`,
+      `网络环境: ${navigator.onLine ? '在线' : '离线'}`,
+      `诊断生成时间: ${new Date().toISOString()}`,
+    ].join('\n');
+    await navigator.clipboard.writeText(info);
+    logExported.value = true;
+    setTimeout(() => { logExported.value = false; }, 3000);
+  } catch (e) {
+    console.error('Failed to copy diagnostics', e);
+  }
+}
+
 /* ============ 关于 ============ */
 
 const appVersion = ref('...');
 onMounted(async () => {
   appVersion.value = await getAppVersion().catch(() => '');
   refreshStorage();
+  refreshSyncConfig();
 });
 
 const isScanning = computed(() =>
   playerStore.sources.some(s => s.lastScanned === 'Scanning...')
 );
 
-/* ===== 返回拦截：删除确认弹层打开时优先关闭弹层 ===== */
-registerBackHandler(() => {
+/* ===== 返回拦截：弹层打开时优先关闭弹层 ===== */
+const unregisterBack = registerBackHandler(() => {
+  if (updateInfo.value) {
+    updateInfo.value = null;
+    return true;
+  }
+  if (showRestartConfirm.value) {
+    showRestartConfirm.value = false;
+    return true;
+  }
+  if (showRestoreDialog.value) {
+    showRestoreDialog.value = false;
+    return true;
+  }
   if (removeTarget.value) {
     removeTarget.value = null;
     return true;
   }
   return false;
 });
+onBeforeUnmount(unregisterBack);
 
 /* ============ MA0 Spike（仅开发构建渲染） ============ */
 
@@ -232,7 +362,6 @@ async function runProbe() {
             </p>
           </div>
           <button
-            v-if="source.kind === 'local'"
             class="flex-shrink-0 px-3 py-1 rounded-[6px] border border-border-solid text-[13px] font-medium text-text-secondary active:bg-list-hover transition-colors-smooth flex items-center gap-1"
             :disabled="isScanning"
             @click="scanSource(source.id)"
@@ -250,14 +379,72 @@ async function runProbe() {
         </div>
       </div>
 
-      <!-- 添加本地来源（MA1 A1-3） -->
-      <button
-        class="mt-3 w-full h-11 rounded-[10px] border border-dashed border-border-solid text-[14px] font-medium text-text-secondary active:bg-list-hover transition-colors-smooth flex items-center justify-center gap-2"
-        @click="emit('add-local')"
-      >
-        <Plus class="w-[16px] h-[16px]" aria-hidden="true" />
-        添加本地音乐目录
-      </button>
+      <!-- 添加来源（本地 / WebDAV） -->
+      <div class="mt-3 grid grid-cols-2 gap-2">
+        <button
+          class="h-11 rounded-[10px] border border-dashed border-border-solid text-[13px] font-medium text-text-secondary active:bg-list-hover transition-colors-smooth flex items-center justify-center gap-1.5"
+          @click="emit('add-local')"
+        >
+          <Plus class="w-[15px] h-[15px]" aria-hidden="true" />
+          添加本地目录
+        </button>
+        <button
+          class="h-11 rounded-[10px] border border-dashed border-border-solid text-[13px] font-medium text-text-secondary active:bg-list-hover transition-colors-smooth flex items-center justify-center gap-1.5"
+          @click="emit('add-webdav')"
+        >
+          <Server class="w-[15px] h-[15px]" aria-hidden="true" />
+          添加 WebDAV
+        </button>
+      </div>
+    </section>
+
+    <!-- ===== 云端备份与恢复（MA3 A3-5） ===== -->
+    <section class="px-4 py-1">
+      <div class="flex items-center justify-between px-1 py-2">
+        <h2 class="text-text-muted font-semibold uppercase tracking-widest" style="font-size: var(--text-10);">
+          云端备份与恢复 (WebDAV)
+        </h2>
+      </div>
+
+      <div class="rounded-[10px] bg-bg-canvas border border-border-color p-4 space-y-3">
+        <div class="flex items-center justify-between text-[13px]">
+          <span class="text-text-muted">备份状态</span>
+          <span v-if="syncConfig?.enabled" class="text-emerald-500 font-medium">已配置</span>
+          <span v-else class="text-text-disabled">未配置</span>
+        </div>
+
+        <div v-if="syncConfig?.last_sync_at" class="flex items-center justify-between text-[12px]">
+          <span class="text-text-muted">上次备份</span>
+          <span class="text-text-secondary font-mono">{{ syncConfig.last_sync_at }}</span>
+        </div>
+
+        <!-- 提示信息 -->
+        <div v-if="syncFeedback" class="p-2.5 rounded-[6px] text-[12px] flex items-center gap-2" :class="syncFeedback.type === 'ok' ? 'bg-emerald-500/10 text-emerald-600' : 'bg-red-500/10 text-red-600'">
+          <AlertCircle class="w-3.5 h-3.5 flex-shrink-0" />
+          <span>{{ syncFeedback.text }}</span>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2 pt-1">
+          <button
+            class="h-10 rounded-[8px] border border-border-solid text-[13px] font-medium text-text-secondary active:bg-list-hover transition-colors-smooth flex items-center justify-center gap-1.5 disabled:opacity-50"
+            :disabled="syncing"
+            @click="onUploadBackup"
+          >
+            <RefreshCw v-if="syncing" class="w-3.5 h-3.5 animate-spin" />
+            <CloudUpload v-else class="w-3.5 h-3.5" />
+            <span>{{ syncing ? '备份中…' : '备份到云端' }}</span>
+          </button>
+
+          <button
+            class="h-10 rounded-[8px] border border-border-solid text-[13px] font-medium text-text-secondary active:bg-list-hover transition-colors-smooth flex items-center justify-center gap-1.5 disabled:opacity-50"
+            :disabled="syncing || restoring"
+            @click="askRestore"
+          >
+            <CloudDownload class="w-3.5 h-3.5" />
+            <span>从云端恢复</span>
+          </button>
+        </div>
+      </div>
     </section>
 
     <!-- ===== 存储占用（MA1 A1-5） ===== -->
@@ -357,6 +544,29 @@ async function runProbe() {
         <p class="text-text-muted mt-2" style="font-size: var(--text-12);">
           本地音乐播放器 · 你的音乐，只属于你
         </p>
+
+        <!-- 检查更新提示 -->
+        <p v-if="updateMsg" class="text-text-secondary text-[12px] mt-2 pt-1 border-t border-border-color">
+          {{ updateMsg }}
+        </p>
+
+        <!-- 操作按钮 -->
+        <div class="grid grid-cols-2 gap-2 mt-3 pt-2 border-t border-border-color">
+          <button
+            class="h-9 rounded-[8px] border border-border-solid text-[13px] font-medium text-text-secondary active:bg-list-hover transition-colors-smooth flex items-center justify-center gap-1.5 disabled:opacity-50"
+            :disabled="checkingUpdate"
+            @click="onCheckUpdate"
+          >
+            <RefreshCw v-if="checkingUpdate" class="w-3.5 h-3.5 animate-spin" />
+            <span>{{ checkingUpdate ? '检查中…' : '检查更新' }}</span>
+          </button>
+          <button
+            class="h-9 rounded-[8px] border border-border-solid text-[13px] font-medium text-text-secondary active:bg-list-hover transition-colors-smooth flex items-center justify-center gap-1.5"
+            @click="onExportDiagnostics"
+          >
+            <span>{{ logExported ? '已复制诊断' : '导出诊断' }}</span>
+          </button>
+        </div>
       </div>
     </section>
 
@@ -389,6 +599,98 @@ async function runProbe() {
               @click="confirmRemove"
             >
               确认删除
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== 云端恢复二次防误触确认（MA3 A3-5） ===== -->
+      <div
+        v-if="showRestoreDialog"
+        class="fixed inset-0 z-[100] bg-black/50 flex items-end justify-center"
+        @click.self="showRestoreDialog = false"
+      >
+        <div class="w-full max-w-[420px] bg-bg-canvas rounded-t-[16px] px-5 pt-5 pb-8 animate-rise space-y-4">
+          <div class="w-10 h-1 rounded-full bg-border-solid mx-auto"></div>
+          <h3 class="text-[16px] font-semibold text-text-primary text-center">从云端恢复数据</h3>
+          <p class="text-[13px] text-text-muted text-center leading-relaxed">
+            恢复操作将从 WebDAV 下载最新备份快照，并<strong class="text-red-500">完全替换</strong>本机的歌单、收藏、历史和播放源记录。<br>
+            恢复后桌面添加的本地路径来源在手机端需要重新授权绑定。
+          </p>
+          <div class="space-y-1.5">
+            <label class="block text-[12px] text-text-muted">请输入「恢复」二字以确认操作：</label>
+            <input
+              v-model="restoreInput"
+              type="text"
+              placeholder="恢复"
+              class="w-full h-11 px-3 rounded-[8px] bg-bg-content border border-border-solid text-[14px] text-text-primary placeholder:text-text-disabled focus:outline-none focus:border-red-500 text-center font-medium"
+            />
+          </div>
+          <div class="flex gap-3 pt-2">
+            <button
+              class="flex-1 h-11 rounded-[10px] bg-bg-hover text-text-secondary text-[15px] font-medium active:opacity-85"
+              @click="showRestoreDialog = false"
+            >
+              取消
+            </button>
+            <button
+              class="flex-1 h-11 rounded-[10px] bg-red-500 text-white text-[15px] font-semibold active:opacity-85 disabled:opacity-40"
+              :disabled="restoreInput.trim() !== '恢复' || restoring"
+              @click="confirmRestore"
+            >
+              {{ restoring ? '恢复中…' : '确认覆盖恢复' }}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== 恢复成功重启提示（MA3 A3-5） ===== -->
+      <div
+        v-if="showRestartConfirm"
+        class="fixed inset-0 z-[100] bg-black/50 flex items-center justify-center p-4"
+      >
+        <div class="w-full max-w-[340px] bg-bg-canvas rounded-[16px] p-5 text-center space-y-3 border border-border-color shadow-xl">
+          <h3 class="text-[16px] font-semibold text-text-primary">数据恢复成功</h3>
+          <p class="text-[13px] text-text-muted leading-relaxed">
+            数据库已成功替换为云端快照。应用需要重新启动以加载新的音乐库与配置。
+          </p>
+          <button
+            class="w-full h-11 rounded-[10px] bg-brand-orange text-white text-[15px] font-semibold active:opacity-85"
+            @click="onRestartNow"
+          >
+            立即重启应用
+          </button>
+        </div>
+      </div>
+
+      <!-- ===== 发现新版本弹窗（MA5 A5-4） ===== -->
+      <div
+        v-if="updateInfo"
+        class="fixed inset-0 z-[100] bg-black/50 flex items-center justify-center p-4"
+        @click.self="updateInfo = null"
+      >
+        <div class="w-full max-w-[340px] bg-bg-canvas rounded-[16px] p-5 space-y-3 border border-border-color shadow-xl">
+          <div class="flex items-center justify-between">
+            <h3 class="text-[16px] font-semibold text-text-primary">发现新版本</h3>
+            <span class="text-[12px] font-mono text-brand-orange bg-brand-orange/10 px-2 py-0.5 rounded-full font-medium">
+              {{ updateInfo.version }}
+            </span>
+          </div>
+          <div class="max-h-[160px] overflow-y-auto rounded-[8px] bg-bg-content p-3 text-[12px] text-text-muted whitespace-pre-wrap leading-relaxed">
+            {{ updateInfo.notes }}
+          </div>
+          <div class="flex gap-2 pt-1">
+            <button
+              class="flex-1 h-10 rounded-[8px] bg-bg-hover text-text-secondary text-[14px] font-medium active:opacity-85"
+              @click="updateInfo = null"
+            >
+              稍后再说
+            </button>
+            <button
+              class="flex-1 h-10 rounded-[8px] bg-brand-orange text-white text-[14px] font-semibold active:opacity-85"
+              @click="openDownloadUrl(updateInfo.url)"
+            >
+              前往下载
             </button>
           </div>
         </div>

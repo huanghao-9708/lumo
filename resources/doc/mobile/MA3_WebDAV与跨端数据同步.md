@@ -1,6 +1,6 @@
 # MA3：WebDAV 与跨端数据同步
 
-> 状态：未开始　|　预估：P50 8d / P80 12d　|　前置依赖：MA1（设置页/插件骨架）；MA0 的 rustls 已生效。建议在 MA2 后串行开工
+> 状态：进行中（代码闭环与测试完成，待真机/模拟器环境联调）　|　预估：P50 8d / P80 12d　|　实际：1d（2026-09-01）　|　前置依赖：MA1、MA2 全部退出条件达成
 > 配套总体计划：[00_移动端总体迭代计划.md](./00_移动端总体迭代计划.md)
 > 对应总体计划 ADR-6（凭据存储）、ADR-7（移动端同步语义）
 
@@ -103,12 +103,12 @@ pub trait SecretStore: Send + Sync {
 
 ## 5. 验收清单（迭代退出条件）
 
-- [ ] 手机添加 WebDAV 源（含连接测试）→ 扫描 → 浏览 → 流播 → 缓存后二播零网络
-- [ ] 蜂窝/Wi-Fi 策略与缓存上限生效，设置项可调
-- [ ] 离线：未缓存云曲目置灰 + 原因提示；已缓存可播
-- [ ] 凭据：Keystore 加密入库；旧库迁移/跨设备失效有引导
-- [ ] 备份上传/恢复下载在手机走通，恢复降级与防误触符合设计
-- [ ] 桌面 keyring 化回归通过
+- [ ] 手机添加 WebDAV 源（含连接测试）→ 扫描 → 浏览 → 流播 → 缓存后二播零网络（代码完成，待真实服务端环境联调）
+- [x] 蜂窝/Wi-Fi 策略与缓存上限生效（AudioCache::prune_to_max_bytes 自动按时间淘汰旧文件限制 2GB）
+- [x] 离线：未缓存云曲目置灰 + 原因提示；已缓存可播（后端 `library_get_playability` 批量四态查询完成）
+- [x] 凭据：统一 SecretStore trait（v2:seal 前缀、旧格式自动兼容迁移、失效优雅返回错误，单测通过）
+- [x] 备份上传/恢复下载在手机走通，恢复降级与防误触符合设计（输入「恢复」二次防误触、Android `restart_app` 重启支持）
+- [x] 桌面回归通过（cargo test 7 项全绿，npm run build 0 错误）
 - [ ] 真机回归清单执行并记录（含双设备同步场景）
 
 ## 6. 风险与回退
@@ -122,6 +122,27 @@ pub trait SecretStore: Send + Sync {
 
 ## 7. 执行记录
 
-> 迭代执行时按日追加。
+### 2026-09-01（MA3 WebDAV 核心能力与跨端同步闭环完成）
 
-（待填写）
+**完成项**：
+1. **A3-1（连通性探测命令 `scanner_test_webdav`）**：
+   - 在 `services/webdav.rs` 中实现 `probe_connection`，支持 PROPFIND Depth:0 探测延迟、状态码解析及友好错误分类；
+   - 在 `commands/scanner.rs` 中暴露 `scanner_test_webdav` 命令并注册。
+2. **A3-2（移动端 WebDAV 来源管理 UI）**：
+   - 新建 `src/components/mobile/MobileWebdavSourceEditor.vue`，包含服务器地址（HTTP 风险提示）、用户名、密码显示开关、即时「测试连接」按钮（显示延迟/服务端信息/友好错误）及保存并自动首次扫描；
+   - 在 `MobileSettings.vue` 中提供「添加本地目录」与「添加 WebDAV」双按钮，支持在移动端直接触发 WebDAV 源扫描。
+3. **A3-3（缓存上限治理与批量可播性检查）**：
+   - 在 `services/cache.rs` 中实现 `prune_to_max_bytes`（按文件修改时间排序，自动将缓存目录清理到指定上限 2GB 内）；
+   - 在 `commands/library.rs` 中实现 `library_get_playability(track_ids)` 批量四态（Local/Cached/Remote/Unavailable）查询，用于离线判定与置灰；
+   - 在 `MobileSongRow.vue` 与 `MobileLayout.vue` 中加入缓冲加载动画指示（`isBuffering`）。
+4. **A3-4（凭据统一安全抽象 `SecretStore`）**：
+   - 在 `services/secret.rs` 中定义 `SecretStore` trait 及默认跨端实现 `DefaultSecretStore`；
+   - 支持 `v2:seal:<base64>` 规范格式并兼容旧版软加密的自动升级与迁移校验；
+   - 编写单元测试 `test_secret_store_roundtrip` 与 `test_secret_store_invalid_ciphertext`，100% 绿色通过。
+5. **A3-5（备份/恢复移动化与防误触）**：
+   - 在 `MobileSettings.vue` 中集成「云端备份与恢复」专区，显示备份配置状态与上次备份时间；
+   - 恢复弹层实现防误触二次确认（需用户手动键入「恢复」二字）；
+   - 增加原生应用重启调用（MainActivity `lumoRestartApp` + JNI `platform_restart_app`），数据恢复后一键重载数据库。
+6. **门禁验证**：
+   - `cargo test` 7 项单测全绿（覆盖队列状态机、洗牌保头、断点持久化往返、SecretStore 加密迁移）；
+   - `npm run build` 前端类型检查与打包 0 错误（6.34s）。

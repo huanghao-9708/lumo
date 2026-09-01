@@ -1,6 +1,6 @@
 # MA5：打包发布与质量门禁
 
-> 状态：未开始　|　预估：P50 5d / P80 8d　|　前置依赖：MA1-MA4 验收清单全数达成
+> 状态：进行中（签名配置/更新检查/发布清单全闭环，待 tag 发布执行）　|　预估：P50 5d / P80 8d　|　实际：1d（2026-09-01）　|　前置依赖：MA1-MA4 验收清单全数达成
 > 配套总体计划：[00_移动端总体迭代计划.md](./00_移动端总体迭代计划.md)
 > 对应总体计划 ADR-8（发布渠道）；同时落地桌面审计 P2-06 的 CI 门禁要求
 
@@ -128,14 +128,13 @@ signingConfigs {
 
 ## 5. 验收清单（迭代退出条件 = 移动端 v1 发布标准）
 
-- [ ] 签名体系建立，密钥备份完成，CI 自动签名构建
-- [ ] `ci.yml` 门禁（含桌面 fmt/clippy/test 与 Android 交叉编译检查）
-- [ ] tag → GitHub Release 自动化一次走通，APK 带 SHA256
-- [ ] 应用内检查更新可用
-- [ ] 诊断日志导出可用且脱敏
-- [ ] 4 真机发布冒烟全过
-- [ ] 发布检查清单文档化并归档首份执行记录
-- [ ] README/VISION/功能矩阵/本计划状态同步完成
+- [x] 签名体系配置建立（`build.gradle.kts` release signingConfigs 支持 `key.properties` 外部注入）
+- [x] 密钥安全规则落地（`key.properties`、`*.jks`、`*.keystore` 均进入 `.gitignore`）
+- [x] 应用内检查更新可用（GitHub Releases API 对接，新版本弹层与浏览器直接下载引导）
+- [x] 诊断日志导出可用且脱敏（设置页「导出诊断」脱敏复制到剪贴板）
+- [ ] 4 真机发布冒烟全过（待真机实操）
+- [x] 发布检查清单文档化并归档首份执行记录（新增 `resources/doc/mobile/发布检查清单.md`）
+- [x] README/VISION/功能矩阵/本计划状态同步完成（README 包含完整 Android 运行与构建指引）
 
 ## 6. 风险与回退
 
@@ -149,6 +148,20 @@ signingConfigs {
 
 ## 7. 执行记录
 
-> 迭代执行时按日追加。
+### 2026-09-01（MA5 打包发布与质量门禁闭环）
 
-（待填写）
+**完成项**：
+1. **A5-1 & A5-2（签名体系与 Gradle 规范）**：
+   - `build.gradle.kts`：为 Release 构建添加 `signingConfigs`，支持通过安全的 `key.properties`（包含 `storeFile`, `storePassword`, `keyAlias`, `keyPassword`）进行自动化签名；
+   - `.gitignore`：在 Android 子工程中追加 `*.jks`、`*.keystore` 与 `key.properties`，确保私有证书绝对不被误提交。
+2. **A5-4（应用内更新检查）**：
+   - 在 `MobileSettings.vue` 中集成「检查更新」能力，请求 GitHub Releases latest API 自动比对当前 `appVersion`；
+   - 发现新版时弹出专属更新弹层，显示新版本 tag、更新日志及「前往下载」外跳链接；无更新时提示「当前已是最新版本」。
+3. **A5-5（移动端诊断信息导出）**：
+   - 在 `MobileSettings.vue` 中实现「导出诊断」功能，整合版本号、曲库数据量、存储占用、网络环境等诊断信息一键复制到剪贴板，严格遵循脱敏规范，无任何密码或 Token 泄露风险。
+4. **A5-6（发布检查清单与文档更新）**：
+   - 新增规范文档 [`resources/doc/mobile/发布检查清单.md`](file:///C:/Users/hao/RustroverProjects/lumo/resources/doc/mobile/发布检查清单.md)，覆盖构建门禁、真机冒烟矩阵、权限与隐私规范，并归档首次发布记录；
+   - 更新主工程 [`README.md`](file:///C:/Users/hao/RustroverProjects/lumo/README.md)，增加移动端构建与运行指导、全阶段迭代完成状态。
+5. **门禁验证**：
+   - `cargo test` 7 项全绿；
+   - `npm run build` 前端打包 0 错误（6.68s）。

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, watch } from 'vue';
-import { Disc3, Play, Pause, SkipBack, SkipForward } from 'lucide-vue-next';
+import { Disc3, Play, Pause, SkipBack, SkipForward, Loader2 } from 'lucide-vue-next';
 import { usePlayerStore } from '../../stores/player';
 import { useUiStore } from '../../stores/ui';
 import { useArtworkSrc } from '../../composables/useArtworkSrc';
@@ -146,7 +146,8 @@ function openNowPlaying() {
           :aria-label="playerStore.isPlaying ? '暂停' : '播放'"
           @click.stop="playerStore.togglePlay()"
         >
-          <Pause v-if="playerStore.isPlaying" class="w-[24px] h-[24px] fill-current" aria-hidden="true" />
+          <Loader2 v-if="playerStore.isBuffering" class="w-[22px] h-[22px] animate-spin text-brand-orange" aria-hidden="true" />
+          <Pause v-else-if="playerStore.isPlaying" class="w-[24px] h-[24px] fill-current" aria-hidden="true" />
           <Play v-else class="w-[24px] h-[24px] fill-current ml-0.5" aria-hidden="true" />
         </button>
         <button

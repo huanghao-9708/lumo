@@ -14,11 +14,15 @@ import {
   libraryGetSmartPlaylist,
 } from '../api/library';
 import {
-  playbackPlay, playbackPause, playbackResume, playbackStop, playbackSetVolume, playbackGetPos, playbackSeek, playbackIsFinished, playbackEnqueueNext, playbackGetQueueLen
+  playbackPlay, playbackPause, playbackResume, playbackSetVolume, playbackSeek
 } from '../api/playback';
 import {
   sourceAddLocal, sourceAddWebdav, sourceList, sourceRemove, sourceScan
 } from '../api/scanner';
+import {
+  playbackSetQueue, playbackQueueState, playbackAdvance, playbackSetMode,
+  type QueueItemDTO, type BackendPlayMode
+} from '../api/queue';
 
 
 // ================= 后端 DTO 接口（与 Rust 端 models.rs 保持一致） =================
@@ -122,6 +126,28 @@ interface PlaylistDetails extends Playlist {
   isLoadingTracks: boolean;
 }
 
+function toBackendPlayMode(mode: 'normal' | 'repeat' | 'repeat-one' | 'shuffle'): BackendPlayMode {
+  switch (mode) {
+    case 'repeat': return 'repeatAll';
+    case 'repeat-one': return 'repeatOne';
+    case 'shuffle': return 'shuffle';
+    case 'normal':
+    default:
+      return 'normal';
+  }
+}
+
+function fromBackendPlayMode(mode: BackendPlayMode): 'normal' | 'repeat' | 'repeat-one' | 'shuffle' {
+  switch (mode) {
+    case 'repeatAll': return 'repeat';
+    case 'repeatOne': return 'repeat-one';
+    case 'shuffle': return 'shuffle';
+    case 'normal':
+    default:
+      return 'normal';
+  }
+}
+
 // ================= Store 实现 =================
 
 export const usePlayerStore = defineStore("player", () => {
@@ -185,6 +211,7 @@ export const usePlayerStore = defineStore("player", () => {
 
   // 基础状态
   const isPlaying = ref(false);
+  const isBuffering = ref(false);
   const volume = ref(75);
 
   const queue = ref<Track[]>([]);
@@ -192,7 +219,6 @@ export const usePlayerStore = defineStore("player", () => {
   const playMode = ref<'normal'|'repeat'|'repeat-one'|'shuffle'>('normal');
   const progressMs = ref(0);
   const durationMs = ref(0);
-  let progressTimer: ReturnType<typeof setInterval> | null = null;
 
   const currentTrackFileInfo = ref<TrackFileInfoDTO | null>(null);
   const isErrorTracks = ref(false);
@@ -1266,6 +1292,7 @@ const albums = shallowRef<Album[]>([]);
   });
   watch(playMode, (newMode) => {
     localStorage.setItem('lumo_play_mode', newMode);
+    playbackSetMode(toBackendPlayMode(newMode)).catch(e => console.warn('Failed to sync playMode to backend:', e));
   });
   watch(volume, (newVol) => {
     localStorage.setItem('lumo_volume', String(newVol));
@@ -1407,7 +1434,6 @@ const albums = shallowRef<Album[]>([]);
           await playbackResume();
         }
         isPlaying.value = true;
-        startProgressPolling();
         startProgressAutoSave();
         if ('mediaSession' in navigator) {
           navigator.mediaSession.playbackState = 'playing';
@@ -1418,190 +1444,145 @@ const albums = shallowRef<Album[]>([]);
     }
   }
 
-  let actualListenMs = 0;
-  let hasEnqueuedNext = false;
-  let enqueuedTrackIndex: number | null = null;
+  // ================= 播放推进事件监听 (MA2: ADR-3) =================
+  listen<{ index: number; track: any }>('playback-track-changed', (event) => {
+    const { index } = event.payload;
+    if (index >= 0 && index < queue.value.length) {
+      currentIndex.value = index;
+      const track = queue.value[index];
+      hasLoadedCurrentFile.value = true;
+      isPlaying.value = true;
+      progressMs.value = 0;
+      durationMs.value = track.durationSec ? track.durationSec * 1000 : 0;
+      updateMediaSessionMetadata(track);
+    }
+  });
 
-  // Shuffle 模式播放历史栈：记录已播放的 index，用于 prevTrack 精确回退
-  const playHistory: number[] = [];
-  const MAX_PLAY_HISTORY = 100;
+  listen<{ position: number }>('playback-progress', (event) => {
+    progressMs.value = event.payload.position;
+    if (isBuffering.value) {
+      isBuffering.value = false;
+    }
+  });
 
-  async function startProgressPolling() {
-    if (progressTimer) clearInterval(progressTimer);
-    progressTimer = setInterval(async () => {
-      if (!isPlaying.value) return;
-      actualListenMs += 500;
-      try {
-        const pos = await playbackGetPos();
-        progressMs.value = pos;
-
-        /**
-         * 无缝播放 (Gapless Playback) 预加载逻辑：
-         * 倒数 5 秒时，将下一首歌送入底层解码器队列。
-         */
-        if (!hasEnqueuedNext && durationMs.value > 0 && pos >= durationMs.value - 5000) {
-            let nextIdx: number | null = currentIndex.value;
-            if (playMode.value === 'shuffle') {
-              nextIdx = Math.floor(Math.random() * queue.value.length);
-            } else if (playMode.value === 'repeat-one') {
-              nextIdx = currentIndex.value;
-            } else if (playMode.value === 'repeat') {
-              nextIdx = (currentIndex.value + 1) % queue.value.length;
-            } else if (currentIndex.value + 1 < queue.value.length) {
-              nextIdx = currentIndex.value + 1;
-            } else {
-              // Normal mode ends at the last track; do not enqueue the first one again.
-              nextIdx = null;
-            }
-
-            const nextTrackObj = nextIdx === null ? undefined : queue.value[nextIdx];
-            if (nextIdx !== null && nextTrackObj && nextTrackObj.primary_file_id) {
-             try {
-                await playbackEnqueueNext(nextTrackObj.primary_file_id, !navigator.onLine);
-                hasEnqueuedNext = true;
-                                enqueuedTrackIndex = nextIdx;
-             } catch(e) {
-                console.error("[Gapless] Failed to enqueue next track", e);
-             }
-           }
-        }
-
-        /**
-         * 状态轮询：静默状态切换 (Silent Switch)
-         * 当队列长度回归到 1，说明第一首刚好播完，物理上已经进入了无缝的新一首。
-         * 我们在这里偷偷切换前端的 UI 状态，不发 play 指令。
-         */
-        if (hasEnqueuedNext) {
-           try {
-             const queueLen = await playbackGetQueueLen();
-             if (queueLen === 1) {
-                console.log("[Gapless] Silent transition to next track!");
-                if (queue.value && queue.value[currentIndex.value] && actualListenMs > 0) {
-                    recordPlay(queue.value[currentIndex.value].id, actualListenMs, queue.value[currentIndex.value].primary_file_id);
-                }
-
-                currentIndex.value = enqueuedTrackIndex as number;
-                const newTrack = queue.value[currentIndex.value];
-                actualListenMs = 0;
-                 durationMs.value = newTrack.durationSec ? newTrack.durationSec * 1000 : 0;
-                 progressMs.value = 0;
-                 updateMediaSessionMetadata(newTrack);
-                 hasEnqueuedNext = false;
-                                enqueuedTrackIndex = null;
-
-                return;
-             }
-           } catch(e) {}
-           return; // 已预加载 gapless，跳过下方传统兜底，避免竞态
-        }
-
-        // 传统切歌兜底判定
-        const reachedEnd = durationMs.value > 0 && pos >= durationMs.value - 500;
-        let backendFinished = false;
-        if (!reachedEnd) {
-          try {
-            backendFinished = await playbackIsFinished();
-          } catch {
-            // 忽略
-          }
-        }
-        if (reachedEnd || backendFinished) {
-          nextTrack(true);
-        }
-      } catch (e) {
-        console.error(e);
+  listen<{ is_playing: boolean }>('playback-status-changed', (event) => {
+    if (event.payload && typeof event.payload.is_playing === 'boolean') {
+      isPlaying.value = event.payload.is_playing;
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.playbackState = isPlaying.value ? 'playing' : 'paused';
       }
-    }, 500);
+    }
+  });
+
+  listen<{ index: number; message: string }>('playback-error', (event) => {
+    console.error('[playback-error] 播放失败:', event.payload);
+    isPlaying.value = false;
+    isBuffering.value = false;
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.playbackState = 'paused';
+    }
+  });
+
+  // 前后台对账：恢复前台时与 Rust 权威队列同步
+  async function syncQueueStateFromBackend() {
+    try {
+      const state = await playbackQueueState();
+      if (state && state.items.length > 0) {
+        if (queue.value.length === 0) {
+          queue.value = state.items.map(item => ({
+            id: item.trackId,
+            title: item.title,
+            artistId: null,
+            artist: item.artist,
+            albumId: null,
+            album: item.album,
+            duration: formatTime((item.durationMs ?? 0) / 1000),
+            durationSec: Math.floor((item.durationMs ?? 0) / 1000),
+            format: 'UNKNOWN',
+            coverColor: getDeterministicColor(item.album || item.title || 'Unknown'),
+            cover_artwork_id: item.artworkId,
+            isFavorite: false,
+            primary_file_id: item.mediaFileId,
+            fileSize: null,
+            sourceKind: 'local',
+          }));
+        }
+        currentIndex.value = state.index;
+        progressMs.value = state.positionMs;
+        playMode.value = fromBackendPlayMode(state.mode);
+        const currentTrack = queue.value[state.index];
+        if (currentTrack) {
+          durationMs.value = currentTrack.durationSec ? currentTrack.durationSec * 1000 : 0;
+        }
+      }
+    } catch (e) {
+      console.warn('[QueueSync] Failed to sync queue state:', e);
+    }
   }
 
-  async function playQueue(newQueue: Track[], index: number, skipHistoryPush = false) {
-    // 切歌前记录上一首的播放时长
-    if (queue.value && queue.value[currentIndex.value] && actualListenMs > 0) {
-      recordPlay(queue.value[currentIndex.value].id, actualListenMs, queue.value[currentIndex.value].primary_file_id);
-    }
-
-    // 记录播放历史（用于 shuffle 模式 prevTrack 精确回退）
-    if (!skipHistoryPush && currentIndex.value >= 0 && currentIndex.value < queue.value.length) {
-      playHistory.push(currentIndex.value);
-      if (playHistory.length > MAX_PLAY_HISTORY) {
-        playHistory.shift();
+  if (typeof window !== 'undefined') {
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        syncQueueStateFromBackend();
       }
-    }
+    });
+  }
 
+  async function playQueue(newQueue: Track[], index: number, _skipHistoryPush = false) {
     queue.value = [...newQueue];
     currentIndex.value = index;
     const track = queue.value[index];
-    actualListenMs = 0;
-    if (track && track.primary_file_id) {
+    if (track) {
       durationMs.value = track.durationSec ? track.durationSec * 1000 : 0;
       progressMs.value = 0;
+      isPlaying.value = true;
+      isBuffering.value = true;
+      hasLoadedCurrentFile.value = true;
+
+      const items: QueueItemDTO[] = newQueue.map(t => ({
+        trackId: t.id,
+        mediaFileId: t.primary_file_id || 0,
+        title: t.title,
+        artist: t.artist,
+        album: t.album,
+        artworkId: t.cover_artwork_id || null,
+        durationMs: t.durationSec ? t.durationSec * 1000 : null,
+      }));
+
       try {
-        const playbackDuration = await playbackPlay(track.primary_file_id, !navigator.onLine);
-        if (playbackDuration && playbackDuration > 0) {
-          durationMs.value = playbackDuration;
-        }
-        isPlaying.value = true;
-        hasLoadedCurrentFile.value = true;
-        startProgressPolling();
-        startProgressAutoSave();
+        await playbackSetQueue(items, index, toBackendPlayMode(playMode.value));
         persistPlayQueueIfNeeded();
-        // 同步系统媒体通知元数据
         updateMediaSessionMetadata(track);
         if ('mediaSession' in navigator) {
           navigator.mediaSession.playbackState = 'playing';
         }
       } catch (e) {
-        console.error("Play failed:", e);
+        console.error("Set queue failed:", e);
+        isPlaying.value = false;
+        isBuffering.value = false;
+        if ('mediaSession' in navigator) {
+          navigator.mediaSession.playbackState = 'paused';
+        }
       }
     }
   }
 
-  async function nextTrack(isAuto = false) {
-    // 重置 gapless 状态，防止竞态残留
-    hasEnqueuedNext = false;
-    enqueuedTrackIndex = null;
+  async function nextTrack(_isAuto = false) {
     if (queue.value.length === 0) return;
-    if (isAuto && playMode.value === 'repeat-one') {
-      await playQueue(queue.value, currentIndex.value, true);
-      return;
+    try {
+      await playbackAdvance(1);
+    } catch (e) {
+      console.error("Advance next failed:", e);
     }
-    if (isAuto && playMode.value === 'normal' && currentIndex.value >= queue.value.length - 1) {
-      try {
-        await playbackStop();
-      } catch (e) {
-        console.error("Failed to stop playback at end of queue:", e);
-      }
-      isPlaying.value = false;
-      hasLoadedCurrentFile.value = false;
-      actualListenMs = 0;
-      if (progressTimer) {
-        clearInterval(progressTimer);
-        progressTimer = null;
-      }
-      stopProgressAutoSave();
-      if ('mediaSession' in navigator) {
-        navigator.mediaSession.playbackState = 'paused';
-      }
-      return;
-    }
-    if (playMode.value === 'shuffle') {
-      currentIndex.value = Math.floor(Math.random() * queue.value.length);
-    } else {
-      currentIndex.value = (currentIndex.value + 1) % queue.value.length;
-    }
-    await playQueue(queue.value, currentIndex.value);
   }
 
   async function prevTrack() {
     if (queue.value.length === 0) return;
-    if (playMode.value === 'shuffle' && playHistory.length > 0) {
-      currentIndex.value = playHistory.pop()!;
-    } else if (playMode.value === 'shuffle') {
-      currentIndex.value = Math.floor(Math.random() * queue.value.length);
-    } else {
-      currentIndex.value = (currentIndex.value - 1 + queue.value.length) % queue.value.length;
+    try {
+      await playbackAdvance(-1);
+    } catch (e) {
+      console.error("Advance prev failed:", e);
     }
-    await playQueue(queue.value, currentIndex.value, true);
   }
 
   async function setVolume(v: number) {
@@ -1623,23 +1604,27 @@ const albums = shallowRef<Album[]>([]);
   }
 
   // 来源管理 actions
-  async function addSource(kind: 'local' | 'webdav', name: string, path: string, username?: string, password?: string) {
+  async function addSource(kind: 'local' | 'webdav', name: string, path: string, username?: string, password?: string): Promise<number> {
     if (kind === 'local') {
         try {
             const id: number = await sourceAddLocal(path, name);
             sources.value.push({ id, kind, name, path, isEnabled: true, lastScanned: "Never", username });
+            return id;
         } catch (e) {
             console.error("Failed to add local source:", e);
+            throw e;
         }
     } else if (kind === 'webdav') {
         try {
             const id: number = await sourceAddWebdav(path, name, username, password);
             sources.value.push({ id, kind, name, path, isEnabled: true, lastScanned: "Never", username });
+            return id;
         } catch (e) {
             console.error("Failed to add webdav source:", e);
             throw e; // throw error so UI can show it
         }
     }
+    throw new Error('Unsupported source kind');
   }
 
   async function fetchSources() {
@@ -1801,6 +1786,7 @@ const albums = shallowRef<Album[]>([]);
 
   return {
     isPlaying,
+    isBuffering,
     volume,
     queue,
     currentIndex,
@@ -1880,6 +1866,7 @@ const albums = shallowRef<Album[]>([]);
     formatTime,
     togglePlay,
     playQueue,
+    recordPlay,
     nextTrack,
     prevTrack,
     setVolume,

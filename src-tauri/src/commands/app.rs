@@ -38,3 +38,9 @@ pub fn platform_storage_suggestions() -> Vec<String> {
 pub fn platform_finish_app() -> Result<(), String> {
     platform::finish_app()
 }
+
+/// 重启应用（数据恢复后的进程重载路径，MA3 A3-5）。
+#[tauri::command]
+pub fn platform_restart_app() -> Result<(), String> {
+    platform::restart_app()
+}

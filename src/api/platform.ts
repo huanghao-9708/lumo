@@ -27,3 +27,11 @@ export function storageSuggestions(): Promise<string[]> {
 export function getAppVersion(): Promise<string> {
   return invoke('app_get_version');
 }
+
+export function finishApp(): Promise<void> {
+  return invoke('platform_finish_app');
+}
+
+export function restartApp(): Promise<void> {
+  return invoke('platform_restart_app');
+}

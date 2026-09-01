@@ -82,6 +82,44 @@ mod android {
         call_void_method("lumoFinishApp")
     }
 
+    pub fn restart_app() -> Result<(), String> {
+        call_void_method("lumoRestartApp")
+    }
+
+    pub fn update_foreground(
+        title: &str,
+        artist: &str,
+        album: &str,
+        is_playing: bool,
+        position_ms: u64,
+        duration_ms: u64,
+    ) -> Result<(), String> {
+        with_activity(|env, activity| {
+            let j_title = env.new_string(title).map_err(|e| e.to_string())?;
+            let j_artist = env.new_string(artist).map_err(|e| e.to_string())?;
+            let j_album = env.new_string(album).map_err(|e| e.to_string())?;
+            env.call_method(
+                activity,
+                "lumoUpdateForeground",
+                "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZJJ)V",
+                &[
+                    (&j_title).into(),
+                    (&j_artist).into(),
+                    (&j_album).into(),
+                    is_playing.into(),
+                    (position_ms as i64).into(),
+                    (duration_ms as i64).into(),
+                ],
+            )
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+        })
+    }
+
+    pub fn stop_foreground() -> Result<(), String> {
+        call_void_method("lumoStopForeground")
+    }
+
     /// 候选音乐目录探测（纯文件系统，无需 Kotlin）。
     /// 注意：无权限时 is_dir 返回 false，自然返回空列表。
     pub fn storage_suggestions() -> Vec<String> {
@@ -128,6 +166,85 @@ mod android {
     ) {
         emit("lumo-permission-result", granted != 0);
     }
+
+    #[no_mangle]
+    pub extern "system" fn Java_com_hao_lumo_MediaPlaybackServiceKt_lumoNativeMediaAction(
+        _env: JNIEnv,
+        _this: JObject,
+        action: jni::sys::jint,
+        param: jni::sys::jlong,
+    ) {
+        if let Some(app) = APP_HANDLE.get() {
+            let app_handle = app.clone();
+            std::thread::spawn(move || {
+                match action {
+                    1 => { // ACTION_PLAY
+                        if let Some(ps) = app_handle.try_state::<crate::commands::playback::PlaybackState>() {
+                            if let Ok(m) = ps.manager.lock() {
+                                m.resume();
+                                let pos = m.get_pos();
+                                drop(m);
+                                if let Some(qs) = app_handle.try_state::<crate::services::queue::QueueState>() {
+                                    if let Ok(q) = qs.queue.lock() {
+                                        if let Some(item) = q.current_item() {
+                                            let _ = update_foreground(&item.title, &item.artist, &item.album, true, pos, item.duration_ms.unwrap_or(0));
+                                        }
+                                    }
+                                }
+                                let _ = app_handle.emit("playback-status-changed", serde_json::json!({ "is_playing": true }));
+                            }
+                        }
+                    }
+                    2 => { // ACTION_PAUSE
+                        if let Some(ps) = app_handle.try_state::<crate::commands::playback::PlaybackState>() {
+                            if let Ok(m) = ps.manager.lock() {
+                                m.pause();
+                                let pos = m.get_pos();
+                                drop(m);
+                                if let Some(qs) = app_handle.try_state::<crate::services::queue::QueueState>() {
+                                    if let Ok(q) = qs.queue.lock() {
+                                        if let Some(item) = q.current_item() {
+                                            let _ = update_foreground(&item.title, &item.artist, &item.album, false, pos, item.duration_ms.unwrap_or(0));
+                                        }
+                                    }
+                                }
+                                let _ = app_handle.emit("playback-status-changed", serde_json::json!({ "is_playing": false }));
+                            }
+                        }
+                    }
+                    3 => { // ACTION_NEXT
+                        if let (Some(qs), Some(ps)) = (
+                            app_handle.try_state::<crate::services::queue::QueueState>(),
+                            app_handle.try_state::<crate::commands::playback::PlaybackState>()
+                        ) {
+                            let _ = crate::commands::queue::playback_advance(app_handle.clone(), qs, ps, 1);
+                        }
+                    }
+                    4 => { // ACTION_PREV
+                        if let (Some(qs), Some(ps)) = (
+                            app_handle.try_state::<crate::services::queue::QueueState>(),
+                            app_handle.try_state::<crate::commands::playback::PlaybackState>()
+                        ) {
+                            let _ = crate::commands::queue::playback_advance(app_handle.clone(), qs, ps, -1);
+                        }
+                    }
+                    5 => { // ACTION_SEEK
+                        if let Some(ps) = app_handle.try_state::<crate::commands::playback::PlaybackState>() {
+                            if let Ok(m) = ps.manager.lock() { let _ = m.try_seek(param as u64); }
+                        }
+                    }
+                    6 => { // ACTION_STOP
+                        if let Some(ps) = app_handle.try_state::<crate::commands::playback::PlaybackState>() {
+                            if let Ok(m) = ps.manager.lock() { m.stop(); }
+                        }
+                        let _ = stop_foreground();
+                        let _ = app_handle.emit("playback-status-changed", serde_json::json!({ "is_playing": false }));
+                    }
+                    _ => {}
+                }
+            });
+        }
+    }
 }
 
 #[cfg(target_os = "android")]
@@ -149,8 +266,24 @@ pub mod desktop {
     pub fn finish_app() -> Result<(), String> {
         Ok(())
     }
+    pub fn restart_app() -> Result<(), String> {
+        Ok(())
+    }
     pub fn storage_suggestions() -> Vec<String> {
         Vec::new()
+    }
+    pub fn update_foreground(
+        _title: &str,
+        _artist: &str,
+        _album: &str,
+        _is_playing: bool,
+        _position_ms: u64,
+        _duration_ms: u64,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    pub fn stop_foreground() -> Result<(), String> {
+        Ok(())
     }
 }
 

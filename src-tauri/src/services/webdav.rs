@@ -15,6 +15,16 @@ pub struct WebdavFile {
     pub last_modified: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebdavProbeResult {
+    pub ok: bool,
+    pub latency_ms: u64,
+    pub server_header: Option<String>,
+    pub status_code: Option<u16>,
+    pub error: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct WebdavClient {
     pub client: Client,
@@ -44,6 +54,74 @@ impl WebdavClient {
             req.basic_auth(u, Some(p))
         } else {
             req
+        }
+    }
+
+    /// [MA3 A3-1] 测试 WebDAV 服务器连接连通性与权限
+    pub fn probe_connection(&self) -> WebdavProbeResult {
+        let start = std::time::Instant::now();
+        let url = if self.base_url.is_empty() {
+            "http://localhost".to_string()
+        } else {
+            format!("{}/", self.base_url)
+        };
+
+        let req = self.client.request(
+            reqwest::Method::from_bytes(b"PROPFIND").unwrap_or(reqwest::Method::GET),
+            &url,
+        ).header("Depth", "0");
+        let req = self.apply_auth(req);
+
+        match req.send() {
+            Ok(resp) => {
+                let latency_ms = start.elapsed().as_millis() as u64;
+                let status = resp.status();
+                let server = resp.headers().get("server")
+                    .and_then(|h| h.to_str().ok())
+                    .map(|s| s.to_string());
+
+                if status.is_success() || status.as_u16() == 207 {
+                    WebdavProbeResult {
+                        ok: true,
+                        latency_ms,
+                        server_header: server,
+                        status_code: Some(status.as_u16()),
+                        error: None,
+                    }
+                } else {
+                    let err_msg = match status.as_u16() {
+                        401 => "认证失败：用户名或密码错误 (401 Unauthorized)".to_string(),
+                        403 => "拒绝访问：权限不足 (403 Forbidden)".to_string(),
+                        404 => "路径不存在：请检查服务器地址路径 (404 Not Found)".to_string(),
+                        _ => format!("服务器返回状态码: {}", status),
+                    };
+                    WebdavProbeResult {
+                        ok: false,
+                        latency_ms,
+                        server_header: server,
+                        status_code: Some(status.as_u16()),
+                        error: Some(err_msg),
+                    }
+                }
+            }
+            Err(e) => {
+                let latency_ms = start.elapsed().as_millis() as u64;
+                let err_str = e.to_string();
+                let friendly_err = if e.is_timeout() {
+                    "连接超时：请检查网络或服务器地址是否可达".to_string()
+                } else if e.is_connect() {
+                    "连接失败：无法连接到目标服务器或域名解析失败".to_string()
+                } else {
+                    format!("网络请求失败: {}", err_str)
+                };
+                WebdavProbeResult {
+                    ok: false,
+                    latency_ms,
+                    server_header: None,
+                    status_code: None,
+                    error: Some(friendly_err),
+                }
+            }
         }
     }
 

@@ -149,4 +149,42 @@ impl AudioCache {
         }
         total
     }
+
+    /// [MA3 A3-3] 按最旧访问/修改时间清理缓存直到低于 max_bytes 上限
+    pub fn prune_to_max_bytes(&self, max_bytes: u64) -> u64 {
+        let mut files: Vec<(PathBuf, u64, std::time::SystemTime)> = Vec::new();
+        let mut total_size: u64 = 0;
+
+        if let Ok(entries) = fs::read_dir(&self.cache_dir) {
+            for entry in entries.flatten() {
+                if let Ok(meta) = entry.metadata() {
+                    if meta.is_file() {
+                        let size = meta.len();
+                        let mtime = meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                        total_size += size;
+                        files.push((entry.path(), size, mtime));
+                    }
+                }
+            }
+        }
+
+        if total_size <= max_bytes {
+            return 0;
+        }
+
+        // 按修改时间升序排列（最旧的在前面）
+        files.sort_by_key(|f| f.2);
+
+        let mut freed: u64 = 0;
+        for (path, size, _) in files {
+            if total_size.saturating_sub(freed) <= max_bytes {
+                break;
+            }
+            if fs::remove_file(&path).is_ok() {
+                freed += size;
+            }
+        }
+        info!("Audio cache pruned, freed {} bytes, remaining ~{} bytes", freed, total_size.saturating_sub(freed));
+        freed
+    }
 }

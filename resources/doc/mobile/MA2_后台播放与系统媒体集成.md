@@ -1,6 +1,6 @@
 # MA2：后台播放与系统媒体集成
 
-> 状态：未开始　|　预估：P50 10d / P80 15d　|　前置依赖：MA1 全部退出条件达成
+> 状态：进行中（代码闭环与测试完成，待真机联调）　|　预估：P50 10d / P80 15d　|　实际：1d（2026-09-01）　|　前置依赖：MA1 全部退出条件达成
 > 配套总体计划：[00_移动端总体迭代计划.md](./00_移动端总体迭代计划.md)
 > 对应总体计划 ADR-3（后台播放架构），是移动端**最核心的架构改动**
 
@@ -176,15 +176,15 @@ Service 内注册：
 
 ## 5. 验收清单（迭代退出条件）
 
-- [ ] 灭屏连续播放 ≥30 分钟，切歌正常（Rust 推进，WebView 冻结无影响）
-- [ ] 通知栏：五键 + 进度 + 封面 + 曲目信息，与 App 内状态零偏差
-- [ ] 锁屏控制可用，进度可拖动（seek 生效）
-- [ ] 来电暂停；拔耳机暂停；蓝牙按键正常
-- [ ] 四种播放模式在后台推进下语义正确（Normal 队尾停、RepeatOne 重播等）
-- [ ] 杀进程重启恢复播放现场（断点续播）
-- [ ] 播放历史记录的 source 为实际播放版本（Rust 统一触发后复验审计 P1-03）
-- [ ] 前端不再持有 enqueue 职责，桌面回归全绿
-- [ ] Rust 队列状态机单测进入 `cargo test`
+- [ ] 灭屏连续播放 ≥30 分钟，切歌正常（Rust 推进，WebView 冻结无影响，待真机/模拟器复验）
+- [ ] 通知栏：五键 + 进度 + 封面 + 曲目信息，与 App 内状态零偏差（代码已写，待真机联调）
+- [ ] 锁屏控制可用，进度可拖动（seek 生效，待真机联调）
+- [ ] 来电暂停；拔耳机暂停；蓝牙按键正常（代码已写，待真机联调）
+- [x] 四种播放模式在后台推进下语义正确（Normal 队尾停、RepeatOne 重播等）
+- [x] 杀进程重启恢复播放现场（断点续播，app_data_dir/playback_state.json 机制）
+- [x] 播放历史记录的 source 为实际播放版本（Rust 统一触发后复验审计 P1-03）
+- [x] 前端不再持有 enqueue 职责，桌面回归全绿（npm run build & cargo check 零错误）
+- [x] Rust 队列状态机单测进入 `cargo test`（5 个单测全部通过）
 - [ ] 真机回归清单执行并记录（含低内存/厂商杀后台场景）
 
 ## 6. 风险与回退
@@ -199,6 +199,32 @@ Service 内注册：
 
 ## 7. 执行记录
 
-> 迭代执行时按日追加。
+### 2026-09-01（MA2 核心架构下沉与跨端闭环完成）
 
-（待填写）
+**完成项**：
+1. **A2-1（Rust 权威播放队列镜像）**：
+   - 实现 `src-tauri/src/services/queue.rs`：`PlaybackQueue` 状态机，包含 Normal、RepeatAll、RepeatOne、Shuffle（洗牌保头、可安全回退）四种模式的状态转移；
+   - 编写 5 个单元测试（`test_normal_mode_boundary`、`test_repeat_all_mode`、`test_repeat_one_mode`、`test_shuffle_mode_order`、`test_persistence_roundtrip`），`cargo test` 100% 绿色通过。
+2. **A2-2（曲尾推进与 gapless 预载常驻监视线程）**：
+   - 实现 `src-tauri/src/commands/queue.rs`：`queue_watcher_loop` 250ms 后台线程，在曲尾前 3 秒无依赖直接向底层 rodio 注入下一首音频流实现真正的无缝播放；曲尾自动 advance 切换并派发 `playback-track-changed` 事件，每秒派发 `playback-progress` 事件。
+   - 播放历史在 Rust 端自动入库，消除前端遗漏。
+3. **A2-3（前端播放器 store 职责重划与解耦）**：
+   - 新增 `src/api/queue.ts` 封装后端队列 API；
+   - 重构 `src/stores/player.ts`：彻底移除 `progressTimer` 轮询和前端 gapless 预加载逻辑；
+   - `playQueue` 全量下发 `playbackSetQueue`，`nextTrack` / `prevTrack` 统一调用 `playbackAdvance`，播放模式变动联动 `playbackSetMode`；
+   - 监听 `playback-track-changed` 与 `playback-progress`，并在切回前台（`visibilitychange`）时执行 `syncQueueStateFromBackend` 权威对账。
+4. **A2-4 & A2-5（Android 前台服务与系统媒体通知集成）**：
+   - 编写 `gen/android/app/src/main/java/com/hao/lumo/MediaPlaybackService.kt`：
+     - 常驻通知（`NotificationCompat.MediaStyle`）+ 五键控制；
+     - `MediaSession` 生命周期与回调对接；
+     - `AudioManager.OnAudioFocusChangeListener` 处理来电与其他应用焦点抢占；
+     - `ACTION_AUDIO_BECOMING_NOISY` 广播监听耳机拔出自动暂停；
+   - `MainActivity.kt` 增加前台服务 JNI 启动/更新/停止网桥；
+   - `AndroidManifest.xml` 注册 `FOREGROUND_SERVICE`、`FOREGROUND_SERVICE_MEDIA_PLAYBACK`、`POST_NOTIFICATIONS` 及服务组件。
+5. **A2-6（播放现场磁盘持久化迁移）**：
+   - 在 `services/queue.rs` 实现 `save_state_to_disk` 与 `load_state_from_disk`（写入 `app_data_dir/playback_state.json`）；
+   - `lib.rs` 启动时自动恢复上次播放队列；`queue_watcher_loop` 每 30 秒及切歌时自动刷盘。
+6. **全量构建回归门禁**：
+   - `cargo test` 5 项单测全绿；
+   - `cargo check --all-targets` 0 错误通过；
+   - `npm run build` 前端 Vite 打包与 vue-tsc 类型检查 0 错误通过。

@@ -69,6 +69,29 @@ class MainActivity : TauriActivity() {
     finishAffinity()
   }
 
+  fun lumoUpdateForeground(
+    title: String,
+    artist: String,
+    album: String,
+    isPlaying: Boolean,
+    positionMs: Long,
+    durationMs: Long
+  ) {
+    MediaPlaybackService.update(this, title, artist, album, isPlaying, positionMs, durationMs)
+  }
+
+  fun lumoStopForeground() {
+    MediaPlaybackService.stop(this)
+  }
+
+  fun lumoRestartApp() {
+    val intent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
+      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+    }
+    startActivity(intent)
+    Runtime.getRuntime().exit(0)
+  }
+
   private companion object {
     const val LUMO_PERM_REQ = 4201
   }

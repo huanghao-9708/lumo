@@ -816,3 +816,76 @@ pub fn library_set_primary_file(
     )?;
     Ok(())
 }
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum Playability {
+    Local,
+    Cached,
+    Remote,
+    Unavailable,
+}
+
+/// [MA3 A3-3] 批量查询歌曲的可播性状态（本地存在 / 已缓存 / 远端流播 / 不可用）
+#[tauri::command]
+pub fn library_get_playability(
+    db_state: State<'_, DbState>,
+    cache_state: State<'_, crate::services::cache::AudioCacheState>,
+    track_ids: Vec<i64>,
+) -> Result<std::collections::HashMap<i64, Playability>, AppError> {
+    let _trace = ipc_trace!("library_get_playability");
+    let mut map = std::collections::HashMap::new();
+    if track_ids.is_empty() {
+        return Ok(map);
+    }
+
+    let conn = db_state.db.get()?;
+    let cache = cache_state.cache.lock().map_err(|e| AppError::Internal(e.to_string()))?;
+
+    for chunk in track_ids.chunks(500) {
+        let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT t.id, m.id, s.kind, s.root_uri, m.path
+             FROM tracks t
+             LEFT JOIN media_files m ON m.id = COALESCE(t.primary_file_id, (SELECT mf.id FROM media_files mf WHERE mf.track_id = t.id ORDER BY mf.id LIMIT 1))
+             LEFT JOIN sources s ON s.id = m.source_id
+             WHERE t.id IN ({})",
+            placeholders
+        );
+
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(chunk.iter()), |row| {
+            let track_id: i64 = row.get(0)?;
+            let media_file_id: Option<i64> = row.get(1)?;
+            let kind: Option<String> = row.get(2)?;
+            let root_uri: Option<String> = row.get(3)?;
+            let path: Option<String> = row.get(4)?;
+            Ok((track_id, media_file_id, kind, root_uri, path))
+        })?;
+
+        for r in rows {
+            let (track_id, media_file_id, kind, root_uri, path) = r?;
+            let status = match (kind.as_deref(), media_file_id, root_uri, path) {
+                (Some("local"), _, Some(root), Some(p)) => {
+                    let full_path = std::path::Path::new(&root).join(p);
+                    if full_path.exists() {
+                        Playability::Local
+                    } else {
+                        Playability::Unavailable
+                    }
+                }
+                (Some("webdav"), Some(mf_id), _, _) => {
+                    if cache.is_cached(mf_id) {
+                        Playability::Cached
+                    } else {
+                        Playability::Remote
+                    }
+                }
+                _ => Playability::Unavailable,
+            };
+            map.insert(track_id, status);
+        }
+    }
+
+    Ok(map)
+}

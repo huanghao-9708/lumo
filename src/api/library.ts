@@ -180,6 +180,14 @@ export function libraryGetTrackVersions(trackId: number): Promise<TrackFileInfoD
   return invoke('library_get_track_versions', { trackId });
 }
 
+/** 设置某首歌曲的首选主文件版本 */
 export function librarySetPrimaryFile(trackId: number, mediaFileId: number): Promise<void> {
   return invoke('library_set_primary_file', { trackId, mediaFileId });
+}
+
+export type PlayabilityState = 'local' | 'cached' | 'remote' | 'unavailable';
+
+/** [MA3 A3-3] 批量查询歌曲的可播性状态 */
+export function libraryGetPlayability(trackIds: number[]): Promise<Record<number, PlayabilityState>> {
+  return invoke('library_get_playability', { trackIds });
 }

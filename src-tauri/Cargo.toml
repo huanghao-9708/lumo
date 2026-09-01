@@ -1,6 +1,6 @@
 [package]
 name = "tauri-app"
-version = "1.1.1"
+version = "1.2.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -46,6 +46,7 @@ url = "2.5.8"
 thiserror = "2.0.18"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp"] }
 base64 = "0.22"
+rand = "0.10.2"
 
 # Android 专属：cpal/oboe 音频栈依赖 ndk_context 上下文（见 lib.rs JNI 导出）
 [target.'cfg(target_os = "android")'.dependencies]

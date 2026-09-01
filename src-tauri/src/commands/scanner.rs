@@ -6,30 +6,53 @@ use std::path::PathBuf;
 
 /// 从 app_data_dir 路径推导加密密钥（同一台机器稳定，跨机器不同）。
 pub(crate) fn derive_credential_key(app_dir: &std::path::Path) -> [u8; 32] {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    app_dir.to_string_lossy().hash(&mut hasher);
-    let seed = hasher.finish().to_le_bytes();
-    let mut key = [0u8; 32];
-    for i in 0..32 {
-        key[i] = seed[i % 8];
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    let secret_file = app_dir.join(".device_secret");
+    let device_entropy = if secret_file.exists() {
+        std::fs::read(&secret_file).unwrap_or_default()
+    } else {
+        use rand::Rng;
+        let mut buf = [0u8; 32];
+        rand::rng().fill_bytes(&mut buf);
+        let _ = std::fs::write(&secret_file, &buf);
+        buf.to_vec()
+    };
+    if !device_entropy.is_empty() {
+        hasher.update(&device_entropy);
+    } else {
+        hasher.update(app_dir.to_string_lossy().as_bytes());
     }
+    hasher.update(b"lumo_credential_secret_v2_seed");
+    let result = hasher.finalize();
+    let mut key = [0u8; 32];
+    key.copy_from_slice(&result);
     key
 }
 
-/// 对密码做 XOR + base64 编码（防止明文暴露，机器绑定）。
+/// 对密码做加密（防止明文暴露，结合设备专属随机私钥）。
 pub(crate) fn encrypt_password(key: &[u8; 32], password: &str) -> String {
+    use base64::Engine;
     let bytes: Vec<u8> = password.bytes()
         .enumerate()
         .map(|(i, b)| b ^ key[i % 32])
         .collect();
-    use base64::Engine;
-    base64::engine::general_purpose::STANDARD.encode(&bytes)
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    format!("v2:seal:{}", b64)
 }
 
-/// 解密用 encrypt_password 编码的密码。
+/// 解密密码（优先解析 v2:seal 规范格式，向下兼容旧数据）。
 pub(crate) fn decrypt_password(key: &[u8; 32], encoded: &str) -> Option<String> {
     use base64::Engine;
+    if let Some(payload) = encoded.strip_prefix("v2:seal:") {
+        let bytes = base64::engine::general_purpose::STANDARD.decode(payload).ok()?;
+        let decrypted: Vec<u8> = bytes.iter()
+            .enumerate()
+            .map(|(i, &b)| b ^ key[i % 32])
+            .collect();
+        return String::from_utf8(decrypted).ok();
+    }
+    // 旧格式兼容
     let bytes = base64::engine::general_purpose::STANDARD.decode(encoded).ok()?;
     let decrypted: Vec<u8> = bytes.iter()
         .enumerate()
@@ -75,6 +98,18 @@ pub fn source_add_webdav(app: tauri::AppHandle, db_state: State<'_, DbState>, ur
     )?;
 
     Ok(conn.last_insert_rowid())
+}
+
+/// [MA3 A3-1] 测试 WebDAV 连接（添加来源前即时反馈连通性与权限）
+#[tauri::command]
+pub fn scanner_test_webdav(
+    url: String,
+    username: Option<String>,
+    password: Option<String>,
+) -> Result<crate::services::webdav::WebdavProbeResult, AppError> {
+    let _trace = ipc_trace!("scanner_test_webdav");
+    let webdav = crate::services::webdav::WebdavClient::new(url, username, password);
+    Ok(webdav.probe_connection())
 }
 
 #[tauri::command]

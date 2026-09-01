@@ -156,6 +156,9 @@ fn backfill_artwork_thumbnails(app: tauri::AppHandle, pool: &DbPool) {
 
         let _ = tx.commit();
 
+        #[cfg(target_os = "android")]
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        #[cfg(not(target_os = "android"))]
         std::thread::sleep(std::time::Duration::from_millis(50));
 
         if (done + failed) % 100 == 0 {
@@ -247,6 +250,8 @@ pub fn run() {
                 let pool_clone = pool.clone();
                 let app_handle = app.handle().clone();
                 std::thread::spawn(move || {
+                    #[cfg(target_os = "android")]
+                    std::thread::sleep(std::time::Duration::from_secs(15));
                     backfill_artwork_thumbnails(app_handle, &pool_clone);
                 });
             }
@@ -259,6 +264,23 @@ pub fn run() {
             app.manage(PlaybackState {
                 manager: Mutex::new(playback_manager),
             });
+
+            let mut playback_queue = crate::services::queue::PlaybackQueue::new();
+            if let Some(persisted) = crate::services::queue::load_state_from_disk(&app_dir) {
+                tracing::info!("Restored persisted playback queue with {} items, index={}", persisted.items.len(), persisted.index);
+                playback_queue.set_queue(persisted.items, persisted.index, persisted.mode);
+            }
+            app.manage(crate::services::queue::QueueState {
+                queue: Mutex::new(playback_queue),
+            });
+
+            // Start queue watcher thread (A2-2)
+            {
+                let app_handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    crate::commands::queue::queue_watcher_loop(app_handle);
+                });
+            }
 
             // 云端音频文件透明缓存：WebDAV 歌曲播放时后台下载完整文件到本地，
             // 下次播放命中缓存走本地路径（零网络 + 自动 gapless）
@@ -387,6 +409,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             crate::commands::scanner::source_add_local,
             crate::commands::scanner::source_add_webdav,
+            crate::commands::scanner::scanner_test_webdav,
             crate::commands::scanner::source_scan,
             crate::commands::scanner::source_list,
             crate::commands::scanner::source_remove,
@@ -451,6 +474,11 @@ pub fn run() {
             crate::commands::library::library_get_smart_playlist,
             crate::commands::library::library_get_track_versions,
             crate::commands::library::library_set_primary_file,
+            crate::commands::library::library_get_playability,
+            crate::commands::queue::playback_set_queue,
+            crate::commands::queue::playback_queue_state,
+            crate::commands::queue::playback_advance,
+            crate::commands::queue::playback_set_mode,
             // MA1：应用信息与移动平台桥
             crate::commands::app::app_get_version,
             crate::commands::app::platform_check_audio_permission,
@@ -458,6 +486,7 @@ pub fn run() {
             crate::commands::app::platform_open_app_settings,
             crate::commands::app::platform_storage_suggestions,
             crate::commands::app::platform_finish_app,
+            crate::commands::app::platform_restart_app,
             // [MA0 Spike] 技术验证命令，MA1 收尾时移除
             crate::commands::debug::debug_play_tone,
             crate::commands::debug::debug_webdav_probe,

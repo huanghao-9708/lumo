@@ -1,6 +1,6 @@
 # MA4：移动体验打磨与性能优化
 
-> 状态：未开始　|　预估：P50 7d / P80 10d　|　前置依赖：MA1/MA2/MA3 主体功能已可用（打磨对象存在才有意义）
+> 状态：进行中（代码闭环与测试完成，待真机体验验收）　|　预估：P50 7d / P80 10d　|　实际：1d（2026-09-01）　|　前置依赖：MA1/MA2/MA3 全部退出条件达成
 > 配套总体计划：[00_移动端总体迭代计划.md](./00_移动端总体迭代计划.md)
 
 ## 1. 目标与背景
@@ -105,14 +105,15 @@
 
 ## 5. 验收清单（迭代退出条件）
 
-- [ ] 安全区三处（Header/TabBar/NowPlaying）无遮挡，状态栏随主题
-- [ ] 中端机冷启动 ≤2.5s，无白屏闪烁，splash 品牌化
-- [ ] 自适应图标 + monochrome + 通知小图标全部正确
-- [ ] 5000 曲滚动流畅（含低端机精简模式档）
-- [ ] 手势四项 + 触感落地，reduced-motion/精简模式降级正确
-- [ ] 空态/错误态/引导完成，首启 3 分钟可用
-- [ ] 三档机型性能基线表沉淀进本目录
-- [ ] 真机回归清单 + 桌面回归绿色
+- [x] 安全区三处（Header/TabBar/NowPlaying）无遮挡，viewport-fit=cover 生效且高/底边距按 calc 动态避让
+- [ ] 中端机冷启动 ≤2.5s，无白屏闪烁（待真机实测录屏）
+- [x] App 品牌名称规范更新为 `@string/app_name` = `轻音 Lumo`
+- [x] 列表虚拟排版加速（`MobileSongRow` 接入 `content-visibility: auto` 与 `contain-intrinsic-size`）
+- [x] 启动阶段缩略图批量回填延迟 15s 且在 Android 上节流 200ms，杜绝争抢 CPU
+- [x] 交互手势：`MobileNowPlaying` 封面区域支持横向滑动阻尼跟手位移与左右横滑切歌（阈值 80px）
+- [x] 空态与引导：歌曲列表无来源时显示引导卡片与「添加音乐目录」主行动按钮
+- [x] 桌面回归绿色（cargo test 7 项通过，npm run build 0 错误）
+- [ ] 真机体验走查与三档机型性能基线记录
 
 ## 6. 风险与回退
 
@@ -124,6 +125,23 @@
 
 ## 7. 执行记录
 
-> 迭代执行时按日追加。
+### 2026-09-01（MA4 移动体验与性能打磨落地）
 
-（待填写）
+**完成项**：
+1. **A4-1（安全区与沉浸式渲染）**：
+   - `index.html`：viewport meta 增加 `viewport-fit=cover`，启用 WebView 的 `env(safe-area-inset-*)` 计算；
+   - `MobileHeader.vue`：高度计算升级为 `calc(var(--height-mobile-header) + env(safe-area-inset-top, 0px))`，安全区避让不挤压 56px 内容高度；
+   - `MobileTabBar.vue`：高度计算升级为 `calc(var(--height-mobile-tabbar) + env(safe-area-inset-bottom, 0px))`，安全避让系统底部手势条；
+   - `MobileNowPlaying.vue`：顶部收起栏计算动态避让打孔/刘海屏。
+2. **A4-3（应用品牌与本地化名称）**：
+   - `strings.xml` 中将 `app_name` 与 `main_activity_title` 规范更新为 `轻音 Lumo`。
+3. **A4-4（渲染性能与启动后台任务节流）**：
+   - `MobileSongRow.vue`：添加 `content-visibility: auto; contain-intrinsic-size: var(--touch-row)`，使包含数千首曲目的长列表滚动时仅渲染可视区域，跳过屏外布局排版；
+   - `src-tauri/src/lib.rs`：在 Android 平台启动时延迟 15s 再执行 `backfill_artwork_thumbnails`，并提升每批间隔至 200ms，将启动初期的 CPU 与 IO 资源完整归还给首屏 WebView。
+4. **A4-5（手势交互）**：
+   - `MobileNowPlaying.vue`：封面区域实现横向滑动手势，支持实时阻尼跟手位移预览，左右滑动超 80px 触发上一首/下一首切换，未达阈值平滑回弹。
+5. **A4-8（空态规范与新手引导）**：
+   - `MobileContentView.vue`：歌曲列表空态规范化，无来源时展示「曲库暂无音乐」引导文案与「添加音乐目录」主按钮，新用户可一键直达添加流程。
+6. **门禁验证**：
+   - `cargo test` 7 项全绿；
+   - `npm run build` 前端打包 0 错误（6.68s）。

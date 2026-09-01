@@ -62,3 +62,67 @@ jobs:
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
+
+  publish-android:
+    needs: publish-tauri
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+
+      - name: Remove local Windows gradle.java.home
+        run: |
+          sed -i '/org.gradle.java.home/d' src-tauri/gen/android/gradle.properties
+
+      - name: Install frontend dependencies
+        run: npm install
+
+      - name: Build Android APK
+        run: npm run tauri android build -- --target aarch64 --apk
+
+      - name: Collect and Rename APKs
+        id: collect-apk
+        run: |
+          mkdir -p release-apks
+          find src-tauri/gen/android/app/build/outputs/apk/ -type f -name "*.apk" -exec cp {} release-apks/ \;
+          cd release-apks
+          for f in *.apk; do
+            mv "$f" "Lumo-v1.2.0-arm64-$f" || true
+          done
+          sha256sum *.apk > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Upload APKs to GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          files: |
+            release-apks/*.apk
+            release-apks/SHA256SUMS.txt

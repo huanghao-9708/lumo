@@ -133,6 +133,15 @@ impl SyncService {
         let _ = std::fs::remove_file(&snapshot_path);
         let sql = format!("VACUUM INTO '{}'", snapshot_path.to_string_lossy().replace('\'', "''"));
         conn.execute_batch(&sql).map_err(|e| format!("Failed to create DB snapshot: {}", e))?;
+
+        // MOB-005: 快照脱敏处理：清空密码字段，确保上传至云端的快照绝不携带可还原密码
+        if let Ok(snap_conn) = Connection::open(&snapshot_path) {
+            let _ = snap_conn.execute_batch("
+                UPDATE sync_config SET password_encrypted = NULL;
+                UPDATE sources SET credential_ref = NULL WHERE kind = 'webdav';
+            ");
+        }
+
         Ok(snapshot_path)
     }
 
