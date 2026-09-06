@@ -52,12 +52,12 @@ pub fn resolve_media_file(
         }
     }
 
-    let (relative_path, root_uri, kind, cred, size): (String, String, String, Option<String>, i64) = conn.query_row(
-        "SELECT mf.relative_path, s.root_uri, s.kind, s.credential_ref, mf.file_size
+    let (source_id, relative_path, root_uri, kind, cred, size): (i64, String, String, String, Option<String>, i64) = conn.query_row(
+        "SELECT mf.source_id, mf.relative_path, s.root_uri, s.kind, s.credential_ref, mf.file_size
          FROM media_files mf JOIN sources s ON mf.source_id = s.id
          WHERE mf.id = ?1",
         rusqlite::params![media_file_id],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
     )?;
 
     // ===== 缓存优先：WebDAV 文件已缓存则直接走本地路径 =====
@@ -92,18 +92,102 @@ pub fn resolve_media_file(
         let relative_url_path = relative_path.replace('\\', "/");
         let file_url = base.join(&relative_url_path).map_err(|e| AppError::Internal(e.to_string()))?.to_string();
 
-        let http_reader = crate::services::webdav::HttpRangeReader::new(&webdav, file_url.clone(), size as u64);
-        Ok((
-            None,
-            Some(http_reader),
-            WebdavResolveInfo {
-                webdav_client: Some(webdav),
-                file_url: Some(file_url),
-            },
-        ))
+        // 能力门控：来源支持 Range → 流播；不支持（或不曾探测）→ 探测/整文件下载降级。
+        // 探测结果落 source_capabilities 表，7 天内复用，不重复发请求。
+        let supports_range = match load_range_support(&conn, source_id)? {
+            Some(v) => v,
+            None => probe_and_persist_range_support(&conn, &webdav, source_id, &file_url)?,
+        };
+
+        if supports_range {
+            let http_reader = crate::services::webdav::HttpRangeReader::new(&webdav, file_url.clone(), size as u64);
+            Ok((
+                None,
+                Some(http_reader),
+                WebdavResolveInfo {
+                    webdav_client: Some(webdav),
+                    file_url: Some(file_url),
+                },
+            ))
+        } else {
+            // 服务器不支持分段读取：整文件下载进缓存后按本地文件播放。
+            // 同步等待期间前端停留在 isBuffering，失败按分类文案报错。
+            let path = download_full_to_cache(audio_cache, &webdav, media_file_id, &file_url)?;
+            Ok((Some(path), None, WebdavResolveInfo::default()))
+        }
     } else {
         Ok((Some(PathBuf::from(&root_uri).join(relative_path)), None, WebdavResolveInfo::default()))
     }
+}
+
+/// 读取来源的 Range 能力缓存记录；缺失、未探测过或超过 7 天视为 None。
+fn load_range_support(conn: &rusqlite::Connection, source_id: i64) -> Result<Option<bool>, AppError> {
+    let v: Option<i64> = conn.query_row(
+        "SELECT supports_range FROM source_capabilities
+         WHERE source_id = ?1 AND supports_range IS NOT NULL
+           AND julianday('now') - julianday(checked_at) <= 7",
+        rusqlite::params![source_id],
+        |row| row.get(0),
+    ).optional()?;
+    Ok(v.map(|v| v != 0))
+}
+
+/// 用真实文件 URL 探测 Range 支持并落库。探测失败（认证/网络等）返回分类后的可读错误。
+fn probe_and_persist_range_support(
+    conn: &rusqlite::Connection,
+    webdav: &WebdavClient,
+    source_id: i64,
+    file_url: &str,
+) -> Result<bool, AppError> {
+    let supports_range = webdav.probe_range_support(file_url).map_err(AppError::Internal)?;
+    conn.execute(
+        "INSERT INTO source_capabilities (source_id, supports_range, checked_at, raw_json)
+         VALUES (?1, ?2, datetime('now'), '{}')
+         ON CONFLICT(source_id) DO UPDATE SET supports_range = ?2, checked_at = datetime('now')",
+        rusqlite::params![source_id, supports_range],
+    )?;
+    tracing::info!("WebDAV source_id={} supports_range={} (probed)", source_id, supports_range);
+    Ok(supports_range)
+}
+
+/// 整文件同步下载进音频缓存（服务器不支持 Range 时的播放降级路径）。
+/// 复用全局 DOWNLOADING 标记防止与后台缓存下载互相踩踏。
+fn download_full_to_cache(
+    audio_cache: &AudioCache,
+    webdav: &WebdavClient,
+    media_file_id: i64,
+    file_url: &str,
+) -> Result<PathBuf, AppError> {
+    if is_downloading(media_file_id) {
+        return Err(AppError::Internal("该歌曲正在缓存中，请稍后再试".to_string()));
+    }
+    if !mark_downloading(media_file_id) {
+        return Err(AppError::Internal("该歌曲正在缓存中，请稍后再试".to_string()));
+    }
+
+    let result = (|| -> Result<PathBuf, AppError> {
+        let cache_dir = audio_cache
+            .cache_path(media_file_id)
+            .parent()
+            .ok_or_else(|| AppError::Internal("缓存目录无效".to_string()))?
+            .to_path_buf();
+        let tmp_path = cache_dir.join(format!("{}.tmp", media_file_id));
+        let bytes = webdav
+            .download_to_file(file_url, &tmp_path)
+            .map_err(AppError::Internal)?;
+        if bytes == 0 {
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(AppError::Internal("缓存下载内容为空".to_string()));
+        }
+        let final_path = cache_dir.join(format!("{}", media_file_id));
+        std::fs::rename(&tmp_path, &final_path)
+            .map_err(|e| AppError::Internal(format!("缓存写入失败: {}", e)))?;
+        tracing::info!("Full-file degradation download done media_file_id={} ({} bytes)", media_file_id, bytes);
+        Ok(final_path)
+    })();
+
+    unmark_downloading(media_file_id);
+    result
 }
 
 /// WebDAV 解析附加信息：用于流播失败后后台缓存下载。

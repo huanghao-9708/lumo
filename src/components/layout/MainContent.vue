@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import {
-  Search, Play, List, LayoutGrid, MoreHorizontal, Heart, Loader2, Music,
+  Search, Play, List, LayoutGrid, MoreHorizontal, Heart, Loader2, Music, CloudOff,
 } from 'lucide-vue-next';
 
 const SKELETON_ROWS = 8;
 import { usePlayerStore, type Album } from '../../stores/player';
+import { useUiStore } from '../../stores/ui';
 import { useVirtualList } from '../../composables/useVirtualList';
 import AlbumGrid from '../content/AlbumGrid.vue';
 import AlbumDetail from '../content/AlbumDetail.vue';
@@ -22,6 +23,7 @@ import FolderView from '../content/FolderView.vue';
 import SmartPlaylistView from '../content/SmartPlaylistView.vue';
 
 const playerStore = usePlayerStore();
+const uiStore = useUiStore();
 
 /* ============ 视图状态 ============ */
 const viewMode = ref<'list' | 'grid'>('list');
@@ -122,6 +124,22 @@ const isFavoriteArtistsView = computed(() => {
 function isPlayingTrack(trackId: number): boolean {
   const t = playerStore.currentTrack;
   return !!t && t.id === trackId;
+}
+
+/* ============ 可播性（离线降级） ============ */
+// 列表变化或可播性失效（扫描/同步恢复）时批量拉取；离线时 Remote 未缓存与 Unavailable 的行置灰
+watch(
+  [() => playerStore.tracks.map(t => t.id), () => playerStore.playabilityEpoch],
+  ([ids]) => { if (ids.length > 0) playerStore.ensurePlayability(ids); },
+  { immediate: true },
+);
+
+function isTrackGreyed(trackId: number): boolean {
+  return playerStore.isTrackUnplayable(trackId);
+}
+
+function isOfflineRemote(trackId: number): boolean {
+  return !uiStore.isOnline && playerStore.getPlayability(trackId) === 'remote';
 }
 
 function playSong(index: number) {
@@ -373,18 +391,18 @@ onMounted(() => {
 
                 <!-- 标题 -->
                 <div class="flex-[2] min-w-0 pl-1">
-                  <span class="text-[13px] truncate block" :class="isPlayingTrack(song.id) ? 'text-brand-orange font-semibold' : 'text-text-primary font-medium'">
+                  <span class="text-[13px] truncate block" :class="isPlayingTrack(song.id) ? 'text-brand-orange font-semibold' : isTrackGreyed(song.id) ? 'text-text-disabled' : 'text-text-primary font-medium'">
                     {{ song.title }}
                   </span>
                 </div>
 
                 <!-- 艺术家 -->
-                <div class="flex-[1.5] min-w-0 hidden sm:block text-[13px] text-text-secondary truncate">
+                <div class="flex-[1.5] min-w-0 hidden sm:block text-[13px] truncate" :class="isTrackGreyed(song.id) ? 'text-text-disabled' : 'text-text-secondary'">
                   <span class="hover:underline cursor-pointer" @click.stop="navigateToArtist(song.artistId)">{{ song.artist }}</span>
                 </div>
 
                 <!-- 专辑（非斜体） -->
-                <div class="flex-[1.5] min-w-0 hidden md:block text-[13px] text-text-secondary truncate">
+                <div class="flex-[1.5] min-w-0 hidden md:block text-[13px] truncate" :class="isTrackGreyed(song.id) ? 'text-text-disabled' : 'text-text-secondary'">
                   <span class="hover:underline cursor-pointer" @click.stop="navigateToAlbum(song.albumId)">{{ song.album }}</span>
                 </div>
 
@@ -393,11 +411,16 @@ onMounted(() => {
 
                 <!-- 格式 -->
                 <div class="w-[50px] text-center shrink-0 hidden lg:block">
-                  <span class="text-[10px] font-mono text-text-muted uppercase">{{ song.format }}</span>
+                  <span class="text-[10px] font-mono uppercase" :class="isTrackGreyed(song.id) ? 'text-text-disabled' : 'text-text-muted'">{{ song.format }}</span>
+                </div>
+
+                <!-- 离线不可播标记（纯云端未缓存 / 本地文件丢失） -->
+                <div v-if="isTrackGreyed(song.id)" class="w-8 shrink-0 flex items-center justify-center" :title="isOfflineRemote(song.id) ? '离线且未缓存' : '文件不可用'">
+                  <CloudOff class="w-3.5 h-3.5 text-text-disabled" />
                 </div>
 
                 <!-- more -->
-                <div class="w-8 shrink-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                <div class="w-8 shrink-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity" :class="{ 'hidden': isTrackGreyed(song.id) }">
                   <MoreHorizontal class="w-4 h-4 text-text-muted" />
                 </div>
               </div>

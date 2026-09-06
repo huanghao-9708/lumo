@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { ref } from 'vue';
-import { Play, Loader2, Heart } from 'lucide-vue-next';
+import { ref, computed } from 'vue';
+import { Play, Loader2, Heart, CloudOff } from 'lucide-vue-next';
 import type { Track } from '../../stores/player';
+import { usePlayerStore } from '../../stores/player';
+import { useUiStore } from '../../stores/ui';
 
 /**
  * 移动端歌曲行（56px 触控行）。
@@ -29,6 +31,13 @@ const emit = defineEmits<{
   (e: 'toggleFav', trackId: number): void;
   (e: 'longPress', trackId: number): void;
 }>();
+
+const playerStore = usePlayerStore();
+const uiStore = useUiStore();
+
+/* ============ 可播性（离线降级）：本地文件丢失或离线未缓存的行置灰 ============ */
+const greyed = computed(() => playerStore.isTrackUnplayable(props.track.id));
+const offlineRemote = computed(() => !uiStore.isOnline && playerStore.getPlayability(props.track.id) === 'remote');
 
 /* ============ 单击 ============ */
 
@@ -108,13 +117,24 @@ function onTouchMove() {
     <div class="flex-1 min-w-0 pl-1">
       <span
         class="truncate block font-medium"
-        :class="isCurrent ? 'text-brand-orange font-semibold' : 'text-text-primary'"
+        :class="isCurrent ? 'text-brand-orange font-semibold' : greyed ? 'text-text-disabled' : 'text-text-primary'"
         style="font-size: var(--text-mobile-body); line-height: 1.3;"
       >{{ track.title }}</span>
       <span
-        class="text-text-secondary truncate block"
+        class="truncate block"
+        :class="greyed ? 'text-text-disabled' : 'text-text-secondary'"
         style="font-size: var(--text-13); line-height: 1.3;"
       >{{ track.artist }}</span>
+    </div>
+
+    <!-- 离线不可播标记 -->
+    <div
+      v-if="greyed"
+      class="shrink-0 flex items-center justify-center text-text-disabled"
+      style="width: 32px;"
+      :aria-label="offlineRemote ? '离线且未缓存' : '文件不可用'"
+    >
+      <CloudOff class="w-4 h-4" aria-hidden="true" />
     </div>
 
     <!-- 时长 -->

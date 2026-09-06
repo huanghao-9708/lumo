@@ -9,6 +9,7 @@ import SidebarRight from './components/layout/SidebarRight.vue';
 import BottomPlayer from './components/layout/BottomPlayer.vue';
 import NowPlayingImmersive from './components/layout/NowPlayingImmersive.vue';
 import CreatePlaylistModal from './components/shared/CreatePlaylistModal.vue';
+import AppToast from './components/shared/AppToast.vue';
 import MobileLayout from './components/mobile/MobileLayout.vue';
 import MobileNowPlaying from './components/mobile/MobileNowPlaying.vue';
 import { useUiStore } from './stores/ui';
@@ -154,6 +155,9 @@ onUnmounted(() => {
       <CreatePlaylistModal v-if="playerStore.isCreatePlaylistModalOpen" />
 
     </template>
+
+    <!-- 全局 Toast（错误/提示，Teleport 到 body，桌面与移动共用） -->
+    <AppToast />
 
   </div>
 </template>

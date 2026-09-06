@@ -11,6 +11,15 @@ import { ref, watch } from "vue";
  */
 export type MobileTab = 'library' | 'search' | 'favorites' | 'settings';
 
+/** Toast 类型：error 红色警示 / info 中性提示 */
+export type ToastKind = 'error' | 'info';
+
+export interface ToastMessage {
+  id: number;
+  message: string;
+  kind: ToastKind;
+}
+
 
 
 /**
@@ -112,6 +121,19 @@ export const useUiStore = defineStore("ui", () => {
     isOnline.value = v;
   }
 
+  // ===== 轻量 Toast（错误/提示，4s 自动消退；全局唯一一条，新的顶掉旧的） =====
+  const toast = ref<ToastMessage | null>(null);
+  let toastTimer: number | null = null;
+
+  function showToast(message: string, kind: ToastKind = 'error') {
+    if (toastTimer !== null) clearTimeout(toastTimer);
+    toast.value = { id: Date.now(), message, kind };
+    toastTimer = window.setTimeout(() => {
+      toast.value = null;
+      toastTimer = null;
+    }, 4000);
+  }
+
   // ===== 移动端视图状态 =====
   // 移动端底部 Tab Bar 的 4 个一级导航（类型见模块顶层 MobileTab）。
   // Tab 切换时会同步设置 playerStore.activeLibraryTab，使现有视图逻辑无缝复用。
@@ -136,6 +158,8 @@ export const useUiStore = defineStore("ui", () => {
     toggleImmersiveView,
     isOnline,
     setOnline,
+    toast,
+    showToast,
     // 移动端
     activeMobileTab,
     setMobileTab,

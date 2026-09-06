@@ -23,6 +23,8 @@ import {
   playbackSetQueue, playbackQueueState, playbackAdvance, playbackSetMode,
   type QueueItemDTO, type BackendPlayMode
 } from '../api/queue';
+import { libraryGetPlayability, type PlayabilityState } from '../api/library';
+import { useUiStore } from './ui';
 
 
 // ================= 后端 DTO 接口（与 Rust 端 models.rs 保持一致） =================
@@ -229,6 +231,75 @@ export const usePlayerStore = defineStore("player", () => {
   const activeSourceTab = ref("本地音乐库");
   const activeRightTab = ref<"歌词" | "播放队列" | "文件信息">("歌词");
   const isRightPanelOpen = ref(true);
+  const uiStore = useUiStore();
+
+  // ===== 可播性状态（迭代一：离线降级） =====
+  // 每首 track 主文件的播放形态：local 本地 / cached 已缓存 / remote 纯云端未缓存 / unavailable 本地文件丢失。
+  // 由 library_get_playability 批量计算；列表视图按需拉取，离线时据此置灰与拦截点击。
+  const playability = ref(new Map<number, PlayabilityState>());
+  const playabilityEpoch = ref(0);
+  let playabilityFetching = false;
+
+  /**
+   * 确保给定 track 的可播性已加载（缺失的按 500/批拉取，已在 Map 中的跳过）。
+   * 列表视图在列表变化或 epoch 变化（扫描/恢复后失效）时调用。
+   */
+  async function ensurePlayability(trackIds: number[]) {
+    const missing = [...new Set(trackIds)].filter(id => Number.isFinite(id) && !playability.value.has(id));
+    if (missing.length === 0 || playabilityFetching) return;
+    playabilityFetching = true;
+    try {
+      const BATCH = 500;
+      for (let i = 0; i < missing.length; i += BATCH) {
+        const batch = missing.slice(i, i + BATCH);
+        const res = await libraryGetPlayability(batch);
+        const next = new Map(playability.value);
+        for (const [k, v] of Object.entries(res)) {
+          next.set(Number(k), v);
+        }
+        playability.value = next;
+      }
+    } catch (e) {
+      console.error('[Playability] Failed to fetch:', e);
+    } finally {
+      playabilityFetching = false;
+    }
+  }
+
+  /** 单曲可播性查询（未加载返回 undefined，调用方按可播处理） */
+  function getPlayability(trackId: number | null | undefined): PlayabilityState | undefined {
+    if (trackId == null) return undefined;
+    return playability.value.get(trackId);
+  }
+
+  /** 行级置灰判定：本地文件丢失，或离线时纯云端未缓存 */
+  function isTrackUnplayable(trackId: number | null | undefined): boolean {
+    const state = getPlayability(trackId);
+    if (!state) return false;
+    if (state === 'unavailable') return true;
+    return !uiStore.isOnline && state === 'remote';
+  }
+
+  /** 扫描完成 / 同步恢复后可播性可能变化：清空并推进 epoch，让视图重新拉取 */
+  function invalidatePlayability() {
+    playability.value = new Map();
+    playabilityEpoch.value++;
+  }
+
+  /** 播放前的离线守卫：拦截必然失败的请求，给出即时原因而不是无限转圈。返回 true 表示已拦截 */
+  function guardPlayback(track: Track | undefined): boolean {
+    if (!track) return false;
+    const state = getPlayability(track.id);
+    if (state === 'unavailable') {
+      uiStore.showToast('该歌曲的本地文件不可用，请重新扫描来源');
+      return true;
+    }
+    if (!uiStore.isOnline && state === 'remote') {
+      uiStore.showToast('离线状态，该歌曲尚未缓存到本地');
+      return true;
+    }
+    return false;
+  }
 
   const activeAlbumId = ref<number | null>(null);
   const activeArtistId = ref<number | null>(null);
@@ -1419,9 +1490,12 @@ const albums = shallowRef<Album[]>([]);
           navigator.mediaSession.playbackState = 'paused';
         }
       } else {
+        if (guardPlayback(track)) {
+          return;
+        }
         if (!hasLoadedCurrentFile.value) {
           if (track.primary_file_id) {
-            await playbackPlay(track.primary_file_id, !navigator.onLine);
+            await playbackPlay(track.primary_file_id, !uiStore.isOnline);
             hasLoadedCurrentFile.value = true;
 
             if (progressMs.value > 0) {
@@ -1478,6 +1552,7 @@ const albums = shallowRef<Album[]>([]);
     console.error('[playback-error] 播放失败:', event.payload);
     isPlaying.value = false;
     isBuffering.value = false;
+    uiStore.showToast(event.payload?.message || '播放失败');
     if ('mediaSession' in navigator) {
       navigator.mediaSession.playbackState = 'paused';
     }
@@ -1529,6 +1604,11 @@ const albums = shallowRef<Album[]>([]);
   }
 
   async function playQueue(newQueue: Track[], index: number, _skipHistoryPush = false) {
+    const clickedTrack = newQueue[index];
+    // 离线/不可播守卫：本地文件丢失或离线未缓存的曲目直接提示，不发请求
+    if (guardPlayback(clickedTrack)) {
+      return;
+    }
     queue.value = [...newQueue];
     currentIndex.value = index;
     const track = queue.value[index];
@@ -1714,6 +1794,8 @@ const albums = shallowRef<Album[]>([]);
       await fetchTracks(true);
       await fetchAlbums(true);
       await fetchArtists(true);
+      // 扫描可能修复/删除了文件，可播性缓存整体失效，由各列表视图按需重拉
+      invalidatePlayability();
     });
 
     unlistenArtworkBackfill = await listen('artwork-backfill-complete', async () => {
@@ -1804,6 +1886,12 @@ const albums = shallowRef<Album[]>([]);
     isCreatePlaylistModalOpen,
     createPlaylist,
     lyrics,
+    playability,
+    playabilityEpoch,
+    ensurePlayability,
+    getPlayability,
+    isTrackUnplayable,
+    invalidatePlayability,
     sources,
     localSources,
     webdavSources,

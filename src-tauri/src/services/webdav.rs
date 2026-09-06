@@ -28,6 +28,9 @@ pub struct WebdavProbeResult {
 #[derive(Clone)]
 pub struct WebdavClient {
     pub client: Client,
+    /// 整文件下载专用客户端：保留连接超时但**不设总超时**——
+    /// reqwest 的总超时覆盖整个响应体读取，大文件后台缓存下载会被 60s 掐断。
+    pub download_client: Client,
     pub base_url: String,
     pub username: Option<String>,
     pub password: Option<String>,
@@ -40,12 +43,42 @@ impl WebdavClient {
             .timeout(Duration::from_secs(60))
             .build()
             .unwrap_or_else(|_| Client::new());
+        let download_client = Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .build()
+            .unwrap_or_else(|_| Client::new());
         Self {
             client,
+            download_client,
             base_url: base_url.trim_end_matches('/').to_string(),
             username,
             password,
         }
+    }
+
+    /// 把 reqwest 错误翻译成用户可读文案（错误提示会经 AppError 透出到前端 toast）。
+    pub fn describe_reqwest_error(e: &reqwest::Error) -> String {
+        if e.is_timeout() {
+            "连接超时：服务器长时间未响应".to_string()
+        } else if e.is_connect() {
+            "无法连接服务器：请检查网络或服务器地址".to_string()
+        } else {
+            format!("网络请求失败: {}", e)
+        }
+    }
+
+    /// 拼接 base_url 与子路径。统一替代原先散落各处的 unwrap 链——
+    /// base_url 来自用户输入、subpath 来自远端 XML，非法输入应返回错误而不是 panic。
+    pub fn build_url(&self, subpath: &str) -> Result<String, String> {
+        if subpath.starts_with("http://") || subpath.starts_with("https://") {
+            return Ok(subpath.to_string());
+        }
+        let base = reqwest::Url::parse(&format!("{}/", self.base_url))
+            .map_err(|e| format!("无效的 WebDAV 服务器地址 \"{}\": {}", self.base_url, e))?;
+        let joined = base
+            .join(subpath)
+            .map_err(|e| format!("无效的 WebDAV 文件路径 \"{}\": {}", subpath, e))?;
+        Ok(joined.to_string())
     }
     
     // helper to add auth
@@ -126,43 +159,68 @@ impl WebdavClient {
     }
 
     pub fn propfind(&self, subpath: &str) -> Result<Vec<WebdavFile>, String> {
-        let url = if subpath.starts_with("http://") || subpath.starts_with("https://") {
-            subpath.to_string()
-        } else {
-            let base = reqwest::Url::parse(&format!("{}/", self.base_url)).unwrap();
-            base.join(subpath).unwrap().to_string()
-        };
-        
-        let req = self.client.request(reqwest::Method::from_bytes(b"PROPFIND").unwrap(), &url)
+        let url = self.build_url(subpath)?;
+
+        let req = self.client.request(reqwest::Method::from_bytes(b"PROPFIND").unwrap_or(reqwest::Method::GET), &url)
             .header("Depth", "1");
-            
+
         let req = self.apply_auth(req);
-        
-        let resp = req.send().map_err(|e| e.to_string())?;
+
+        let resp = req.send().map_err(|e| WebdavClient::describe_reqwest_error(&e))?;
         if !resp.status().is_success() {
-            return Err(format!("PROPFIND failed: {}", resp.status()));
+            let s = resp.status().as_u16();
+            let msg = match s {
+                401 => "认证失败：用户名或密码错误 (401)".to_string(),
+                403 => "权限不足 (403)".to_string(),
+                404 => "目录不存在 (404)".to_string(),
+                _ => format!("PROPFIND 失败 (HTTP {})", s),
+            };
+            return Err(msg);
         }
 
         let xml = resp.text().map_err(|e| e.to_string())?;
         let parsed = self.parse_propfind(&xml);
-        
+
+        let req_url_path = reqwest::Url::parse(&url)
+            .map_err(|e| format!("无效的请求地址: {}", e))?
+            .path()
+            .to_string();
+
         let mut results = Vec::new();
         for file in parsed {
-            let file_url_path = reqwest::Url::parse(&format!("{}/", self.base_url))
-                .unwrap()
-                .join(&file.path)
-                .unwrap()
-                .path()
-                .to_string();
-            let req_url_path = reqwest::Url::parse(&url).unwrap().path().to_string();
-            
-            if file_url_path.trim_end_matches('/') == req_url_path.trim_end_matches('/') {
+            // 跳过代表当前目录自身的条目；路径无法解析的条目直接丢弃（不 panic）
+            let file_url_path = match self.build_url(&file.path) {
+                Ok(u) => u,
+                Err(_) => continue,
+            };
+            let Ok(file_url) = reqwest::Url::parse(&file_url_path) else { continue };
+
+            if file_url.path().trim_end_matches('/') == req_url_path.trim_end_matches('/') {
                 continue;
             }
             results.push(file);
         }
-        
+
         Ok(results)
+    }
+
+    /// 用真实文件的 URL 发一次 `Range: bytes=0-0` 小请求探测分段下载支持。
+    /// 206 = 支持；200 = 服务器明确忽略 Range（不支持）；
+    /// 认证失败 / 网络错误等返回 Err（带分类后的可读文案），调用方不落库。
+    pub fn probe_range_support(&self, file_url: &str) -> Result<bool, String> {
+        let req = self.apply_auth(self.client.get(file_url).header(RANGE, "bytes=0-0"));
+        let resp = match req.send() {
+            Ok(r) => r,
+            Err(e) => return Err(WebdavClient::describe_reqwest_error(&e)),
+        };
+        match resp.status().as_u16() {
+            206 => Ok(true),
+            200 => Ok(false),
+            401 => Err("认证失败：用户名或密码错误 (401)".to_string()),
+            403 => Err("权限不足：对该文件没有访问权限 (403)".to_string()),
+            404 => Err("文件不存在 (404)".to_string()),
+            s => Err(format!("服务器返回异常状态 (HTTP {})", s)),
+        }
     }
 
     fn parse_propfind(&self, xml: &str) -> Vec<WebdavFile> {
@@ -236,14 +294,22 @@ impl WebdavClient {
     }
 
     /// 用单个 GET 请求下载完整文件到指定本地路径（带认证）。
-    /// 用于云端文件透明缓存：播放 WebDAV 歌曲时后台异步拉取完整文件，
+    /// 用于云端文件透明缓存与「服务器不支持 Range」时的整文件降级：
+    /// 播放 WebDAV 歌曲时后台异步拉取完整文件，
     /// 下次播放同一首歌即可命中本地缓存，实现「零网络请求」秒开。
+    /// 走 download_client（无总超时），大文件不会被 60s 掐断。
     /// 返回写入的字节数。
     pub fn download_to_file(&self, file_url: &str, dest: &Path) -> Result<u64, String> {
-        let req = self.apply_auth(self.client.get(file_url));
-        let mut resp = req.send().map_err(|e| format!("Download request failed: {}", e))?;
+        let req = self.apply_auth(self.download_client.get(file_url));
+        let mut resp = req.send().map_err(|e| WebdavClient::describe_reqwest_error(&e))?;
         if !resp.status().is_success() {
-            return Err(format!("Download failed: HTTP {}", resp.status()));
+            let s = resp.status().as_u16();
+            let msg = match s {
+                401 => format!("下载失败：认证失败 (401)"),
+                403 => format!("下载失败：权限不足 (403)"),
+                _ => format!("下载失败: HTTP {}", s),
+            };
+            return Err(msg);
         }
         let mut file = File::create(dest).map_err(|e| format!("Failed to create cache file: {}", e))?;
         let bytes = resp.copy_to(&mut file).map_err(|e| format!("Download write failed: {}", e))?;
@@ -366,17 +432,44 @@ impl Read for HttpRangeReader {
                     Ok(r) => r,
                     Err(e) => {
                         tracing::error!("HttpRangeReader fetch failed for url: {}", self.url);
-                        return Err(io::Error::new(io::ErrorKind::Other, format!("HTTP Error: {}", e)));
+                        return Err(io::Error::new(io::ErrorKind::Other, WebdavClient::describe_reqwest_error(&e)));
                     }
                 };
-                
-                if resp.status() != reqwest::StatusCode::PARTIAL_CONTENT {
-                    tracing::error!("HttpRangeReader fetch failed for url: {} with status: {}", self.url, resp.status());
-                    return Err(io::Error::new(io::ErrorKind::Unsupported, format!("WebDAV server did not honor Range request (HTTP {})", resp.status())));
-                }
 
-                self.current_resp = Some(resp);
-                self.resp_offset = self.offset;
+                let status = resp.status();
+                if status == reqwest::StatusCode::PARTIAL_CONTENT {
+                    // 严格校验 Content-Range 起始偏移：服务端返回错误分段会导致解码错乱
+                    if let Some(start) = resp.headers()
+                        .get(reqwest::header::CONTENT_RANGE)
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(parse_content_range_start)
+                    {
+                        if start != self.offset {
+                            tracing::error!(
+                                "HttpRangeReader Content-Range mismatch for {}: expected offset {}, server sent {}",
+                                self.url, self.offset, start
+                            );
+                            return Err(io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                format!("WebDAV 服务器返回的分段起始位置不匹配 (期望 {}, 实际 {})", self.offset, start),
+                            ));
+                        }
+                    }
+                    self.current_resp = Some(resp);
+                    self.resp_offset = self.offset;
+                } else if status.as_u16() == 200 && self.offset == 0 {
+                    // 服务器忽略 Range 但请求起点本来就是 0：整条 200 响应可当作全量流使用，
+                    // 不再直接报错（不支持 Range 的来源会在能力探测后改走整文件下载，这里是兜底）
+                    tracing::warn!("WebDAV server ignored Range (HTTP 200); using full stream for {}", self.url);
+                    self.current_resp = Some(resp);
+                    self.resp_offset = 0;
+                } else {
+                    tracing::error!("HttpRangeReader fetch failed for url: {} with status: {}", self.url, status);
+                    return Err(io::Error::new(
+                        io::ErrorKind::Unsupported,
+                        format!("WebDAV 服务器不支持分段读取 (HTTP {})", status),
+                    ));
+                }
             }
 
             if let Some(resp) = self.current_resp.as_mut() {
@@ -427,5 +520,30 @@ impl Seek for HttpRangeReader {
 
         self.offset = new_offset as u64;
         Ok(self.offset)
+    }
+}
+
+/// 解析 Content-Range 头的起始偏移（"bytes 0-1023/1465152" → 0）。
+/// 通配形式（"bytes */123"）或格式异常返回 None，调用方跳过校验。
+fn parse_content_range_start(value: &str) -> Option<u64> {
+    let rest = value.trim().strip_prefix("bytes")?.trim();
+    let first = rest.split('-').next()?.trim();
+    first.parse::<u64>().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn content_range_start_parses_standard_header() {
+        assert_eq!(parse_content_range_start("bytes 0-1023/1465152"), Some(0));
+        assert_eq!(parse_content_range_start("bytes 1024-2047/1465152"), Some(1024));
+    }
+
+    #[test]
+    fn content_range_start_handles_wildcard_and_garbage() {
+        assert_eq!(parse_content_range_start("bytes */1465152"), None);
+        assert_eq!(parse_content_range_start("garbage"), None);
     }
 }

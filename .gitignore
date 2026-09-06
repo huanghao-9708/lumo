@@ -33,3 +33,6 @@ target/*
 .env
 .env*.local
 
+
+# ZCode 会话本地目录
+.zcode/
