@@ -69,23 +69,15 @@ pub fn resolve_media_file(
     }
 
     if kind == "webdav" {
-        // 兼容三种 credential_ref 格式：
-        // 1) "username##base64_encrypted" ─ V6+ 加密格式
-        // 2) "username:password" ─ V5 及之前明文
-        // 3) "username" ─ 仅有用户名
-        let (username, password): (Option<String>, Option<String>) = cred.as_deref()
-            .and_then(|c| {
-                if let Some((u, enc)) = c.split_once("##") {
-                    crate::commands::scanner::decrypt_password(key, enc)
-                        .map(|p| (u.to_string(), p))
-                } else if let Some((u, p)) = c.split_once(':') {
-                    Some((u.to_string(), p.to_string()))
-                } else {
-                    Some((c.to_string(), String::new()))
-                }
-            })
-            .map(|(u, p)| (Some(u), Some(p)))
-            .unwrap_or((None, None));
+        // 凭据解析（P1-08 统一入口）：支持钥匙串引用 / V6 加密 / V5 明文；
+        // 桌面端解析成功后懒迁移进系统钥匙串。解析失败按分类错误透出给前端 toast。
+        let (username, password): (Option<String>, Option<String>) = match cred.as_deref() {
+            Some(cred) => {
+                let (u, p) = crate::commands::scanner::resolve_source_credential(&conn, source_id, cred, key)?;
+                (Some(u), p)
+            }
+            None => (None, None),
+        };
         let webdav = WebdavClient::new(root_uri.clone(), username, password);
         let base_str = if root_uri.ends_with('/') { root_uri.clone() } else { format!("{}/", root_uri) };
         let base = reqwest::Url::parse(&base_str).map_err(|e| AppError::Internal(e.to_string()))?;

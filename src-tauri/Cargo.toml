@@ -52,3 +52,8 @@ rand = "0.10.2"
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"
 ndk-context = "0.1"
+
+# 桌面专属：系统钥匙串（Windows Credential Manager / macOS Keychain），P1-08 凭据安全
+# Android 无系统 keyring，凭据走机器绑定的加密文件方案（见 commands/scanner.rs）
+[target.'cfg(not(target_os = "android"))'.dependencies]
+keyring = { version = "3", features = ["windows-native", "apple-native"] }

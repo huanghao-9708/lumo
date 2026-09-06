@@ -1718,7 +1718,7 @@ const albums = shallowRef<Album[]>([]);
         path: s.root_uri,
         isEnabled: s.enabled,
         lastScanned: s.last_scan_at ? new Date(s.last_scan_at).toLocaleString() : 'Never',
-        username: s.credential_ref || undefined
+        username: s.username ?? undefined
       }));
     } catch (e) {
       console.error("Failed to fetch sources:", e);

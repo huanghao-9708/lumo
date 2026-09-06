@@ -187,6 +187,19 @@ pub fn library_toggle_favorite_artist(db_state: State<'_, DbState>, artist_id: i
     crate::repositories::artist_repo::ArtistRepo::toggle_favorite_artist(&conn, artist_id, is_favorite).map_err(|e| e.into())
 }
 
+/// 获取曲库数据库文件总大小（含 WAL/SHM），供移动端存储占用展示。
+#[tauri::command]
+pub fn storage_get_db_size(app: tauri::AppHandle) -> Result<u64, AppError> {
+    let app_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let mut total = 0u64;
+    for name in ["lumo.sqlite", "lumo.sqlite-wal", "lumo.sqlite-shm"] {
+        if let Ok(md) = std::fs::metadata(app_dir.join(name)) {
+            total += md.len();
+        }
+    }
+    Ok(total)
+}
+
 #[tauri::command]
 pub async fn library_get_lyrics(db_state: State<'_, DbState>, track_id: i64, allow_online: Option<bool>) -> Result<Option<String>, AppError> {
     let _trace = ipc_trace!("library_get_lyrics");

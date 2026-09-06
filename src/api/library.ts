@@ -187,6 +187,11 @@ export function librarySetPrimaryFile(trackId: number, mediaFileId: number): Pro
 
 export type PlayabilityState = 'local' | 'cached' | 'remote' | 'unavailable';
 
+/** 曲库数据库文件总大小（字节，含 WAL/SHM） */
+export function storageGetDbSize(): Promise<number> {
+  return invoke('storage_get_db_size');
+}
+
 /** [MA3 A3-3] 批量查询歌曲的可播性状态 */
 export function libraryGetPlayability(trackIds: number[]): Promise<Record<number, PlayabilityState>> {
   return invoke('library_get_playability', { trackIds });

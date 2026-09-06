@@ -10,16 +10,20 @@ use std::path::PathBuf;
 // ========================= 配置读写 =========================
 
 #[tauri::command]
-pub fn sync_get_config(db_state: State<'_, DbState>) -> Result<SyncConfigDTO, AppError> {
+pub fn sync_get_config(app: tauri::AppHandle, db_state: State<'_, DbState>) -> Result<SyncConfigDTO, AppError> {
     let conn = db_state.db.get()?;
-    let config = SyncService::get_config(&conn)?;
+    let app_dir = app.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let machine_key = crate::commands::scanner::derive_credential_key(&app_dir);
+    let config = SyncService::get_config(&conn, &machine_key)?;
     Ok(config)
 }
 
 #[tauri::command]
-pub fn sync_save_config(db_state: State<'_, DbState>, config: SyncConfigDTO) -> Result<(), AppError> {
+pub fn sync_save_config(app: tauri::AppHandle, db_state: State<'_, DbState>, config: SyncConfigDTO) -> Result<(), AppError> {
     let conn = db_state.db.get()?;
-    SyncService::save_config(&conn, &config)?;
+    let app_dir = app.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let machine_key = crate::commands::scanner::derive_credential_key(&app_dir);
+    SyncService::save_config(&conn, &config, &machine_key)?;
     Ok(())
 }
 
@@ -66,7 +70,8 @@ pub fn sync_upload_now(app: tauri::AppHandle, db_state: State<'_, DbState>) -> R
     let _trace = ipc_trace!("sync_upload_now");
     let app_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
     let conn = db_state.db.get()?;
-    let config = SyncService::get_config(&conn)?;
+    let machine_key = crate::commands::scanner::derive_credential_key(&app_dir);
+    let config = SyncService::get_config(&conn, &machine_key)?;
     if !config.enabled {
         return Err(AppError::Internal("同步未启用，请在设置中配置并启用".to_string()));
     }
@@ -80,9 +85,10 @@ pub fn sync_upload_now(app: tauri::AppHandle, db_state: State<'_, DbState>) -> R
 pub fn sync_restore_now(app: tauri::AppHandle, db_state: State<'_, DbState>) -> Result<String, AppError> {
     let _trace = ipc_trace!("sync_restore_now");
     let app_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let machine_key = crate::commands::scanner::derive_credential_key(&app_dir);
     let config = {
         let conn = db_state.db.get()?;
-        SyncService::get_config(&conn)?
+        SyncService::get_config(&conn, &machine_key)?
     };
     if !config.enabled {
         return Err(AppError::Internal("同步未启用，请在设置中配置并启用".to_string()));

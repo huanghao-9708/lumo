@@ -13,8 +13,13 @@ pub struct Source {
     pub root_uri: String,
     /// 额外的 JSON 配置项
     pub config_json: String,
-    /// 用于在操作系统的钥匙串中获取密码的引用标识
+    /// 凭据引用（钥匙串条目或机器绑定密文）。安全收口（P1-08）：永不序列化到前端，
+    /// 前端展示改用 username 字段（解析出的用户名部分）。
+    #[serde(skip_serializing)]
     pub credential_ref: Option<String>,
+    /// 来源用户名（从 credential_ref 的用户名部分解出，供前端展示）
+    #[serde(default)]
+    pub username: Option<String>,
     /// 是否启用该来源（如果不启用，则该来源下的歌曲不显示）
     pub enabled: bool,
     /// 最后一次扫描的时间戳

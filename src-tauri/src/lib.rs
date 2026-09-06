@@ -475,6 +475,7 @@ pub fn run() {
             crate::commands::library::library_get_track_versions,
             crate::commands::library::library_set_primary_file,
             crate::commands::library::library_get_playability,
+            crate::commands::library::storage_get_db_size,
             crate::commands::queue::playback_set_queue,
             crate::commands::queue::playback_queue_state,
             crate::commands::queue::playback_advance,

@@ -118,3 +118,35 @@ mod tests {
         assert!(res.is_err());
     }
 }
+
+// ================= 系统钥匙串（P1-08，桌面端专属） =================
+// Windows → Credential Manager；macOS → Keychain。
+// Android 无系统级 keyring，凭据仍走机器绑定的加密文件方案（见 commands/scanner.rs），
+// 因此本模块整体 cfg 排除 Android。
+
+#[cfg(not(target_os = "android"))]
+const KEYRING_SERVICE: &str = "com.hao.lumo.credentials";
+
+/// 把密码写入系统钥匙串。entry_id 为随机生成的不可读引用（DB 中只存它，不存密码）。
+#[cfg(not(target_os = "android"))]
+pub fn keyring_set(entry_id: &str, password: &str) -> Result<(), String> {
+    let entry = keyring::Entry::new(KEYRING_SERVICE, entry_id)
+        .map_err(|e| format!("钥匙串条目创建失败: {}", e))?;
+    entry.set_password(password).map_err(|e| format!("钥匙串写入失败: {}", e))
+}
+
+/// 从系统钥匙串读取密码。
+#[cfg(not(target_os = "android"))]
+pub fn keyring_get(entry_id: &str) -> Result<String, String> {
+    let entry = keyring::Entry::new(KEYRING_SERVICE, entry_id)
+        .map_err(|e| format!("钥匙串条目创建失败: {}", e))?;
+    entry.get_password().map_err(|e| format!("钥匙串读取失败: {}", e))
+}
+
+/// 从系统钥匙串删除密码（条目不存在视为成功）。
+#[cfg(not(target_os = "android"))]
+pub fn keyring_delete(entry_id: &str) {
+    if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, entry_id) {
+        let _ = entry.delete_credential();
+    }
+}

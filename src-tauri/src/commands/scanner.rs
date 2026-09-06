@@ -75,7 +75,7 @@ pub(crate) fn decrypt_password(key: &[u8; 32], encoded: &str) -> Option<String> 
         let bytes = base64::engine::general_purpose::STANDARD.decode(payload).ok()?;
         let decrypted: Vec<u8> = bytes.iter()
             .enumerate()
-            .map(|(i, &b)| b ^ key[i % 32])
+            .map(|(i, b)| b ^ key[i % 32])
             .collect();
         return String::from_utf8(decrypted).ok();
     }
@@ -83,9 +83,88 @@ pub(crate) fn decrypt_password(key: &[u8; 32], encoded: &str) -> Option<String> 
     let bytes = base64::engine::general_purpose::STANDARD.decode(encoded).ok()?;
     let decrypted: Vec<u8> = bytes.iter()
         .enumerate()
-        .map(|(i, &b)| b ^ key[i % 32])
+        .map(|(i, b)| b ^ key[i % 32])
         .collect();
     String::from_utf8(decrypted).ok()
+}
+
+/// 解析来源凭据引用，返回 (username, Option<password>)。统一所有格式的分发入口（P1-08）：
+/// - `user##kr:<uuid>`：密码在系统钥匙串（桌面端）。Android 无钥匙串，视为失效。
+/// - `user##v2:seal:…`：机器绑定 XOR 加密（V6）。桌面端解析成功后懒迁移进钥匙串。
+/// - `user:password`：V5 明文（仅读兼容），桌面端同样懒迁移。
+/// - `user`：仅用户名，无密码。
+/// 钥匙串缺失 / 解密失败返回 NEEDS_REAUTH 语义错误（提示重新添加来源）。
+pub(crate) fn resolve_source_credential(
+    conn: &rusqlite::Connection,
+    source_id: i64,
+    credential_ref: &str,
+    machine_key: &[u8; 32],
+) -> Result<(String, Option<String>), AppError> {
+    const NEEDS_REAUTH: &str = "该来源的密码凭据已失效，请删除后重新添加该来源";
+
+    // 1. 系统钥匙串引用（桌面端新格式）
+    if let Some((u, entry)) = credential_ref.split_once("##kr:") {
+        #[cfg(not(target_os = "android"))]
+        {
+            match crate::services::secret::keyring_get(entry) {
+                Ok(pw) => return Ok((u.to_string(), Some(pw))),
+                Err(e) => return Err(AppError::Internal(format!("{} ({})", NEEDS_REAUTH, e))),
+            }
+        }
+        #[cfg(target_os = "android")]
+        {
+            let _ = u;
+            return Err(AppError::Internal(NEEDS_REAUTH.to_string()));
+        }
+    }
+
+    // 2. user##<encrypted>（V6 加密 / 更旧 base64）
+    if let Some((u, enc)) = credential_ref.split_once("##") {
+        let Some(pw) = decrypt_password(machine_key, enc) else {
+            return Err(AppError::Internal(NEEDS_REAUTH.to_string()));
+        };
+        lazy_migrate_to_keyring(conn, source_id, u, &pw);
+        return Ok((u.to_string(), Some(pw)));
+    }
+
+    // 3. user:password（V5 明文）
+    if let Some((u, p)) = credential_ref.split_once(':') {
+        lazy_migrate_to_keyring(conn, source_id, u, p);
+        return Ok((u.to_string(), Some(p.to_string())));
+    }
+
+    // 4. 仅用户名
+    Ok((credential_ref.to_string(), None))
+}
+
+/// 桌面端把解析出的明文密码升级进系统钥匙串，并把 credential_ref 改写为 kr 引用。
+/// best-effort：钥匙串写入失败（如无可用后端）保留原格式，不影响功能。
+fn lazy_migrate_to_keyring(conn: &rusqlite::Connection, source_id: i64, username: &str, password: &str) {
+    #[cfg(not(target_os = "android"))]
+    {
+        let uuid = hex::encode(rand::random::<[u8; 16]>());
+        if crate::services::secret::keyring_set(&uuid, password).is_ok() {
+            let _ = conn.execute(
+                "UPDATE sources SET credential_ref = ?1 WHERE id = ?2",
+                rusqlite::params![format!("{}##kr:{}", username, uuid), source_id],
+            );
+        }
+    }
+    #[cfg(target_os = "android")]
+    {
+        let _ = (conn, source_id, username, password);
+    }
+}
+
+/// 从 credential_ref 解析出用户名（供前端展示；密码部分永不透出）。
+pub(crate) fn username_from_credential_ref(cred: Option<&String>) -> Option<String> {
+    cred.and_then(|c| {
+        c.split_once("##")
+            .map(|(u, _)| u.to_string())
+            .or_else(|| c.split_once(':').map(|(u, _)| u.to_string()))
+            .or_else(|| Some(c.clone()))
+    })
+    .filter(|s| !s.is_empty())
 }
 
 #[tauri::command]
@@ -110,11 +189,28 @@ pub fn source_add_webdav(app: tauri::AppHandle, db_state: State<'_, DbState>, ur
     let webdav = crate::services::webdav::WebdavClient::new(url.clone(), username.clone(), password.clone());
     webdav.propfind("").map_err(|e| AppError::Internal(format!("Failed to connect to WebDAV: {}", e)))?;
 
-    // credential_ref 格式：新来源存为 "username##base64_encrypted_password"
+    // credential_ref 格式（P1-08）：桌面端优先存系统钥匙串引用 "username##kr:<uuid>"；
+    // 钥匙串不可用时回退机器绑定加密 "username##v2:seal:…"。Android 始终用机器绑定加密。
     let app_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
     let key = derive_credential_key(&app_dir);
     let cred = match (&username, &password) {
-        (Some(u), Some(p)) => Some(format!("{}##{}", u, encrypt_password(&key, p))),
+        (Some(u), Some(p)) => {
+            #[cfg(not(target_os = "android"))]
+            {
+                let uuid = hex::encode(rand::random::<[u8; 16]>());
+                match crate::services::secret::keyring_set(&uuid, p) {
+                    Ok(()) => Some(format!("{}##kr:{}", u, uuid)),
+                    Err(e) => {
+                        tracing::warn!("钥匙串写入失败，回退机器绑定加密: {}", e);
+                        Some(format!("{}##{}", u, encrypt_password(&key, p)))
+                    }
+                }
+            }
+            #[cfg(target_os = "android")]
+            {
+                Some(format!("{}##{}", u, encrypt_password(&key, p)))
+            }
+        }
         (Some(u), None) => Some(u.clone()),
         (None, _) => None,
     };
@@ -165,22 +261,29 @@ pub fn source_scan(app: tauri::AppHandle, db_state: State<'_, DbState>, source_i
         if kind == "local" {
             crate::services::scanner::scan_local_directory(app, source_id, &PathBuf::from(path), &app_dir);
         } else if kind == "webdav" {
-            // 从 credential_ref 提取用户名和密码，兼容三种格式：
-            // 1) "username##base64_encrypted" ─ V6+ 加密格式
-            // 2) "username:password" ─ V5 及之前明文（迁移/旧库兼容）
-            // 3) "username" ─ 仅有用户名（无密码认证）
-            let (username, password) = credential.as_deref()
-                .and_then(|cred| {
-                    if let Some((u, enc)) = cred.split_once("##") {
-                        decrypt_password(&key, enc).map(|p| (u.to_string(), p))
-                    } else if let Some((u, p)) = cred.split_once(':') {
-                        Some((u.to_string(), p.to_string()))
-                    } else {
-                        Some((cred.to_string(), String::new()))
+            // 凭据解析（P1-08 统一入口）：支持钥匙串引用 / V6 加密 / V5 明文；
+            // 桌面端解析成功后懒迁移进系统钥匙串。解析失败中止扫描并发出 scan-complete。
+            let (username, password) = match credential.as_deref() {
+                Some(cred) => {
+                    let conn = match app.state::<DbState>().db.get() {
+                        Ok(c) => c,
+                        Err(_) => {
+                            tracing::error!("扫描中止：来源 {} 无法获取数据库连接", source_id);
+                            let _ = tauri::Emitter::emit(&app, "scan-complete", source_id);
+                            return;
+                        }
+                    };
+                    match resolve_source_credential(&conn, source_id, cred, &key) {
+                        Ok((u, p)) => (Some(u), p),
+                        Err(e) => {
+                            tracing::error!("扫描中止：来源 {} 凭据解析失败: {}", source_id, e);
+                            let _ = tauri::Emitter::emit(&app, "scan-complete", source_id);
+                            return;
+                        }
                     }
-                })
-                .map(|(u, p)| (Some(u), Some(p)))
-                .unwrap_or((None, None));
+                }
+                None => (None, None),
+            };
             crate::services::scanner::scan_webdav_directory(app, source_id, path, username, password, &app_dir);
         }
     });
@@ -199,13 +302,16 @@ pub fn source_list(db_state: State<'_, DbState>) -> Result<Vec<crate::models::So
     ")?;
     
     let sources = stmt.query_map([], |row| {
+        let credential_ref: Option<String> = row.get(5)?;
+        let username = username_from_credential_ref(credential_ref.as_ref());
         Ok(crate::models::Source {
             id: row.get(0)?,
             name: row.get(1)?,
             kind: row.get(2)?,
             root_uri: row.get(3)?,
             config_json: row.get(4)?,
-            credential_ref: row.get(5)?,
+            credential_ref,
+            username,
             enabled: row.get::<_, i64>(6)? != 0,
             last_scan_at: row.get(7)?,
             last_error: row.get(8)?,
@@ -221,6 +327,17 @@ pub fn source_list(db_state: State<'_, DbState>) -> Result<Vec<crate::models::So
 pub fn source_remove(db_state: State<'_, DbState>, source_id: i64) -> Result<(), AppError> {
     let _trace = ipc_trace!("source_remove");
     let mut conn = db_state.db.get()?;
+
+    // 删除前清理该来源的系统钥匙串条目（kr 引用格式），避免孤儿凭据残留（P1-08）
+    if let Ok(Some(cred)) = conn.query_row(
+        "SELECT credential_ref FROM sources WHERE id = ?1",
+        rusqlite::params![source_id],
+        |row| row.get::<_, Option<String>>(0),
+    ) {
+        if let Some((_, entry)) = cred.split_once("##kr:") {
+            crate::services::secret::keyring_delete(entry);
+        }
+    }
 
     let tx = conn.transaction()?;
 

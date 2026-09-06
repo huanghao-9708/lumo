@@ -2,7 +2,7 @@
 import { computed, onMounted, onBeforeUnmount, ref } from 'vue';
 import { Sun, Moon, Monitor, Disc3, HardDrive, Server, Info, Scan, Volume2, Wifi, Plus, Trash2, Database, Image, Music2, CloudUpload, CloudDownload, RefreshCw, AlertCircle } from 'lucide-vue-next';
 import { invoke } from '../../utils/tauriInvoke';
-import { libraryGetCacheSize } from '../../api/library';
+import { storageGetDbSize, libraryGetCacheSize } from '../../api/library';
 import { playbackGetAudioCacheSize } from '../../api/playback';
 import { getAppVersion, restartApp } from '../../api/platform';
 import { syncGetConfig, syncUploadNow, syncRestoreNow, type SyncConfig } from '../../api/sync';
@@ -65,11 +65,12 @@ async function confirmRemove() {
 
 const storageInfo = ref<{ db: number; cover: number; audio: number } | null>(null);
 async function refreshStorage() {
-  const [cover, audio] = await Promise.all([
+  const [db, cover, audio] = await Promise.all([
+    storageGetDbSize().catch(() => 0),
     libraryGetCacheSize().catch(() => 0),
     playbackGetAudioCacheSize().catch(() => 0),
   ]);
-  storageInfo.value = { db: 0, cover, audio };
+  storageInfo.value = { db, cover, audio };
 }
 function fmtBytes(n: number): string {
   if (n >= 1024 * 1024 * 1024) return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB';

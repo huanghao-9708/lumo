@@ -3,8 +3,8 @@ use crate::services::webdav::{WebdavClient, WebdavFile};
 use rusqlite::{Connection, params};
 use std::path::{Path, PathBuf};
 
-/// 跨设备同步专用密钥（不依赖机器路径，所有设备相同）。
-/// 用固定 app identifier 作为种子，确保同一份配置在任意设备上都能解密。
+/// 旧版同步密钥（硬编码，全设备相同）——仅用于读取历史存量数据（P1-08），
+/// 读取成功后由 get_config 懒迁移为 v3 机器绑定格式。
 fn derive_sync_key() -> [u8; 32] {
     let seed = b"com.hao.lumo.sync";
     let mut key = [0u8; 32];
@@ -14,27 +14,45 @@ fn derive_sync_key() -> [u8; 32] {
     key
 }
 
-/// XOR + base64 加密（与 scanner.rs 的 encrypt_password 同算法，但密钥不同）
-fn encrypt_sync_password(password: &str) -> String {
-    let key = derive_sync_key();
+/// V3：机器绑定加密（.device_secret 派生 key，P1-08）。
+/// DB 单独泄露不再可解密（密钥在密钥文件中，与 DB 不同文件、不同泄露面）。
+fn encrypt_sync_password_v3(machine_key: &[u8; 32], password: &str) -> String {
+    use base64::Engine;
     let bytes: Vec<u8> = password.bytes()
         .enumerate()
-        .map(|(i, b)| b ^ key[i % 32])
+        .map(|(i, b)| b ^ machine_key[i % 32])
         .collect();
-    use base64::Engine;
-    base64::engine::general_purpose::STANDARD.encode(&bytes)
+    format!("v3:seal:{}", base64::engine::general_purpose::STANDARD.encode(&bytes))
 }
 
-/// 解密同步密码
-fn decrypt_sync_password(encoded: &str) -> Option<String> {
-    let key = derive_sync_key();
+/// 解密同步密码：按前缀分发 v3（机器绑定）/ 旧格式（硬编码 key）。
+/// 旧格式解密成功时同步触发懒迁移（UPDATE 为 v3），返回 (密码, 是否发生迁移)。
+fn decrypt_sync_password(encoded: &str, machine_key: &[u8; 32], conn: &Connection) -> Option<String> {
     use base64::Engine;
+    if let Some(payload) = encoded.strip_prefix("v3:seal:") {
+        let bytes = base64::engine::general_purpose::STANDARD.decode(payload).ok()?;
+        let decrypted: Vec<u8> = bytes.iter()
+            .enumerate()
+            .map(|(i, b)| b ^ machine_key[i % 32])
+            .collect();
+        return String::from_utf8(decrypted).ok();
+    }
+
+    // 旧格式：硬编码 key
+    let key = derive_sync_key();
     let bytes = base64::engine::general_purpose::STANDARD.decode(encoded).ok()?;
     let decrypted: Vec<u8> = bytes.iter()
         .enumerate()
-        .map(|(i, &b)| b ^ key[i % 32])
+        .map(|(i, b)| b ^ key[i % 32])
         .collect();
-    String::from_utf8(decrypted).ok()
+    let password = String::from_utf8(decrypted).ok()?;
+    // 懒迁移：升级为 v3 机器绑定格式
+    let v3 = encrypt_sync_password_v3(machine_key, &password);
+    let _ = conn.execute(
+        "UPDATE sync_config SET password_encrypted = ?1 WHERE id = 1",
+        params![v3],
+    );
+    Some(password)
 }
 
 /// 同步服务：管理 sync_config 的 CRUD 及 WebDAV 上传/下载/浏览。
@@ -78,30 +96,41 @@ impl SyncService {
         Ok(())
     }
 
-    /// 读取同步配置（密码解密后返回）
-    pub fn get_config(conn: &Connection) -> rusqlite::Result<SyncConfigDTO> {
-        let row = conn.query_row(
+    /// 读取同步配置（密码解密后返回）。需要机器密钥（P1-08 v3 格式 + 旧格式懒迁移）。
+    pub fn get_config(conn: &Connection, machine_key: &[u8; 32]) -> rusqlite::Result<SyncConfigDTO> {
+        let (enabled, webdav_url, username, password_encrypted, remote_path, last_sync_at, last_sync_direction) = conn.query_row(
             "SELECT enabled, webdav_url, username, password_encrypted, remote_path, last_sync_at, last_sync_direction
              FROM sync_config WHERE id = 1",
             [],
             |row| {
-                Ok(SyncConfigDTO {
-                    enabled: row.get(0)?,
-                    webdav_url: row.get(1)?,
-                    username: row.get(2)?,
-                    password: row.get::<_, Option<String>>(3)?.and_then(|e| decrypt_sync_password(&e)),
-                    remote_path: row.get(4)?,
-                    last_sync_at: row.get(5)?,
-                    last_sync_direction: row.get(6)?,
-                })
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
             },
         )?;
-        Ok(row)
+        let password = password_encrypted
+            .as_deref()
+            .and_then(|e| decrypt_sync_password(e, machine_key, conn));
+        Ok(SyncConfigDTO {
+            enabled,
+            webdav_url,
+            username,
+            password,
+            remote_path,
+            last_sync_at,
+            last_sync_direction,
+        })
     }
 
-    /// 保存同步配置（密码加密后写入）
-    pub fn save_config(conn: &Connection, config: &SyncConfigDTO) -> rusqlite::Result<()> {
-        let password_encrypted = config.password.as_deref().map(encrypt_sync_password);
+    /// 保存同步配置（密码以 v3 机器绑定格式加密写入）
+    pub fn save_config(conn: &Connection, config: &SyncConfigDTO, machine_key: &[u8; 32]) -> rusqlite::Result<()> {
+        let password_encrypted = config.password.as_deref().map(|p| encrypt_sync_password_v3(machine_key, p));
         conn.execute(
             "UPDATE sync_config SET
                 enabled = ?1,

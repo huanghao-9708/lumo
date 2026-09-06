@@ -113,7 +113,8 @@ export interface SourceDTO {
   kind: string;
   root_uri: string;
   config_json: string;
-  credential_ref: string | null;
+  /** 来源用户名（后端从凭据引用解出；密码/引用永不透出前端，P1-08） */
+  username?: string | null;
   enabled: boolean;
   last_scan_at: string | null;
   last_error: string | null;
