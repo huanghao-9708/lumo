@@ -3,6 +3,33 @@ use crate::db::DbState;
 use crate::error::AppError;
 use crate::ipc_trace;
 use std::path::PathBuf;
+use std::collections::HashSet;
+use std::sync::{LazyLock, Mutex};
+
+/// 全局扫描中集合：同一来源同一时刻只允许一个扫描任务（P1-10 幂等守卫）。
+/// 用全局 static 是因为扫描线程拿不到 Tauri State，需要在任意线程标记/解除。
+static SCANNING_SOURCES: LazyLock<Mutex<HashSet<i64>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+
+fn mark_scanning(source_id: i64) -> bool {
+    SCANNING_SOURCES
+        .lock()
+        .map(|mut set| set.insert(source_id))
+        .unwrap_or(false)
+}
+
+fn unmark_scanning(source_id: i64) {
+    if let Ok(mut set) = SCANNING_SOURCES.lock() {
+        set.remove(&source_id);
+    }
+}
+
+/// RAII 守卫：扫描线程无论正常结束还是 panic 都会解除标记。
+struct ScanGuard(i64);
+impl Drop for ScanGuard {
+    fn drop(&mut self) {
+        unmark_scanning(self.0);
+    }
+}
 
 /// 从 app_data_dir 路径推导加密密钥（同一台机器稳定，跨机器不同）。
 pub(crate) fn derive_credential_key(app_dir: &std::path::Path) -> [u8; 32] {
@@ -115,6 +142,10 @@ pub fn scanner_test_webdav(
 #[tauri::command]
 pub fn source_scan(app: tauri::AppHandle, db_state: State<'_, DbState>, source_id: i64) -> Result<(), AppError> {
     let _trace = ipc_trace!("source_scan");
+    // P1-10 幂等守卫：同一来源重复触发扫描直接拒绝（前端 UI 有软守卫，这里是硬防线）
+    if !mark_scanning(source_id) {
+        return Err(AppError::Internal("该来源正在扫描中，请等待本次扫描完成".to_string()));
+    }
     let (kind, path, credential) = {
         let conn = db_state.db.get()?;
         let (k, r, c): (String, String, Option<String>) = conn.query_row(
@@ -129,6 +160,8 @@ pub fn source_scan(app: tauri::AppHandle, db_state: State<'_, DbState>, source_i
     let key = derive_credential_key(&app_dir);
 
     std::thread::spawn(move || {
+        // RAII：正常结束 / 提前 return / panic 都会解除扫描标记
+        let _scan_guard = ScanGuard(source_id);
         if kind == "local" {
             crate::services::scanner::scan_local_directory(app, source_id, &PathBuf::from(path), &app_dir);
         } else if kind == "webdav" {

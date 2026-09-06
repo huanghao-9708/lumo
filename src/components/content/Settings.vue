@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
 import type { Component } from 'vue';
-import { Palette, Database, RefreshCw, HardDrive, Info, Server, FolderOpen, Upload, Download, AlertTriangle } from 'lucide-vue-next';
+import { Palette, Database, RefreshCw, HardDrive, Info, ShieldCheck, Server, FolderOpen, Upload, Download, AlertTriangle } from 'lucide-vue-next';
 import { usePlayerStore } from '../../stores/player';
 import { useUiStore } from '../../stores/ui';
 import { useSyncStore } from '../../stores/sync';
@@ -16,10 +16,11 @@ const uiStore = useUiStore();
 const syncStore = useSyncStore();
 
 // ===== 左栏分类导航 =====
-type SectionId = 'appearance' | 'sources' | 'sync' | 'storage' | 'about';
+type SectionId = 'appearance' | 'privacy' | 'sources' | 'sync' | 'storage' | 'about';
 const activeSection = ref<SectionId>('appearance');
 const navItems: { id: SectionId; label: string; icon: Component }[] = [
   { id: 'appearance', label: '外观', icon: Palette },
+  { id: 'privacy', label: '隐私', icon: ShieldCheck },
   { id: 'sources', label: '数据源', icon: Database },
   { id: 'sync', label: '数据同步', icon: RefreshCw },
   { id: 'storage', label: '存储', icon: HardDrive },
@@ -122,6 +123,35 @@ async function clearCache() {
               <ToggleSwitch
                 :model-value="uiStore.followSystem"
                 @update:model-value="uiStore.setFollowSystem($event)"
+              />
+            </div>
+          </div>
+        </section>
+
+        <!-- ---- 隐私 ---- -->
+        <section v-else-if="activeSection === 'privacy'">
+          <h2 class="text-[24px] font-bold text-text-primary tracking-tight leading-none">隐私</h2>
+          <p class="text-[12px] text-text-muted mt-1.5 mb-6">Lumo 默认完全离线。以下开关决定元数据缺失时是否联网匹配</p>
+
+          <div class="space-y-2">
+            <div class="flex items-center justify-between px-4 py-3.5 bg-bg-canvas border border-border-color rounded-[8px]">
+              <div class="min-w-0 pr-3">
+                <p class="text-[13px] text-text-primary">在线歌词匹配</p>
+                <p class="text-[11px] text-text-muted mt-0.5">未命中本地歌词时，向 LRCLIB 发送歌名、艺人、专辑与时长以匹配歌词</p>
+              </div>
+              <ToggleSwitch
+                :model-value="uiStore.fetchLyricsOnline"
+                @update:model-value="uiStore.setFetchLyricsOnline($event)"
+              />
+            </div>
+            <div class="flex items-center justify-between px-4 py-3.5 bg-bg-canvas border border-border-color rounded-[8px]">
+              <div class="min-w-0 pr-3">
+                <p class="text-[13px] text-text-primary">在线封面匹配</p>
+                <p class="text-[11px] text-text-muted mt-0.5">专辑或艺人缺少封面时，向 iTunes 发送对应名称以搜索封面</p>
+              </div>
+              <ToggleSwitch
+                :model-value="uiStore.fetchCoversOnline"
+                @update:model-value="uiStore.setFetchCoversOnline($event)"
               />
             </div>
           </div>

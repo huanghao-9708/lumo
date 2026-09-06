@@ -989,7 +989,8 @@ const albums = shallowRef<Album[]>([]);
   watch(currentTrack, async (newTrack) => {
     if (newTrack) {
       try {
-        const lrcText = await libraryGetLyrics(newTrack.id);
+        // 隐私开关（P0-07）：未开启「在线歌词匹配」时只读本地，不发 IPC
+        const lrcText = uiStore.fetchLyricsOnline ? await libraryGetLyrics(newTrack.id, true) : null;
         if (lrcText) {
           lyrics.value = parseLrc(lrcText);
         } else {
@@ -1115,8 +1116,8 @@ const albums = shallowRef<Album[]>([]);
       if (album) {
         try {
           // 不要 await 阻塞 tracks 的加载，改为异步后台执行
-          if (album.cover_artwork_id == null) {
-            libraryFetchMissingAlbumCover(newId).then((newCoverId) => {
+          if (album.cover_artwork_id == null && uiStore.fetchCoversOnline) {
+            libraryFetchMissingAlbumCover(newId, true).then((newCoverId) => {
               if (newCoverId) {
                 // 如果当前选中的专辑还是这一个，更新它的封面
                 if (currentAlbumDetailsData.value?.id === newId) {
@@ -1278,9 +1279,9 @@ const albums = shallowRef<Album[]>([]);
       } as ArtistDetails;
 
       try {
-        if (artist.avatar_artwork_id == null) {
+        if (artist.avatar_artwork_id == null && uiStore.fetchCoversOnline) {
           // 不阻塞，异步获取封面
-          libraryFetchMissingArtistCover(newId).then((newCoverId) => {
+          libraryFetchMissingArtistCover(newId, true).then((newCoverId) => {
             if (newCoverId) {
               if (currentArtistDetailsData.value?.id === newId) {
                 currentArtistDetailsData.value.avatar_artwork_id = newCoverId;

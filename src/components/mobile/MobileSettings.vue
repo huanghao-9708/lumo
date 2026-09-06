@@ -328,6 +328,56 @@ async function runProbe() {
       </div>
     </section>
 
+    <!-- ===== 隐私（在线元数据，默认关闭） ===== -->
+    <section class="px-4 py-1">
+      <div class="flex items-center justify-between px-1 py-2">
+        <h2 class="text-text-muted font-semibold uppercase tracking-widest" style="font-size: var(--text-10);">
+          隐私
+        </h2>
+      </div>
+      <div class="bg-bg-canvas border border-border-color rounded-[12px] overflow-hidden">
+        <!-- 在线歌词匹配 -->
+        <button
+          class="w-full flex items-center justify-between px-4 h-12 active:bg-list-hover transition-colors-smooth"
+          @click="uiStore.setFetchLyricsOnline(!uiStore.fetchLyricsOnline)"
+        >
+          <span class="text-[15px] text-text-primary text-left">在线歌词匹配</span>
+          <div
+            class="w-10 h-6 rounded-full transition-colors-smooth relative shrink-0"
+            :class="uiStore.fetchLyricsOnline ? 'bg-brand-orange' : 'bg-text-disabled'"
+          >
+            <div
+              class="w-4 h-4 bg-white rounded-full absolute top-1 transition-transform"
+              :class="uiStore.fetchLyricsOnline ? 'translate-x-5' : 'translate-x-1'"
+            ></div>
+          </div>
+        </button>
+        <p class="px-4 pb-2 text-text-muted" style="font-size: var(--text-10);">
+          未命中本地歌词时，向 LRCLIB 发送歌名、艺人、专辑与时长
+        </p>
+        <div class="h-px bg-border-color"></div>
+        <!-- 在线封面匹配 -->
+        <button
+          class="w-full flex items-center justify-between px-4 h-12 active:bg-list-hover transition-colors-smooth"
+          @click="uiStore.setFetchCoversOnline(!uiStore.fetchCoversOnline)"
+        >
+          <span class="text-[15px] text-text-primary text-left">在线封面匹配</span>
+          <div
+            class="w-10 h-6 rounded-full transition-colors-smooth relative shrink-0"
+            :class="uiStore.fetchCoversOnline ? 'bg-brand-orange' : 'bg-text-disabled'"
+          >
+            <div
+              class="w-4 h-4 bg-white rounded-full absolute top-1 transition-transform"
+              :class="uiStore.fetchCoversOnline ? 'translate-x-5' : 'translate-x-1'"
+            ></div>
+          </div>
+        </button>
+        <p class="px-4 pb-2 text-text-muted" style="font-size: var(--text-10);">
+          缺少封面时，向 iTunes 发送专辑/艺人名称
+        </p>
+      </div>
+    </section>
+
     <!-- ===== 数据源 ===== -->
     <section class="px-4 py-1">
       <div class="flex items-center justify-between px-1 py-2">

@@ -121,6 +121,25 @@ export const useUiStore = defineStore("ui", () => {
     isOnline.value = v;
   }
 
+  // ===== 在线元数据隐私开关（P0-07：默认拒绝，默认关） =====
+  // 开启后，元数据缺失时才允许向 LRCLIB（歌词）/ iTunes（封面）发送匹配请求。
+  // 后端命令同样门禁（allow_online 参数），双保险保证抓包口径。
+  const FETCH_LYRICS_KEY = "lumo_fetch_lyrics";
+  const FETCH_COVERS_KEY = "lumo_fetch_covers";
+
+  const fetchLyricsOnline = ref(localStorage.getItem(FETCH_LYRICS_KEY) === "1");
+  const fetchCoversOnline = ref(localStorage.getItem(FETCH_COVERS_KEY) === "1");
+
+  function setFetchLyricsOnline(v: boolean) {
+    fetchLyricsOnline.value = v;
+    localStorage.setItem(FETCH_LYRICS_KEY, v ? "1" : "0");
+  }
+
+  function setFetchCoversOnline(v: boolean) {
+    fetchCoversOnline.value = v;
+    localStorage.setItem(FETCH_COVERS_KEY, v ? "1" : "0");
+  }
+
   // ===== 轻量 Toast（错误/提示，4s 自动消退；全局唯一一条，新的顶掉旧的） =====
   const toast = ref<ToastMessage | null>(null);
   let toastTimer: number | null = null;
@@ -158,6 +177,10 @@ export const useUiStore = defineStore("ui", () => {
     toggleImmersiveView,
     isOnline,
     setOnline,
+    fetchLyricsOnline,
+    fetchCoversOnline,
+    setFetchLyricsOnline,
+    setFetchCoversOnline,
     toast,
     showToast,
     // 移动端

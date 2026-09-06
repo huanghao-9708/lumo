@@ -188,9 +188,9 @@ pub fn library_toggle_favorite_artist(db_state: State<'_, DbState>, artist_id: i
 }
 
 #[tauri::command]
-pub async fn library_get_lyrics(db_state: State<'_, DbState>, track_id: i64) -> Result<Option<String>, AppError> {
+pub async fn library_get_lyrics(db_state: State<'_, DbState>, track_id: i64, allow_online: Option<bool>) -> Result<Option<String>, AppError> {
     let _trace = ipc_trace!("library_get_lyrics");
-    
+
     // First, check DB
     let local_lyrics = {
         let conn = db_state.db.get()?;
@@ -205,6 +205,12 @@ pub async fn library_get_lyrics(db_state: State<'_, DbState>, track_id: i64) -> 
 
     if local_lyrics.is_some() {
         return Ok(local_lyrics);
+    }
+
+    // P0-07 在线元数据隐私：默认拒绝——调用方未显式授权时不向 LRCLIB 发送任何数据，
+    // 直接返回本地结果（可能为 None）。授权开关由设置页「隐私」分区控制。
+    if allow_online != Some(true) {
+        return Ok(None);
     }
 
     // Not found in DB, try to download from LRCLIB
@@ -505,9 +511,14 @@ pub fn library_get_counts(
 }
 
 #[tauri::command]
-pub async fn library_fetch_missing_album_cover(app: tauri::AppHandle, db_state: State<'_, DbState>, album_id: i64) -> Result<Option<i64>, AppError> {
+pub async fn library_fetch_missing_album_cover(app: tauri::AppHandle, db_state: State<'_, DbState>, album_id: i64, allow_online: Option<bool>) -> Result<Option<i64>, AppError> {
     let _trace = ipc_trace!("library_fetch_missing_album_cover");
-    
+
+    // P0-07 在线元数据隐私：默认拒绝，未显式授权不向 iTunes 发送专辑/艺人名称
+    if allow_online != Some(true) {
+        return Ok(None);
+    }
+
     // 1. Get album info
     let (album_title, artist_name): (String, Option<String>) = {
         let conn = db_state.db.get()?;
@@ -617,9 +628,14 @@ pub async fn library_fetch_missing_album_cover(app: tauri::AppHandle, db_state: 
 }
 
 #[tauri::command]
-pub async fn library_fetch_missing_artist_cover(app: tauri::AppHandle, db_state: State<'_, DbState>, artist_id: i64) -> Result<Option<i64>, AppError> {
+pub async fn library_fetch_missing_artist_cover(app: tauri::AppHandle, db_state: State<'_, DbState>, artist_id: i64, allow_online: Option<bool>) -> Result<Option<i64>, AppError> {
     let _trace = ipc_trace!("library_fetch_missing_artist_cover");
-    
+
+    // P0-07 在线元数据隐私：默认拒绝，未显式授权不向 iTunes 发送艺人名称
+    if allow_online != Some(true) {
+        return Ok(None);
+    }
+
     // 1. Get artist info
     let artist_name: String = {
         let conn = db_state.db.get()?;

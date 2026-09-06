@@ -149,16 +149,16 @@ export function libraryGetCounts(): Promise<LibraryCountsDTO> {
   return invoke('library_get_counts');
 }
 
-export function libraryFetchMissingAlbumCover(albumId: number): Promise<number | null> {
-  return invoke('library_fetch_missing_album_cover', { albumId });
+export function libraryFetchMissingAlbumCover(albumId: number, allowOnline: boolean): Promise<number | null> {
+  return invoke('library_fetch_missing_album_cover', { albumId, allowOnline });
 }
 
-export function libraryFetchMissingArtistCover(artistId: number): Promise<number | null> {
-  return invoke('library_fetch_missing_artist_cover', { artistId });
+export function libraryFetchMissingArtistCover(artistId: number, allowOnline: boolean): Promise<number | null> {
+  return invoke('library_fetch_missing_artist_cover', { artistId, allowOnline });
 }
 
-export function libraryGetLyrics(trackId: number): Promise<string | null> {
-  return invoke('library_get_lyrics', { trackId });
+export function libraryGetLyrics(trackId: number, allowOnline: boolean): Promise<string | null> {
+  return invoke('library_get_lyrics', { trackId, allowOnline });
 }
 
 export function libraryGetTrackFileInfo(trackId: number): Promise<TrackFileInfoDTO | null> {
