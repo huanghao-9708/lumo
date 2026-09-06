@@ -31,11 +31,17 @@ const viewMode = ref<'list' | 'grid'>('list');
 /* ============ 搜索 ============ */
 const searchInput = ref('');
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
+// 客户端内存过滤的视图：搜索词经 filterQuery prop 作用于视图内部，无需重拉后端
+const CLIENT_FILTER_TABS = ['最近播放', '喜欢的音乐'];
+
 function onSearchInput() {
   if (searchTimer) clearTimeout(searchTimer);
   searchTimer = setTimeout(() => {
+    // 艺术家详情页：搜索词经 filterQuery prop 过滤，绝不能落去刷新全局 tracks（防污染）
+    if (isArtistDetailView.value) return;
     playerStore.searchQuery = searchInput.value;
-    // 根据当前 tab 拉取对应数据
+    if (CLIENT_FILTER_TABS.includes(playerStore.activeLibraryTab)) return;
+    // 根据当前 tab 拉取对应数据（全部歌曲等走后端过滤的视图）
     loadForCurrentTab();
   }, 250);
 }
@@ -198,9 +204,18 @@ function loadForCurrentTab() {
   else if (tab === '收藏的歌手') playerStore.fetchFavoriteArtists();
   else if (tab === '专辑') playerStore.fetchAlbums(true);
   else if (tab === '播放列表' && playerStore.activePlaylistId) return;
+  else if (tab === '艺术家' && playerStore.activeArtistId) return; // 详情数据由 watch(activeArtistId) 加载
+  else if (tab === '艺术家') playerStore.fetchArtists(true); // 艺术家网格：按关键词刷新网格
   else playerStore.fetchTracks(true);
 }
-watch(() => playerStore.activeLibraryTab, loadForCurrentTab);
+watch(() => playerStore.activeLibraryTab, () => {
+  // 切换视图即切换列表：清掉上个视图的过滤词，避免残留污染（P0 级体验修正）
+  if (searchInput.value || playerStore.searchQuery) {
+    searchInput.value = '';
+    playerStore.searchQuery = '';
+  }
+  loadForCurrentTab();
+});
 
 onMounted(() => {
   // 仅在还没有数据时首次拉取，避免覆盖 restoreSession 的状态
@@ -441,16 +456,16 @@ onMounted(() => {
       <ArtistGrid v-if="isArtistGridView" />
 
       <!-- ============ 艺术家详情视图 ============ -->
-      <ArtistDetail v-if="isArtistDetailView" :artist-id="playerStore.activeArtistId" />
+      <ArtistDetail v-if="isArtistDetailView" :artist-id="playerStore.activeArtistId" :filter-query="searchInput" />
 
       <!-- ============ 文件夹视图 ============ -->
       <FolderView v-if="isFolderView" />
 
       <!-- ============ 最近播放视图 ============ -->
-      <RecentlyPlayed v-if="isRecentlyPlayedView" />
+      <RecentlyPlayed v-if="isRecentlyPlayedView" :filter-query="searchInput" />
 
       <!-- ============ 喜欢的音乐视图 ============ -->
-      <FavoritesView v-if="isFavoriteTracksView" />
+      <FavoritesView v-if="isFavoriteTracksView" :filter-query="searchInput" />
 
       <!-- ============ 收藏的专辑视图 ============ -->
       <FavoriteAlbums v-if="isFavoriteAlbumsView" />

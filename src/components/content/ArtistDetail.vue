@@ -1,13 +1,15 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, watch } from 'vue';
 import {
   Play, Shuffle, User, Loader2, Heart, MoreHorizontal, Clock, Disc3, Star,
 } from 'lucide-vue-next';
-import { usePlayerStore, type Album } from '../../stores/player';
+import { usePlayerStore, type Album, type Track } from '../../stores/player';
 import { getArtworkUrl } from '../../utils';
 
 const props = defineProps<{
   artistId: number | null;
+  /** 内容区搜索框传入的过滤词：内存过滤当前列表；激活时自动把分页剩余拉完 */
+  filterQuery?: string;
 }>();
 
 const playerStore = usePlayerStore();
@@ -43,18 +45,68 @@ const albumGrid = computed<Album[]>(() => {
   }));
 });
 
-function playAll() {
-  const d = detail.value;
-  if (d && d.tracks && d.tracks.length > 0) {
-    playerStore.playAll(d.tracks, 0);
+// ===== 过滤（内容区搜索框传入）=====
+const filterActive = computed(() => !!props.filterQuery?.trim());
+const filterKeyword = computed(() => (props.filterQuery ?? '').trim().toLowerCase());
+
+const visibleTracks = computed<Track[]>(() => {
+  const list = detail.value?.tracks ?? [];
+  const q = filterKeyword.value;
+  if (!q) return list;
+  return list.filter(t =>
+    t.title.toLowerCase().includes(q) ||
+    (t.album || '').toLowerCase().includes(q) ||
+    (t.artist || '').toLowerCase().includes(q)
+  );
+});
+
+// 过滤激活时自动把分页剩余拉完，保证过滤覆盖该艺术家的全部歌曲。
+// 需等详情切到当前艺术家且首屏加载完成（组件创建时 detail 可能还是旧艺术家/加载中）。
+const isLoadingAllForFilter = ref(false);
+async function loadRemainingForFilter() {
+  const id = props.artistId;
+  if (!id || !filterActive.value || isLoadingAllForFilter.value) return;
+  isLoadingAllForFilter.value = true;
+  try {
+    // 等待：详情已切到当前艺术家 && 首屏加载完成
+    let guard = 0;
+    while (guard++ < 300) {
+      const d = detail.value;
+      if (d && d.id === id && !d.isLoadingTracks) break;
+      await new Promise(r => setTimeout(r, 100));
+    }
+    // 逐页追加直到拉全
+    guard = 0;
+    while (detail.value?.id === id && detail.value?.hasMoreTracks && guard++ < 300) {
+      await playerStore.fetchArtistTracks(id, true);
+    }
+  } finally {
+    isLoadingAllForFilter.value = false;
   }
+}
+watch(
+  [filterActive, () => detail.value?.hasMoreTracks, () => detail.value?.isLoadingTracks],
+  () => {
+    if (filterActive.value) loadRemainingForFilter();
+  },
+  { immediate: true },
+);
+
+/** 播放用列表：过滤激活时播过滤结果，否则播全部 */
+function currentList(): Track[] {
+  return filterActive.value ? visibleTracks.value : (detail.value?.tracks ?? []);
+}
+
+function playAll() {
+  const list = currentList();
+  if (list.length > 0) playerStore.playAll(list, 0);
 }
 
 function shufflePlay() {
-  const d = detail.value;
-  if (d && d.tracks && d.tracks.length > 0) {
-    const idx = Math.floor(Math.random() * d.tracks.length);
-    playerStore.playAll(d.tracks, idx);
+  const list = currentList();
+  if (list.length > 0) {
+    const idx = Math.floor(Math.random() * list.length);
+    playerStore.playAll(list, idx);
   }
 }
 
@@ -64,8 +116,8 @@ function isPlayingTrack(trackId: number): boolean {
 }
 
 function playTrack(index: number) {
-  const d = detail.value;
-  if (d && d.tracks) playerStore.playAll(d.tracks, index);
+  const list = currentList();
+  playerStore.playAll(list, index);
 }
 
 function toggleFav(trackId: number, e: Event) {
@@ -81,6 +133,19 @@ function selectAlbum(albumId: number) {
 
 function getColorClass(color: string): string {
   return color || 'from-gray-500 to-gray-700';
+}
+
+// ===== 滚动加载更多（过滤未激活时按 30 条/页追加）=====
+function onScroll(e: Event) {
+  const el = e.target as HTMLElement;
+  if (el.scrollTop + el.clientHeight < el.scrollHeight - 200) return;
+  if (activeSubTab.value === 'tracks') {
+    const d = detail.value;
+    if (filterActive.value || !d?.hasMoreTracks || d.isLoadingTracks) return;
+    if (props.artistId !== null) {
+      playerStore.fetchArtistTracks(props.artistId, true);
+    }
+  }
 }
 </script>
 
@@ -166,7 +231,7 @@ function getColorClass(color: string): string {
 
       <div class="h-px bg-border-color mx-8"></div>
 
-      <div class="flex-1 overflow-y-auto px-8">
+      <div class="flex-1 overflow-y-auto px-8" @scroll="onScroll">
 
         <template v-if="activeSubTab === 'tracks'">
           <div class="flex items-center text-[10px] text-text-muted uppercase tracking-wider py-2 border-b border-border-color sticky top-0 bg-bg-content z-10">
@@ -180,7 +245,7 @@ function getColorClass(color: string): string {
             <div class="w-8 shrink-0"></div>
           </div>
 
-          <div v-if="detail.isLoadingTracks && detail.tracks?.length === 0" class="flex items-center justify-center py-16">
+          <div v-if="detail.isLoadingTracks && (!detail.tracks || detail.tracks.length === 0)" class="flex items-center justify-center py-16">
             <Loader2 class="w-4 h-4 animate-spin text-brand-orange" />
           </div>
 
@@ -188,9 +253,16 @@ function getColorClass(color: string): string {
             <span class="text-[12px]">暂无歌曲</span>
           </div>
 
+          <template v-else-if="visibleTracks.length === 0">
+            <div class="flex flex-col items-center justify-center py-16 text-text-muted">
+              <span class="text-[12px]">没有匹配的歌曲</span>
+              <span v-if="detail.hasMoreTracks" class="text-[11px] text-text-disabled mt-1">正在加载更多以匹配…</span>
+            </div>
+          </template>
+
           <div v-else>
             <div
-              v-for="(track, index) in detail.tracks"
+              v-for="(track, index) in visibleTracks"
               :key="track.id"
               class="flex items-center hover:bg-list-hover transition-colors-smooth group cursor-pointer relative"
               style="height: 40px;"
@@ -235,6 +307,12 @@ function getColorClass(color: string): string {
                 <MoreHorizontal class="w-4 h-4 text-text-muted" />
               </div>
             </div>
+
+            <!-- 分页追加加载指示 -->
+            <div v-if="detail.isLoadingTracks || isLoadingAllForFilter" class="flex items-center justify-center py-4 text-text-muted">
+              <Loader2 class="w-3.5 h-3.5 animate-spin mr-2" />
+              <span class="text-[11px]">加载更多…</span>
+            </div>
           </div>
         </template>
 
@@ -265,6 +343,26 @@ function getColorClass(color: string): string {
 
           <div v-if="!albumGrid || albumGrid.length === 0" class="flex flex-col items-center justify-center py-16 text-text-muted">
             <span class="text-[12px]">暂无专辑</span>
+          </div>
+
+          <!-- 专辑分页（页式替换分页，store 已有翻页函数） -->
+          <div
+            v-if="(detail.albumsTotalPages ?? 1) > 1"
+            class="flex items-center justify-center gap-4 pb-4 text-[12px] text-text-secondary"
+          >
+            <button
+              class="px-3 py-1.5 rounded-[6px] transition-colors-smooth disabled:opacity-40"
+              :class="(detail.albumsCurrentPage ?? 1) <= 1 ? '' : 'hover:bg-list-hover hover:text-text-primary'"
+              :disabled="(detail.albumsCurrentPage ?? 1) <= 1"
+              @click="playerStore.prevArtistAlbumsPage()"
+            >上一页</button>
+            <span class="font-mono tabular-nums">{{ detail.albumsCurrentPage ?? 1 }} / {{ detail.albumsTotalPages ?? 1 }}</span>
+            <button
+              class="px-3 py-1.5 rounded-[6px] transition-colors-smooth disabled:opacity-40"
+              :class="(detail.albumsCurrentPage ?? 1) >= (detail.albumsTotalPages ?? 1) ? '' : 'hover:bg-list-hover hover:text-text-primary'"
+              :disabled="(detail.albumsCurrentPage ?? 1) >= (detail.albumsTotalPages ?? 1)"
+              @click="playerStore.nextArtistAlbumsPage()"
+            >下一页</button>
           </div>
         </template>
       </div>

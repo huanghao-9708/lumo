@@ -6,9 +6,25 @@ import {
 import { usePlayerStore } from '../../stores/player';
 import FooterStatus from '../shared/FooterStatus.vue';
 
+const props = defineProps<{
+  /** 内容区搜索框传入的过滤词：内存过滤当前列表（收藏全量在内存，过滤覆盖完整） */
+  filterQuery?: string;
+}>();
+
 const playerStore = usePlayerStore();
 
 const tracks = computed(() => playerStore.tracks);
+
+/** 内存过滤 */
+const visibleTracks = computed(() => {
+  const q = (props.filterQuery ?? '').trim().toLowerCase();
+  if (!q) return tracks.value;
+  return tracks.value.filter(t =>
+    t.title.toLowerCase().includes(q) ||
+    t.artist.toLowerCase().includes(q) ||
+    t.album.toLowerCase().includes(q)
+  );
+});
 
 function isPlayingTrack(trackId: number): boolean {
   const t = playerStore.currentTrack;
@@ -16,7 +32,8 @@ function isPlayingTrack(trackId: number): boolean {
 }
 
 function playSong(index: number) {
-  playerStore.playTrack(index);
+  // 播放过滤后的列表（与所见一致）
+  playerStore.playQueue(visibleTracks.value, index);
 }
 
 function toggleFav(trackId: number, e: Event) {
@@ -52,10 +69,15 @@ function toggleFav(trackId: number, e: Event) {
         <p class="text-[11px] text-text-muted/70">在歌曲上点击心形图标即可收藏</p>
       </div>
 
+      <!-- 过滤无结果 -->
+      <div v-else-if="visibleTracks.length === 0" class="flex flex-col items-center justify-center py-20 text-text-muted">
+        <span class="text-[12px]">没有匹配的歌曲</span>
+      </div>
+
       <!-- 列表 -->
       <div v-else>
         <div
-          v-for="(track, index) in tracks"
+          v-for="(track, index) in visibleTracks"
           :key="track.id"
           class="flex items-center hover:bg-list-hover transition-colors-smooth group cursor-pointer"
           style="height: 40px;"
