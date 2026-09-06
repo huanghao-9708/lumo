@@ -14,7 +14,7 @@ mod android {
     use jni::JNIEnv;
     use std::sync::atomic::{AtomicIsize, Ordering};
     use std::sync::OnceLock;
-    use tauri::{AppHandle, Emitter};
+    use tauri::{AppHandle, Emitter, Manager};
 
     static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
     static VM_RAW: AtomicIsize = AtomicIsize::new(0);
@@ -186,7 +186,7 @@ mod android {
                                 drop(m);
                                 if let Some(qs) = app_handle.try_state::<crate::services::queue::QueueState>() {
                                     if let Ok(q) = qs.queue.lock() {
-                                        if let Some(item) = q.current_item() {
+                                        if let Some(item) = q.items.get(q.index) {
                                             let _ = update_foreground(&item.title, &item.artist, &item.album, true, pos, item.duration_ms.unwrap_or(0));
                                         }
                                     }
@@ -203,7 +203,7 @@ mod android {
                                 drop(m);
                                 if let Some(qs) = app_handle.try_state::<crate::services::queue::QueueState>() {
                                     if let Ok(q) = qs.queue.lock() {
-                                        if let Some(item) = q.current_item() {
+                                        if let Some(item) = q.items.get(q.index) {
                                             let _ = update_foreground(&item.title, &item.artist, &item.album, false, pos, item.duration_ms.unwrap_or(0));
                                         }
                                     }
