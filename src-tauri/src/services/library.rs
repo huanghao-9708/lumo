@@ -1,7 +1,31 @@
 use crate::services::metadata::AudioMetadata;
 use rusqlite::{Connection, params, OptionalExtension};
-use sha2::{Sha256, Digest};
-use std::fs;
+
+/// 扫描 worker 预处理好的封面信息：哈希、缓存路径、缩略图全部在事务外算好，
+/// 使写库事务内只剩纯 SQL（不再有 SHA256 / 图片解码 / 磁盘写入拉长事务）。
+#[derive(Debug, Default)]
+pub struct PreparedArtwork {
+    /// 封面内容 SHA256（有封面时必有）
+    pub hash: Option<String>,
+    /// 封面 MIME（INSERT 时落库；缺失时路径回退用 jpg 后缀）
+    pub mime: Option<String>,
+    /// 原图缓存文件路径：本扫描内首次遇到该 hash 的文件才有（写入也是它做的）
+    pub cache_path: Option<std::path::PathBuf>,
+    /// 200x200 JPEG 缩略图（仅首见文件生成；解码失败为 None，前端回退 lumo://artwork）
+    pub thumbnail: Option<Vec<u8>>,
+}
+
+/// 提取 + 预处理完成、随时可以进写库事务的一个文件。
+#[derive(Debug)]
+pub struct PreparedFile {
+    pub path: std::path::PathBuf,
+    pub metadata: AudioMetadata,
+    pub mtime: i64,
+    pub size: i64,
+    pub artwork: PreparedArtwork,
+    /// 同目录同名 .lrc 的预读内容（None = 没有 lrc 或远程源；index_file 内再回退内嵌歌词）
+    pub lrc_content: Option<String>,
+}
 
 /// 归一化艺人/标题字符串：去掉首尾空白、折叠中间多个空白为单个空格。
 /// 仅用于展示与去重的"原值"清理；做唯一键时再额外 `.to_lowercase()`。
@@ -46,12 +70,14 @@ impl LibraryService {
         conn: &Connection,
         source_id: i64,
         source_root: &std::path::Path,
-        path: &std::path::Path,
-        metadata: &AudioMetadata,
+        prepared: &PreparedFile,
         app_data_dir: &std::path::Path,
-        mtime: i64,
-        file_size: i64,
     ) -> rusqlite::Result<()> {
+        let path = &prepared.path;
+        let metadata = &prepared.metadata;
+        let mtime = prepared.mtime;
+        let file_size = prepared.size;
+
         let file_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_string();
 
@@ -76,8 +102,8 @@ impl LibraryService {
         let track_artist_str = metadata.artist.as_deref().unwrap_or(album_artist_str);
         let artist_ids = Self::split_and_upsert_artists(conn, track_artist_str)?;
 
-        // 2. 处理封面图片并生成 hash 缓存防重复
-        let artwork_id = Self::upsert_artwork(conn, metadata, app_data_dir)?;
+        // 2. 处理封面图片：哈希/写盘/缩略图已由扫描 worker 在事务外完成，这里只剩纯 SQL
+        let artwork_id = Self::upsert_artwork(conn, &prepared.artwork, app_data_dir)?;
 
         // 3. 处理专辑：按 (normalized_title, album_artist_id) 联合去重，
         //    避免不同艺人的同名专辑（"Greatest Hits" 之类）被错误合并。
@@ -275,20 +301,9 @@ impl LibraryService {
             conn.execute("UPDATE tracks SET primary_file_id = ?1 WHERE id = ?2", params![media_file_id, track_id])?;
         }
 
-        // 8. 尝试提取歌词存入 lyrics 表中（优先使用同目录下同名 LRC 文件，没有则使用内嵌歌词）
-        let mut lrc_content = None;
-        let mut lrc_path = path.with_extension("lrc");
-        if !lrc_path.exists() {
-            lrc_path = path.with_extension("LRC");
-        }
-        if lrc_path.exists() && lrc_path.is_file() {
-            if let Ok(content) = std::fs::read_to_string(&lrc_path) {
-                lrc_content = Some(content);
-            }
-        }
-        if lrc_content.is_none() {
-            lrc_content = metadata.lyrics.clone();
-        }
+        // 8. 歌词入库：优先扫描 worker 预读的同目录同名 LRC 文件，没有则回退内嵌歌词
+        //   （文件系统读取已在 worker 完成，写事务内不再有磁盘 I/O）
+        let lrc_content = prepared.lrc_content.clone().or_else(|| metadata.lyrics.clone());
 
         if let Some(content) = lrc_content {
             let _ = conn.execute(
@@ -342,80 +357,60 @@ impl LibraryService {
         Ok(ids)
     }
 
-    /// 处理封面图片：基于 SHA256 内容哈希去重，避免把同一张封面写多份。
-    fn upsert_artwork(conn: &Connection, metadata: &AudioMetadata, app_data_dir: &std::path::Path) -> rusqlite::Result<Option<i64>> {
-        let picture_data = match &metadata.picture_data {
-            Some(d) if !d.is_empty() => d,
-            _ => return Ok(None),
-        };
-
-        let mut hasher = Sha256::new();
-        hasher.update(picture_data);
-        let hash = hex::encode(hasher.finalize());
+    /// 处理封面图片：基于 worker 预计算的 SHA256 内容哈希去重，事务内只做 SQL。
+    /// 原图写盘与缩略图生成已在扫描 worker 中完成（见 scanner::prepare_artwork）。
+    fn upsert_artwork(
+        conn: &Connection,
+        artwork: &PreparedArtwork,
+        app_data_dir: &std::path::Path,
+    ) -> rusqlite::Result<Option<i64>> {
+        let Some(hash) = &artwork.hash else { return Ok(None) };
 
         // 同一张封面若已存在，直接复用其 ID。
-        // 但如果该记录的 thumbnail_blob 是 NULL（老数据 / V4 回填失败），
-        // 补生成一次缩略图并 UPDATE，确保后续扫描能逐步修复缺失的缩略图。
+        // thumbnail_blob 为 NULL（老数据 / 清理缓存后）时用首见文件带来的缩略图补写，
+        // 确保后续扫描能逐步修复缺失的缩略图。
         if let Some(id) = conn.query_row(
             "SELECT id FROM artwork WHERE content_hash = ?1",
             params![hash],
             |row| row.get(0),
         ).optional()? {
-            // Cache files can be removed independently from the DB; recreate them on
-            // the next scan instead of returning a dangling artwork reference.
-            let cache_meta: Option<(String, Option<Vec<u8>>)> = conn.query_row(
-                "SELECT cache_path, thumbnail_blob FROM artwork WHERE id = ?1",
-                params![id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            ).ok();
-            if let Some((cache_path, _)) = &cache_meta {
-                let path = std::path::Path::new(cache_path);
-                if !path.exists() {
-                    if let Some(parent) = path.parent() {
-                        let _ = fs::create_dir_all(parent);
-                    }
-                    let _ = fs::write(path, picture_data);
-                }
-            }
-            let needs_thumb = cache_meta.as_ref().map(|(_, thumb)| thumb.is_none()).unwrap_or(true);
-            if needs_thumb {
-                if let Some(blob) = Self::generate_thumbnail(picture_data) {
-                    let _ = conn.execute(
-                        "UPDATE artwork SET thumbnail_blob = ?1 WHERE id = ?2",
-                        params![blob, id],
-                    );
-                }
+            if let Some(thumb) = &artwork.thumbnail {
+                conn.execute(
+                    "UPDATE artwork SET thumbnail_blob = ?1 WHERE id = ?2 AND thumbnail_blob IS NULL",
+                    params![thumb, id],
+                )?;
             }
             return Ok(Some(id));
         }
 
-        let artworks_dir = app_data_dir.join("artworks");
-        if !artworks_dir.exists() {
-            let _ = fs::create_dir_all(&artworks_dir);
-        }
-
-        let ext = metadata.picture_mime.as_deref().and_then(|m| match m {
-            "image/png" => Some("png"),
-            "image/jpeg" | "image/jpg" => Some("jpg"),
-            "image/gif" => Some("gif"),
-            "image/webp" => Some("webp"),
-            _ => None,
-        }).unwrap_or("jpg");
-
-        let cache_path = artworks_dir.join(format!("{}.{}", hash, ext));
-        if !cache_path.exists() {
-            let _ = fs::write(&cache_path, picture_data);
-        }
-
-        // 生成 200x200 JPEG 缩略图，存入 BLOB 供 library_get_albums 内联返回。
-        // 这一步是消灭 N+1 封面请求的关键：网格视图不再需要逐个请求 lumo://artwork。
-        let thumbnail_blob = Self::generate_thumbnail(picture_data);
+        // 新封面：cache_path / thumbnail 均来自 worker 的预处理产物，纯 SQL 插入。
+        // 同 hash 的首见文件必带 cache_path；若结果乱序导致非首见文件先到写库，
+        // 用确定性路径（hash 命名）兜底——worker 写入的是同一个路径，不会错位。
+        let cache_path = artwork.cache_path.clone()
+            .unwrap_or_else(|| Self::artwork_cache_path(app_data_dir, artwork.mime.as_deref(), hash));
 
         conn.execute(
             "INSERT INTO artwork (cache_path, mime_type, content_hash, thumbnail_blob) VALUES (?1, ?2, ?3, ?4)",
-            params![cache_path.to_string_lossy().to_string(), metadata.picture_mime, hash, thumbnail_blob],
+            params![cache_path.to_string_lossy().to_string(), artwork.mime, hash, artwork.thumbnail],
         )?;
         Ok(Some(conn.last_insert_rowid()))
+    }
+
+    /// 封面缓存文件路径：{app_data_dir}/artworks/{hash}.{ext}（确定性命名）。
+    /// 扫描 worker 与写库回退共用，保证同一 hash 在任何线程算出的路径一致。
+    pub fn artwork_cache_path(
+        app_data_dir: &std::path::Path,
+        mime: Option<&str>,
+        hash: &str,
+    ) -> std::path::PathBuf {
+        let ext = match mime {
+            Some("image/png") => "png",
+            Some("image/jpeg") | Some("image/jpg") => "jpg",
+            Some("image/gif") => "gif",
+            Some("image/webp") => "webp",
+            _ => "jpg",
+        };
+        app_data_dir.join("artworks").join(format!("{}.{}", hash, ext))
     }
 
     /// 从原始图片字节生成 200x200 JPEG 缩略图（cover 模式：等比缩放后居中裁剪）。
