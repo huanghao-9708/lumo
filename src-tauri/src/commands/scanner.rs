@@ -196,12 +196,19 @@ pub fn source_remove(db_state: State<'_, DbState>, source_id: i64) -> Result<(),
     // primary_file_id is intentionally not a hard foreign key because it is a
     // denormalised preference. Re-point it before orphan cleanup so removing one
     // source cannot hide a track that still has another available file.
+    // 重指时按文件质量分（本地 > 远程、无损 > 有损）选择，与扫描期选主逻辑一致。
     tx.execute(
         "UPDATE tracks
          SET primary_file_id = (
              SELECT mf.id FROM media_files mf
+             JOIN sources s ON s.id = mf.source_id
              WHERE mf.track_id = tracks.id AND mf.availability = 'available'
-             ORDER BY mf.id LIMIT 1
+             ORDER BY (CASE s.kind WHEN 'local' THEN 100 ELSE 0 END)
+                    + (CASE lower(mf.file_ext)
+                        WHEN 'flac' THEN 50 WHEN 'wav' THEN 50 WHEN 'm4a' THEN 30 WHEN 'aac' THEN 30
+                        WHEN 'mp3' THEN 10 WHEN 'ogg' THEN 10 ELSE 0 END)
+                     DESC, mf.id
+             LIMIT 1
          )
          WHERE primary_file_id IS NULL
             OR NOT EXISTS (

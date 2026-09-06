@@ -1,11 +1,21 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import {
-  Activity, Disc, User, Heart, Folder, Clock, ListMusic, List, Plus, Star, Zap
+  Activity, Disc, User, Heart, Folder, Clock, ListMusic, List, Plus, Star,
+  Flame, CalendarPlus, History, CircleOff
 } from 'lucide-vue-next';
 import { usePlayerStore } from '../../stores/player';
+import type { Component } from 'vue';
 
 const playerStore = usePlayerStore();
+
+/** 智能歌单目录：与后端 library_get_smart_playlist 的 kind 一一对应 */
+const smartPlaylists: { kind: string; label: string; icon: Component }[] = [
+  { kind: 'most_played', label: '播放最多', icon: Flame },
+  { kind: 'recently_added', label: '最近添加', icon: CalendarPlus },
+  { kind: 'recently_played', label: '最近播放', icon: History },
+  { kind: 'never_played', label: '未曾播放', icon: CircleOff },
+];
 
 /** Library 一级导航。activeLibraryTab 是 store 里维护的当前页标识。 */
 const libraryNav = computed(() => [
@@ -162,13 +172,13 @@ function selectSmartPlaylist(kind: string) {
           Smart Playlists
         </h2>
         <ul class="space-y-[2px]">
-          <li>
+          <li v-for="sp in smartPlaylists" :key="sp.kind">
             <a href="#" class="flex items-center px-3 py-[7px] rounded-[6px] transition-colors-smooth"
-               :class="playerStore.activeLibraryTab === '智能歌单' && playerStore.activeSmartPlaylistKind === 'most_played'
+               :class="playerStore.activeLibraryTab === '智能歌单' && playerStore.activeSmartPlaylistKind === sp.kind
                  ? 'bg-list-selected text-text-primary' : 'text-text-primary hover:bg-list-hover'"
-               @click.prevent="selectSmartPlaylist('most_played')">
-              <Zap class="w-[16px] h-[16px] mr-3 flex-shrink-0" :class="playerStore.activeLibraryTab === '智能歌单' && playerStore.activeSmartPlaylistKind === 'most_played' ? 'text-brand-orange' : 'text-text-muted'" />
-              <span class="text-[13px] flex-1" :class="playerStore.activeLibraryTab === '智能歌单' && playerStore.activeSmartPlaylistKind === 'most_played' ? 'font-medium' : ''">播放最多</span>
+               @click.prevent="selectSmartPlaylist(sp.kind)">
+              <component :is="sp.icon" class="w-[16px] h-[16px] mr-3 flex-shrink-0" :class="playerStore.activeLibraryTab === '智能歌单' && playerStore.activeSmartPlaylistKind === sp.kind ? 'text-brand-orange' : 'text-text-muted'" />
+              <span class="text-[13px] flex-1" :class="playerStore.activeLibraryTab === '智能歌单' && playerStore.activeSmartPlaylistKind === sp.kind ? 'font-medium' : ''">{{ sp.label }}</span>
             </a>
           </li>
         </ul>

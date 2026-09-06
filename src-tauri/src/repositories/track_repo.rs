@@ -444,5 +444,100 @@ impl TrackRepo {
         for r in rows { result.push(r?); }
         Ok(result)
     }
+
+    /// 智能歌单：最近添加（tracks.added_at 降序，字段有索引）。
+    pub fn get_recently_added_tracks(conn: &Connection, limit: i64) -> rusqlite::Result<Vec<TrackDTO>> {
+        let mut stmt = conn.prepare("
+            SELECT
+                t.id,
+                t.title,
+                (SELECT artist_id FROM track_artists WHERE track_id = t.id ORDER BY position LIMIT 1) AS artist_id,
+                (SELECT GROUP_CONCAT(a.name, ', ') FROM track_artists ta JOIN artists a ON ta.artist_id = a.id WHERE ta.track_id = t.id ORDER BY ta.position) AS artist_name,
+                t.album_id,
+                al.title AS album_title,
+                m.duration_ms,
+                m.file_ext,
+                m.id AS media_file_id,
+                ft.track_id IS NOT NULL AS is_favorite,
+                al.cover_artwork_id,
+                m.file_size,
+                (SELECT s.kind FROM sources s JOIN media_files mf ON mf.source_id = s.id WHERE mf.id = m.id) AS source_kind
+            FROM tracks t
+            LEFT JOIN albums al ON t.album_id = al.id
+            JOIN media_files m ON m.id = COALESCE(t.primary_file_id, (SELECT mf.id FROM media_files mf WHERE mf.track_id = t.id ORDER BY mf.id LIMIT 1))
+            LEFT JOIN favorite_tracks ft ON t.id = ft.track_id
+            ORDER BY t.added_at DESC, t.id ASC
+            LIMIT ?1
+        ")?;
+
+        let rows = stmt.query_map(rusqlite::params![limit], crate::repositories::map_track_row)?;
+        let mut result = Vec::new();
+        for r in rows { result.push(r?); }
+        Ok(result)
+    }
+
+    /// 智能歌单：最近播放（按 tracks.last_played_at，曲库全集口径）。
+    pub fn get_recently_played_tracks(conn: &Connection, limit: i64) -> rusqlite::Result<Vec<TrackDTO>> {
+        let mut stmt = conn.prepare("
+            SELECT
+                t.id,
+                t.title,
+                (SELECT artist_id FROM track_artists WHERE track_id = t.id ORDER BY position LIMIT 1) AS artist_id,
+                (SELECT GROUP_CONCAT(a.name, ', ') FROM track_artists ta JOIN artists a ON ta.artist_id = a.id WHERE ta.track_id = t.id ORDER BY ta.position) AS artist_name,
+                t.album_id,
+                al.title AS album_title,
+                m.duration_ms,
+                m.file_ext,
+                m.id AS media_file_id,
+                ft.track_id IS NOT NULL AS is_favorite,
+                al.cover_artwork_id,
+                m.file_size,
+                (SELECT s.kind FROM sources s JOIN media_files mf ON mf.source_id = s.id WHERE mf.id = m.id) AS source_kind
+            FROM tracks t
+            LEFT JOIN albums al ON t.album_id = al.id
+            JOIN media_files m ON m.id = COALESCE(t.primary_file_id, (SELECT mf.id FROM media_files mf WHERE mf.track_id = t.id ORDER BY mf.id LIMIT 1))
+            LEFT JOIN favorite_tracks ft ON t.id = ft.track_id
+            WHERE t.last_played_at IS NOT NULL
+            ORDER BY t.last_played_at DESC
+            LIMIT ?1
+        ")?;
+
+        let rows = stmt.query_map(rusqlite::params![limit], crate::repositories::map_track_row)?;
+        let mut result = Vec::new();
+        for r in rows { result.push(r?); }
+        Ok(result)
+    }
+
+    /// 智能歌单：未曾播放（play_count = 0，按添加时间正序展示）。
+    pub fn get_never_played_tracks(conn: &Connection, limit: i64) -> rusqlite::Result<Vec<TrackDTO>> {
+        let mut stmt = conn.prepare("
+            SELECT
+                t.id,
+                t.title,
+                (SELECT artist_id FROM track_artists WHERE track_id = t.id ORDER BY position LIMIT 1) AS artist_id,
+                (SELECT GROUP_CONCAT(a.name, ', ') FROM track_artists ta JOIN artists a ON ta.artist_id = a.id WHERE ta.track_id = t.id ORDER BY ta.position) AS artist_name,
+                t.album_id,
+                al.title AS album_title,
+                m.duration_ms,
+                m.file_ext,
+                m.id AS media_file_id,
+                ft.track_id IS NOT NULL AS is_favorite,
+                al.cover_artwork_id,
+                m.file_size,
+                (SELECT s.kind FROM sources s JOIN media_files mf ON mf.source_id = s.id WHERE mf.id = m.id) AS source_kind
+            FROM tracks t
+            LEFT JOIN albums al ON t.album_id = al.id
+            JOIN media_files m ON m.id = COALESCE(t.primary_file_id, (SELECT mf.id FROM media_files mf WHERE mf.track_id = t.id ORDER BY mf.id LIMIT 1))
+            LEFT JOIN favorite_tracks ft ON t.id = ft.track_id
+            WHERE t.play_count = 0
+            ORDER BY t.added_at ASC, t.id ASC
+            LIMIT ?1
+        ")?;
+
+        let rows = stmt.query_map(rusqlite::params![limit], crate::repositories::map_track_row)?;
+        let mut result = Vec::new();
+        for r in rows { result.push(r?); }
+        Ok(result)
+    }
 }
 

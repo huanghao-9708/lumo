@@ -11,10 +11,13 @@ const playerStore = usePlayerStore();
 const tracks = computed(() => playerStore.smartPlaylistTracks);
 
 const title = computed(() => {
-  if (playerStore.activeSmartPlaylistKind === 'most_played') {
-    return '播放最多';
+  switch (playerStore.activeSmartPlaylistKind) {
+    case 'most_played': return '播放最多';
+    case 'recently_added': return '最近添加';
+    case 'recently_played': return '最近播放';
+    case 'never_played': return '未曾播放';
+    default: return '智能歌单';
   }
-  return '智能歌单';
 });
 
 function isPlayingTrack(trackId: number): boolean {

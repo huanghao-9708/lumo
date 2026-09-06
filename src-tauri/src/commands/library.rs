@@ -215,7 +215,7 @@ pub async fn library_get_lyrics(db_state: State<'_, DbState>, track_id: i64) -> 
                 t.title,
                 (SELECT GROUP_CONCAT(a.name, ', ') FROM track_artists ta JOIN artists a ON ta.artist_id = a.id WHERE ta.track_id = t.id ORDER BY ta.position),
                 (SELECT title FROM albums WHERE id = t.album_id),
-                (SELECT duration_ms FROM media_files WHERE track_id = t.id LIMIT 1)
+                (SELECT duration_ms FROM media_files WHERE track_id = t.id ORDER BY CASE WHEN id = t.primary_file_id THEN 0 ELSE 1 END, id LIMIT 1)
             FROM tracks t WHERE t.id = ?1
         ")?;
         use rusqlite::OptionalExtension;
@@ -284,17 +284,23 @@ pub fn library_get_track_file_info(db_state: State<'_, DbState>, track_id: i64) 
     let _trace = ipc_trace!("library_get_track_file_info");
     use rusqlite::OptionalExtension;
     let conn = db_state.db.get()?;
+
+    // 主文件优先：LIMIT 1 必须返回 tracks.primary_file_id 指向的版本（P1-04），
+    // 其余按本地优先 + id 排序兜底
     let mut stmt = conn.prepare("
-        SELECT 
-            mf.id, s.id, mf.track_id, s.root_uri || '/' || mf.relative_path, mf.relative_path, 
-            mf.file_name, mf.file_ext, mf.file_size, mf.modified_at, mf.duration_ms, mf.bitrate, mf.sample_rate, 
+        SELECT
+            mf.id, s.id, mf.track_id, s.root_uri || '/' || mf.relative_path, mf.relative_path,
+            mf.file_name, mf.file_ext, mf.file_size, mf.modified_at, mf.duration_ms, mf.bitrate, mf.sample_rate,
             mf.bit_depth, mf.channels, mf.file_ext, s.kind
         FROM media_files mf
         JOIN sources s ON s.id = mf.source_id
+        JOIN tracks t ON t.id = mf.track_id
         WHERE mf.track_id = ?1
+        ORDER BY CASE WHEN mf.id = t.primary_file_id THEN 0 ELSE 1 END,
+                 CASE s.kind WHEN 'local' THEN 0 ELSE 1 END, mf.id
         LIMIT 1
     ")?;
-    
+
     let info = stmt.query_row(params![track_id], |row| {
         Ok(crate::models::TrackFileInfoDTO {
             id: row.get(0)?,
@@ -314,8 +320,7 @@ pub fn library_get_track_file_info(db_state: State<'_, DbState>, track_id: i64) 
             format: row.get(14)?,
             source_kind: row.get(15)?,
         })
-    }).optional()?;
-    
+    }).optional()?;    
     Ok(info)
 }
 
@@ -729,6 +734,18 @@ pub fn library_get_smart_playlist(
     match kind.as_str() {
         "most_played" => {
             crate::repositories::track_repo::TrackRepo::get_most_played_tracks(&conn, limit)
+                .map_err(|e| AppError::Internal(e.to_string()))
+        }
+        "recently_added" => {
+            crate::repositories::track_repo::TrackRepo::get_recently_added_tracks(&conn, limit)
+                .map_err(|e| AppError::Internal(e.to_string()))
+        }
+        "recently_played" => {
+            crate::repositories::track_repo::TrackRepo::get_recently_played_tracks(&conn, limit)
+                .map_err(|e| AppError::Internal(e.to_string()))
+        }
+        "never_played" => {
+            crate::repositories::track_repo::TrackRepo::get_never_played_tracks(&conn, limit)
                 .map_err(|e| AppError::Internal(e.to_string()))
         }
         _ => Err(AppError::Internal(format!("Unknown smart playlist kind: {}", kind))),

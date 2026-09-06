@@ -20,6 +20,18 @@ struct ProgressEvent {
     position: u64,
 }
 
+/// 解析队列条目实际应使用的 media_file_id：跟随 tracks.primary_file_id 的当前值。
+/// 用户切换版本 / 扫描重指主文件后，自动切歌与 gapless 预加载无需重建队列即自动跟随；
+/// 主文件为空或查询失败时回退到入队时的快照。
+fn current_media_file_id(conn: &rusqlite::Connection, track_id: i64, snapshot: i64) -> i64 {
+    conn.query_row(
+        "SELECT COALESCE(primary_file_id, ?2) FROM tracks WHERE id = ?1",
+        rusqlite::params![track_id, snapshot],
+        |row| row.get(0),
+    )
+    .unwrap_or(snapshot)
+}
+
 pub fn internal_play_item(
     app: &AppHandle,
     queue_state: &State<'_, QueueState>,
@@ -37,12 +49,17 @@ pub fn internal_play_item(
 
     let db_state = app.state::<DbState>();
     let cache_state = app.state::<AudioCacheState>();
-    
+
     let app_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
     let key = crate::commands::scanner::derive_credential_key(&app_dir);
 
+    let effective_media_file_id = match db_state.db.get() {
+        Ok(conn) => current_media_file_id(&conn, item.track_id, item.media_file_id),
+        Err(_) => item.media_file_id,
+    };
+
     let audio_cache = cache_state.cache.lock().map_err(|e| AppError::Internal(e.to_string()))?;
-    let (path_buf, webdav_reader, webdav_info) = resolve_media_file(&db_state, &audio_cache, item.media_file_id, &key, force_local)?;
+    let (path_buf, webdav_reader, webdav_info) = resolve_media_file(&db_state, &audio_cache, effective_media_file_id, &key, force_local)?;
     drop(audio_cache);
 
     let manager = playback_state.manager.lock().map_err(|e| AppError::Internal(e.to_string()))?;
@@ -51,7 +68,7 @@ pub fn internal_play_item(
         let dur = manager.play_stream(buffered_reader)?;
         if let (Some(client), Some(url)) = (webdav_info.webdav_client, webdav_info.file_url) {
             drop(manager);
-            spawn_background_cache_download(&cache_state, item.media_file_id, client, url);
+            spawn_background_cache_download(&cache_state, effective_media_file_id, client, url);
         }
         dur
     } else if let Some(path) = path_buf {
@@ -64,13 +81,13 @@ pub fn internal_play_item(
         index,
         track: item.clone(),
     });
-    
+
     if let Ok(conn) = db_state.db.get() {
         let _ = crate::repositories::track_repo::TrackRepo::record_play(
             &conn,
             item.track_id,
             item.duration_ms.unwrap_or(0) as i64,
-            Some(item.media_file_id),
+            Some(effective_media_file_id),
         );
     }
     if let Ok(q) = queue_state.queue.lock() {
@@ -110,7 +127,11 @@ pub fn internal_enqueue_next(
     let key = crate::commands::scanner::derive_credential_key(&app_dir);
 
     let audio_cache = cache_state.cache.lock().map_err(|e| AppError::Internal(e.to_string()))?;
-    let (path_buf, webdav_reader, webdav_info) = resolve_media_file(&db_state, &audio_cache, item.media_file_id, &key, false)?;
+    let effective_media_file_id = match db_state.db.get() {
+        Ok(conn) => current_media_file_id(&conn, item.track_id, item.media_file_id),
+        Err(_) => item.media_file_id,
+    };
+    let (path_buf, webdav_reader, webdav_info) = resolve_media_file(&db_state, &audio_cache, effective_media_file_id, &key, false)?;
     drop(audio_cache);
 
     let manager = playback_state.manager.lock().map_err(|e| AppError::Internal(e.to_string()))?;
@@ -119,7 +140,7 @@ pub fn internal_enqueue_next(
         manager.enqueue_next_stream(buffered_reader)?;
         if let (Some(client), Some(url)) = (webdav_info.webdav_client, webdav_info.file_url) {
             drop(manager);
-            spawn_background_cache_download(&cache_state, item.media_file_id, client, url);
+            spawn_background_cache_download(&cache_state, effective_media_file_id, client, url);
         }
     } else if let Some(path) = path_buf {
         manager.enqueue_next_file(&path).map_err(|e| AppError::Internal(e.to_string()))?;
