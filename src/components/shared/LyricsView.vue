@@ -39,11 +39,21 @@ watch(
 /* variant → 样式映射 */
 const isImmersive = computed(() => props.variant === 'immersive');
 
-// 滚动容器：沉浸式需要整体居中、字大行松；侧栏紧凑
+// 滚动容器：沉浸式外层已限高（= 封面高度），此处只负责滚动，靠上下等距内边距把当前行顶到中心
 const containerClass = computed(() =>
   isImmersive.value
-    ? 'h-full overflow-y-auto pr-2 pl-2 py-[40vh]'
+    ? 'h-full overflow-y-auto px-2'
     : 'flex-1 overflow-y-auto min-h-0',
+);
+
+// 沉浸式：内边距取外层高度的 1/2，保证当前行始终居中（--np-cover 由 NowPlayingImmersive 注入）
+const immersivePad = computed(() =>
+  isImmersive.value
+    ? {
+        paddingTop: 'calc(var(--np-cover, 80vh) / 2)',
+        paddingBottom: 'calc(var(--np-cover, 80vh) / 2)',
+      }
+    : {},
 );
 const titleClass = computed(() =>
   isImmersive.value
@@ -52,7 +62,7 @@ const titleClass = computed(() =>
 );
 const lineClass = computed(() =>
   isImmersive.value
-    ? 'text-[17px] leading-[2.4] transition-colors-smooth cursor-pointer px-2'
+    ? 'text-[17px] leading-[2.4] transition-colors-smooth cursor-pointer px-2 text-center'
     : 'text-[13px] leading-[1.8] transition-colors-smooth cursor-pointer',
 );
 const emptyClass = computed(() =>
@@ -76,7 +86,7 @@ function onSeek(line: { time?: number }) {
 </script>
 
 <template>
-  <div ref="lyricsContainer" :class="containerClass">
+  <div ref="lyricsContainer" :class="containerClass" :style="immersivePad">
     <h3 v-if="!isImmersive" :class="titleClass">Lyrics</h3>
 
     <div v-if="playerStore.lyrics.length === 0" :class="emptyClass">暂无歌词</div>

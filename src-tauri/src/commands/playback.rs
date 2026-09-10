@@ -409,6 +409,16 @@ pub fn playback_get_pos(playback_state: State<'_, PlaybackState>) -> Result<u64,
     Ok(manager.get_pos())
 }
 
+/// 读取当前音频能量（RMS，0.0–1.0），用于沉浸式播放页的封面「随音乐呼吸」。
+///
+/// 仅在沉浸式页可见且正在播放时由前端以约 30Hz 采样，非播放态不采样，
+/// 以免给既有的 IPC 通道增加无谓负载。
+#[tauri::command]
+pub fn playback_get_level(playback_state: State<'_, PlaybackState>) -> Result<f32, AppError> {
+    let manager = playback_state.manager.lock().map_err(|e| AppError::Internal(e.to_string()))?;
+    Ok(manager.get_level())
+}
+
 #[tauri::command]
 pub fn playback_seek(playback_state: State<'_, PlaybackState>, position_ms: u64) -> Result<(), AppError> {
     let _trace = ipc_trace!("playback_seek");

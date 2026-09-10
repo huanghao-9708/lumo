@@ -1,6 +1,8 @@
-use rodio::{Decoder, OutputStream, Sink};
+use rodio::{Decoder, OutputStream, Sink, Source};
 use std::fs::File;
 use std::io::BufReader;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 use tracing::info;
 
 /// 集中管理音频输出流与播放 Sink。
@@ -22,6 +24,9 @@ use tracing::info;
 /// 因此这里保留 `Box::leak` 模式，并显式记录此设计权衡。
 pub struct PlaybackManager {
     sink: Sink,
+    /// 当前音频能量（f32 的位模式），由 `LevelSource` 在音频线程逐窗写入。
+    /// 用原子量而非 Mutex：音频回调路径上绝不能阻塞。
+    level: Arc<AtomicU32>,
 }
 
 impl PlaybackManager {
@@ -35,7 +40,10 @@ impl PlaybackManager {
             .map_err(|e| format!("Failed to create audio sink: {}", e))?;
 
         info!("Initialized default audio output stream");
-        Ok(Self { sink })
+        Ok(Self {
+            sink,
+            level: Arc::new(AtomicU32::new(0)),
+        })
     }
 
     pub fn play_file(&self, path: &std::path::Path) -> Result<Option<u64>, String> {
@@ -48,11 +56,15 @@ impl PlaybackManager {
         let decoder = Decoder::new(BufReader::new(reader))
             .map_err(|e| format!("Failed to decode stream: {}", e))?;
 
-        use rodio::Source;
         let duration = decoder.total_duration().map(|d| d.as_millis() as u64);
 
         self.sink.stop(); // 清掉旧队列，避免叠加
-        self.sink.append(decoder);
+        // convert_samples 把解码器的 i16 样本统一成 f32（LevelSource 按 f32 度量能量）；
+        // 该转换器由 rodio 实现，会把 try_seek 原样透传给解码器，因此拖拽进度条语义不变。
+        self.sink.append(LevelSource::new(
+            decoder.convert_samples::<f32>(),
+            self.level.clone(),
+        ));
         self.sink.play();
         Ok(duration)
     }
@@ -66,7 +78,8 @@ impl PlaybackManager {
         let file = File::open(path).map_err(|e| format!("Failed to open file for enqueuing: {}", e))?;
         let decoder = Decoder::new(BufReader::new(file))
             .map_err(|e| format!("Failed to decode stream for enqueuing: {}", e))?;
-        self.sink.append(decoder);
+        self.sink
+            .append(LevelSource::new(decoder.convert_samples::<f32>(), self.level.clone()));
         Ok(())
     }
 
@@ -78,7 +91,8 @@ impl PlaybackManager {
         info!("Enqueuing next stream for gapless playback");
         let decoder = Decoder::new(BufReader::new(reader))
             .map_err(|e| format!("Failed to decode stream for enqueuing: {}", e))?;
-        self.sink.append(decoder);
+        self.sink
+            .append(LevelSource::new(decoder.convert_samples::<f32>(), self.level.clone()));
         Ok(())
     }
 
@@ -102,6 +116,7 @@ impl PlaybackManager {
     pub fn stop(&self) {
         info!("Playback stopped");
         self.sink.stop();
+        self.level.store(0f32.to_bits(), Ordering::Relaxed);
     }
 
     pub fn set_volume(&self, volume: f32) {
@@ -122,6 +137,12 @@ impl PlaybackManager {
         self.sink.empty()
     }
 
+    /// 当前音频能量（RMS，0.0–1.0）。未播放或静音段为 0。
+    /// 前端在沉浸式页以约 30Hz 采样，驱动封面「随音乐呼吸」。
+    pub fn get_level(&self) -> f32 {
+        f32::from_bits(self.level.load(Ordering::Relaxed))
+    }
+
     /// [MA0 Spike] 播放正弦测试音，验证移动端音频输出链路。
     /// 刻意与正式播放共用 PlaybackManager 的初始化与 Sink 路径，
     /// 使 Spike 的结论（能否出声、采样率是否正确）可直接迁移到正式链路。
@@ -140,6 +161,84 @@ impl PlaybackManager {
         self.sink.play();
         info!("Playing debug tone: {}Hz for {}s", freq, seconds);
         Ok(Some(seconds as u64 * 1000))
+    }
+}
+
+/// 在解码器外层包一层，逐窗统计 RMS 能量并写入共享原子量（音频可视化用）。
+///
+/// 设计约束：
+/// - 只在音频线程做「乘加 + 每窗一次原子写」，不加锁、不分配，对播放链路零感知开销；
+/// - **必须转发 `try_seek`**：rodio 的 `Sink::try_seek` 会调用当前 Source 的 `try_seek`，
+///   不转发就会静默退化为 `NotSupported`，导致进度条拖拽失效；
+/// - 声道 / 采样率 / 时长 / 帧长度全部原样透传，保持 Sink 行为不变。
+struct LevelSource<S> {
+    inner: S,
+    level: Arc<AtomicU32>,
+    acc: f32,
+    count: u32,
+}
+
+/// 统计窗口 1024 个样本：48kHz 下约 21ms，足够驱动 30fps 视觉反馈，
+/// 同时把原子写频率压到约 47 次/秒。
+const LEVEL_WINDOW: u32 = 1024;
+
+impl<S> LevelSource<S> {
+    fn new(inner: S, level: Arc<AtomicU32>) -> Self {
+        Self {
+            inner,
+            level,
+            acc: 0.0,
+            count: 0,
+        }
+    }
+}
+
+impl<S> Iterator for LevelSource<S>
+where
+    S: Iterator<Item = f32>,
+{
+    type Item = f32;
+
+    fn next(&mut self) -> Option<f32> {
+        let sample = self.inner.next()?;
+        self.acc += sample * sample;
+        self.count += 1;
+
+        if self.count >= LEVEL_WINDOW {
+            let rms = (self.acc / self.count as f32).sqrt();
+            self.level
+                .store(rms.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+            self.acc = 0.0;
+            self.count = 0;
+        }
+
+        Some(sample)
+    }
+}
+
+impl<S> rodio::Source for LevelSource<S>
+where
+    S: rodio::Source<Item = f32>,
+{
+    fn current_frame_len(&self) -> Option<usize> {
+        self.inner.current_frame_len()
+    }
+
+    fn channels(&self) -> u16 {
+        self.inner.channels()
+    }
+
+    fn sample_rate(&self) -> u32 {
+        self.inner.sample_rate()
+    }
+
+    fn total_duration(&self) -> Option<std::time::Duration> {
+        self.inner.total_duration()
+    }
+
+    /// 关键：转发 seek，否则进度条拖拽会失效（见类型注释）。
+    fn try_seek(&mut self, pos: std::time::Duration) -> Result<(), rodio::source::SeekError> {
+        self.inner.try_seek(pos)
     }
 }
 

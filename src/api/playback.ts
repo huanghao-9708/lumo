@@ -32,6 +32,12 @@ export function playbackGetPos(): Promise<number> {
   return invoke('playback_get_pos');
 }
 
+/** 读取当前音频能量（RMS，0.0–1.0），驱动沉浸式播放页的封面可视化。
+ *  非播放态返回 0；后端逐窗(≈21ms)统计，前端以约 30Hz 采样即可。 */
+export function playbackGetLevel(): Promise<number> {
+  return invoke('playback_get_level');
+}
+
 export function playbackSeek(positionMs: number): Promise<void> {
   return invoke('playback_seek', { positionMs });
 }
