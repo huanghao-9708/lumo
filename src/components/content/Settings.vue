@@ -10,6 +10,7 @@ import { playbackGetAudioCacheSize, playbackClearAudioCache } from '../../api/pl
 import ToggleSwitch from '../shared/ToggleSwitch.vue';
 import SourceManagerModal from './settings/SourceManagerModal.vue';
 import WebdavFolderPicker from '../shared/WebdavFolderPicker.vue';
+import { APP_NAME, APP_VERSION_LABEL, APP_DESCRIPTION } from '../../config/appInfo';
 
 const playerStore = usePlayerStore();
 const uiStore = useUiStore();
@@ -328,9 +329,9 @@ async function clearCache() {
               <Info class="w-5 h-5 text-text-muted" />
             </div>
             <div>
-              <p class="text-[13px] text-text-primary font-medium">Lumo Player</p>
-              <p class="text-[11px] text-text-muted font-mono">v1.0.0</p>
-              <p class="text-[11px] text-text-muted">一个轻量、温暖的本地音乐播放器</p>
+              <p class="text-[13px] text-text-primary font-medium">{{ APP_NAME }}</p>
+              <p class="text-[11px] text-text-muted font-mono">{{ APP_VERSION_LABEL }}</p>
+              <p class="text-[11px] text-text-muted">{{ APP_DESCRIPTION }}</p>
             </div>
           </div>
         </section>

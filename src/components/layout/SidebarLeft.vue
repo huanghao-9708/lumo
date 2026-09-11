@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import {
-  Activity, Disc, User, Heart, Folder, Clock, ListMusic, List, Plus, Star,
+  Home, Activity, Disc, User, Heart, Folder, Clock, ListMusic, List, Plus, Star,
   Flame, CalendarPlus, History, CircleOff
 } from 'lucide-vue-next';
 import { usePlayerStore } from '../../stores/player';
@@ -19,6 +19,7 @@ const smartPlaylists: { kind: string; label: string; icon: Component }[] = [
 
 /** Library 一级导航。activeLibraryTab 是 store 里维护的当前页标识。 */
 const libraryNav = computed(() => [
+  { key: '首页', label: '首页', icon: Home, count: null },
   { key: '全部歌曲', label: '全部歌曲', icon: Activity, count: playerStore.tracksTotalCount },
   { key: '专辑', label: '专辑', icon: Disc, count: playerStore.albumsTotalCount },
   { key: '艺术家', label: '艺术家', icon: User, count: playerStore.artistsTotalCount },
@@ -61,11 +62,9 @@ function selectSmartPlaylist(kind: string) {
 
 <template>
   <div class="w-[240px] h-full bg-bg-canvas flex flex-col flex-shrink-0 select-none">
-    <!-- Logo -->
-    <div class="px-8 pt-8 pb-6 cursor-pointer" data-tauri-drag-region>
-      <h1 class="text-xl font-bold tracking-[0.15em] text-text-primary mb-2">LUMO</h1>
-      <p class="text-[9px] tracking-widest text-text-muted font-mono uppercase leading-tight">Local Music System</p>
-      <p class="text-[9px] text-text-muted/60 font-mono mt-0.5">v1.0.0</p>
+    <!-- Logo：只保留 LUMO 一行，点击回首页（版本号/文案统一走 config/appInfo，不再硬编码） -->
+    <div class="px-8 pt-8 pb-6 cursor-pointer" data-tauri-drag-region @click="playerStore.goHome()">
+      <h1 class="text-xl font-bold tracking-[0.15em] text-text-primary">LUMO</h1>
     </div>
 
     <!-- Scrollable Nav -->

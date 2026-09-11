@@ -360,3 +360,91 @@ pub struct WebdavEntry {
     pub is_dir: bool,
     pub path: String,
 }
+
+/// `library_get_stats` 的返回：首页统计卡数据。
+/// 一条 SQL 聚合曲库规模与收听行为，一次 IPC 返回。
+/// 「今日/近7天」按本地时区口径过滤（play_history.played_at 是 UTC 朴素串，
+/// `datetime('now','localtime','start of day','utc')` = 本地今日零点的 UTC 时刻）。
+#[derive(Debug, serde::Serialize)]
+pub struct LibraryStats {
+    /// 曲库歌曲总数
+    pub track_count: i64,
+    /// 专辑总数
+    pub album_count: i64,
+    /// 艺人总数
+    pub artist_count: i64,
+    /// 累计听歌时长（毫秒，SUM(play_history.play_duration_ms)）
+    pub total_listen_ms: i64,
+    /// 今日听歌时长（毫秒）
+    pub today_listen_ms: i64,
+    /// 近 7 天听歌时长（毫秒）
+    pub week_listen_ms: i64,
+    /// 累计听歌次数（SUM(tracks.play_count)）
+    pub total_play_count: i64,
+    /// 今日播放次数（play_history 当日流水条数）
+    pub today_play_count: i64,
+    /// 歌单数
+    pub playlist_count: i64,
+    /// 收藏的专辑数
+    pub favorite_album_count: i64,
+    /// 收藏的艺人数
+    pub favorite_artist_count: i64,
+    /// 喜欢的歌曲数
+    pub favorite_track_count: i64,
+}
+
+/// 排行榜歌曲：标准 TrackDTO 13 列之上多一列 play_count（第 14 列）。
+/// serde flatten 使 JSON 表现为 TrackDTO 全部字段 + play_count。
+#[derive(Debug, serde::Serialize)]
+pub struct RankedTrackDTO {
+    #[serde(flatten)]
+    pub track: TrackDTO,
+    /// 播放次数
+    pub play_count: i64,
+}
+
+/// 排行榜艺人
+#[derive(Debug, serde::Serialize)]
+pub struct RankedArtistDTO {
+    pub id: i64,
+    pub name: String,
+    /// 名下所有歌曲累计播放次数
+    pub play_count: i64,
+    /// 名下歌曲总数（artists.track_count 冗余字段）
+    pub track_count: i64,
+    pub avatar_artwork_id: Option<i64>,
+}
+
+/// 排行榜专辑
+#[derive(Debug, serde::Serialize)]
+pub struct RankedAlbumDTO {
+    pub id: i64,
+    pub title: String,
+    /// 专辑艺人（album_artists GROUP_CONCAT）
+    pub artist_name: Option<String>,
+    pub cover_artwork_id: Option<i64>,
+    /// 专辑内所有歌曲累计播放次数
+    pub play_count: i64,
+}
+
+/// `library_get_insights` 的返回：首页 8 个查询的结果一次 IPC 打包，
+/// 避免逐个查询造成 IPC 拥堵。
+#[derive(Debug, serde::Serialize)]
+pub struct LibraryInsights {
+    /// 播放最多的歌曲榜
+    pub top_played_tracks: Vec<RankedTrackDTO>,
+    /// 最近播放榜
+    pub recent_played_tracks: Vec<RankedTrackDTO>,
+    /// 最近添加榜
+    pub recent_added_tracks: Vec<RankedTrackDTO>,
+    /// 我喜欢的音乐榜
+    pub favorite_tracks: Vec<RankedTrackDTO>,
+    /// 听得最多的艺人榜
+    pub top_played_artists: Vec<RankedArtistDTO>,
+    /// 播放最多的专辑榜
+    pub top_played_albums: Vec<RankedAlbumDTO>,
+    /// 今日播放次数（play_history 流水口径）
+    pub today_play_count: i64,
+    /// 上次听歌（最近一条有播放时间的曲目，含 last_played_at）
+    pub last_played: Option<RankedTrackDTO>,
+}

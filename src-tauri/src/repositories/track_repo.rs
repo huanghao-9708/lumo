@@ -539,5 +539,164 @@ impl TrackRepo {
         for r in rows { result.push(r?); }
         Ok(result)
     }
+
+    // ================= 排行榜查询（两步法：先 ID，后补列） =================
+    //
+    // SELECT 里的 4 个相关标量子查询（主艺人 id / 艺人 GROUP_CONCAT / source kind 等）
+    // 在 WHERE 触发全表扫描时会对每行各执行一次：30k 行 × 4 子查询 ≈ 12 万次主键查找
+    // （实测播放最多榜单 6.7s）。两步法把扫描留给第一步的纯 ID 查询（只读索引列），
+    // 第二步仅对 LIMIT 后的少量 ID 补齐展示列，复杂度从 O(全表 × 子查询) 降为 O(limit × 子查询)。
+    //
+    // 注意：SELECT 列模板与 map_track_row 的 13 列强耦合，改动列序必须同步两处。
+
+    /// 排行榜第二步：按 ID 集合补齐 13 列标准 TrackDTO + play_count(13) + last_played_at(14)。
+    /// `order_by` 由调用方以白名单字面量传入（非用户输入，无注入面），
+    /// 可引用模板中的别名与 `ft`（favorite_tracks LEFT JOIN 在模板内）。
+    fn ranked_details(conn: &Connection, ids: &[i64], order_by: &str) -> rusqlite::Result<Vec<RankedTrackDTO>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!("
+            SELECT
+                t.id,
+                t.title,
+                (SELECT artist_id FROM track_artists WHERE track_id = t.id ORDER BY position LIMIT 1) AS artist_id,
+                (SELECT GROUP_CONCAT(a.name, ', ') FROM track_artists ta JOIN artists a ON ta.artist_id = a.id WHERE ta.track_id = t.id ORDER BY ta.position) AS artist_name,
+                t.album_id,
+                al.title AS album_title,
+                m.duration_ms,
+                m.file_ext,
+                m.id AS media_file_id,
+                ft.track_id IS NOT NULL AS is_favorite,
+                al.cover_artwork_id,
+                m.file_size,
+                (SELECT s.kind FROM sources s JOIN media_files mf ON mf.source_id = s.id WHERE mf.id = m.id) AS source_kind,
+                t.play_count,
+                t.last_played_at
+            FROM tracks t
+            LEFT JOIN albums al ON t.album_id = al.id
+            JOIN media_files m ON m.id = COALESCE(t.primary_file_id, (SELECT mf.id FROM media_files mf WHERE mf.track_id = t.id ORDER BY mf.id LIMIT 1))
+            LEFT JOIN favorite_tracks ft ON t.id = ft.track_id
+            WHERE t.id IN ({placeholders})
+            ORDER BY {order_by}
+        ");
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(ids.iter()), |row| {
+            Ok(RankedTrackDTO {
+                track: TrackDTO {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    artist_id: row.get(2)?,
+                    artist_name: row.get(3)?,
+                    album_id: row.get(4)?,
+                    album_title: row.get(5)?,
+                    duration_ms: row.get(6)?,
+                    format: row.get(7)?,
+                    media_file_id: row.get(8)?,
+                    is_favorite: row.get(9)?,
+                    cover_artwork_id: row.get(10)?,
+                    file_size: row.get::<_, Option<i64>>(11)?,
+                    source_kind: row.get::<_, String>(12)?,
+                    last_played_at: row.get(14)?,
+                },
+                play_count: row.get(13)?,
+            })
+        })?;
+        let mut result = Vec::new();
+        for r in rows { result.push(r?); }
+        Ok(result)
+    }
+
+    /// 播放最多的歌曲榜（play_count > 0，两步法）。
+    pub fn get_top_played_ranked(conn: &Connection, limit: i64) -> rusqlite::Result<Vec<RankedTrackDTO>> {
+        let ids: Vec<i64> = {
+            let mut stmt = conn.prepare(
+                "SELECT t.id FROM tracks t WHERE t.play_count > 0 ORDER BY t.play_count DESC, t.id ASC LIMIT ?1")?;
+            let rows = stmt.query_map([limit], |row| row.get(0))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        Self::ranked_details(conn, &ids, "t.play_count DESC, t.id ASC")
+    }
+
+    /// 最近播放榜（last_played_at 非空，按时间倒序，两步法）。
+    pub fn get_recent_play_ranked(conn: &Connection, limit: i64) -> rusqlite::Result<Vec<RankedTrackDTO>> {
+        let ids: Vec<i64> = {
+            let mut stmt = conn.prepare(
+                "SELECT t.id FROM tracks t WHERE t.last_played_at IS NOT NULL ORDER BY t.last_played_at DESC, t.id DESC LIMIT ?1")?;
+            let rows = stmt.query_map([limit], |row| row.get(0))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        Self::ranked_details(conn, &ids, "t.last_played_at DESC, t.id DESC")
+    }
+
+    /// 最近添加榜（added_at 倒序，两步法；idx_tracks_added_at 索引）。
+    pub fn get_recent_added_ranked(conn: &Connection, limit: i64) -> rusqlite::Result<Vec<RankedTrackDTO>> {
+        let ids: Vec<i64> = {
+            let mut stmt = conn.prepare(
+                "SELECT t.id FROM tracks t ORDER BY t.added_at DESC, t.id DESC LIMIT ?1")?;
+            let rows = stmt.query_map([limit], |row| row.get(0))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        Self::ranked_details(conn, &ids, "t.added_at DESC, t.id DESC")
+    }
+
+    /// 我喜欢的音乐榜（favorited_at 倒序，两步法）。
+    pub fn get_favorite_ranked(conn: &Connection, limit: i64) -> rusqlite::Result<Vec<RankedTrackDTO>> {
+        let ids: Vec<i64> = {
+            let mut stmt = conn.prepare(
+                "SELECT ft.track_id FROM favorite_tracks ft ORDER BY ft.favorited_at DESC, ft.track_id DESC LIMIT ?1")?;
+            let rows = stmt.query_map([limit], |row| row.get(0))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        // favorite_tracks 已在详情模板中 LEFT JOIN（别名 ft），直接按其 favorited_at 复现第一步顺序
+        Self::ranked_details(conn, &ids, "ft.favorited_at DESC, t.id DESC")
+    }
+
+    /// 今日播放次数（本地时区当日零点起的 play_history 流水条数）。
+    /// played_at 存 UTC 朴素串：datetime('now','localtime','start of day','utc')
+    /// = 本地今日零点换算回 UTC 的时刻。
+    pub fn get_today_play_count(conn: &Connection) -> rusqlite::Result<i64> {
+        conn.query_row(
+            "SELECT COUNT(*) FROM play_history
+             WHERE played_at >= datetime('now','localtime','start of day','utc')",
+            [],
+            |row| row.get(0),
+        )
+    }
+
+    /// 上次听歌（最近一条有播放时间的曲目，两步法取 1 条）。
+    pub fn get_last_played(conn: &Connection) -> rusqlite::Result<Option<RankedTrackDTO>> {
+        let id: Option<i64> = {
+            let mut stmt = conn.prepare(
+                "SELECT id FROM tracks WHERE last_played_at IS NOT NULL ORDER BY last_played_at DESC, id DESC LIMIT 1")?;
+            stmt.query_row([], |row| row.get(0)).optional()?
+        };
+        match id {
+            Some(id) => Ok(Self::ranked_details(conn, &[id], "t.last_played_at DESC, t.id DESC")?.into_iter().next()),
+            None => Ok(None),
+        }
+    }
+
+    /// 批量设置/取消收藏（单事务）。与单曲 toggle_favorite 语义一致：
+    /// is_favorite=true 插入缺失行，false 删除存在行。
+    pub fn set_favorite_batch(conn: &Connection, track_ids: &[i64], is_favorite: bool) -> rusqlite::Result<()> {
+        if track_ids.is_empty() {
+            return Ok(());
+        }
+        let tx = conn.unchecked_transaction()?;
+        {
+            let mut stmt = if is_favorite {
+                tx.prepare("INSERT OR IGNORE INTO favorite_tracks (track_id) VALUES (?1)")?
+            } else {
+                tx.prepare("DELETE FROM favorite_tracks WHERE track_id = ?1")?
+            };
+            for id in track_ids {
+                stmt.execute(params![id])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
 }
 

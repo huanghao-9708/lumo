@@ -12,6 +12,7 @@ import {
   libraryGetAlbumById,
   libraryGetArtistById,
   libraryGetSmartPlaylist,
+  libraryGetStats, libraryGetInsights, libraryAddTracksToPlaylist, librarySetFavoriteBatch,
 } from '../api/library';
 import {
   playbackPlay, playbackPause, playbackResume, playbackSetVolume, playbackSeek
@@ -28,7 +29,7 @@ import { useUiStore } from './ui';
 
 
 // ================= 后端 DTO 接口（与 Rust 端 models.rs 保持一致） =================
-import type { TrackDTO, ArtistDTO, AlbumDTO, PlaylistDTOBackend, FolderChildrenResultDTO, FolderTracksResultDTO } from '../api/types';
+import type { TrackDTO, ArtistDTO, AlbumDTO, PlaylistDTOBackend, FolderChildrenResultDTO, FolderTracksResultDTO, LibraryStatsDTO, RankedTrackDTO, RankedArtistDTO, RankedAlbumDTO } from '../api/types';
 
 // ================= 前端展示模型 =================
 
@@ -98,6 +99,44 @@ export interface FolderEntry {
   is_dir: boolean;
   path: string;
   track?: Track;
+}
+
+// ================= 首页洞察模型（排行榜 / 统计） =================
+
+/** 排行榜歌曲：Track + 播放次数 */
+export interface RankedTrack extends Track {
+  playCount: number;
+}
+
+export interface RankedArtist {
+  id: number;
+  name: string;
+  /** 名下所有歌曲累计播放次数 */
+  playCount: number;
+  /** 名下歌曲总数 */
+  trackCount: number;
+  avatarArtworkId?: number | null;
+}
+
+export interface RankedAlbum {
+  id: number;
+  title: string;
+  artist: string;
+  coverArtworkId?: number | null;
+  /** 专辑内所有歌曲累计播放次数 */
+  playCount: number;
+}
+
+/** library_get_insights 的前端形态（首页一次 IPC 拿全） */
+export interface HomeInsights {
+  topPlayedTracks: RankedTrack[];
+  recentPlayedTracks: RankedTrack[];
+  recentAddedTracks: RankedTrack[];
+  favoriteTracks: RankedTrack[];
+  topPlayedArtists: RankedArtist[];
+  topPlayedAlbums: RankedAlbum[];
+  todayPlayCount: number;
+  lastPlayed: RankedTrack | null;
 }
 
 // ================= 详情页数据接口 =================
@@ -227,7 +266,8 @@ export const usePlayerStore = defineStore("player", () => {
   const isErrorArtists = ref(false);
   const hasLoadedCurrentFile = ref(false);
 
-  const activeLibraryTab = ref("全部歌曲");
+  // 启动落地页即首页（迭代记录 2.2）；移动端由 MobileLayout 的 immediate watch 纠正回曲库
+  const activeLibraryTab = ref("首页");
   const activeSourceTab = ref("本地音乐库");
   const activeRightTab = ref<"歌词" | "播放队列" | "文件信息">("歌词");
   const isRightPanelOpen = ref(true);
@@ -537,6 +577,40 @@ export const usePlayerStore = defineStore("player", () => {
     }
   }
 
+  // ===== 导航辅助 =====
+  // 注意：同一函数内同步改多个 ref，history watch 只触发一次、只记一条历史。
+
+  /** 切换到某个一级页面（清空详情选中态） */
+  function navigateToTab(tab: string) {
+    activeAlbumId.value = null;
+    activeArtistId.value = null;
+    activePlaylistId.value = null;
+    activeLibraryTab.value = tab;
+  }
+
+  /** 回首页 */
+  function goHome() {
+    navigateToTab('首页');
+  }
+
+  /** 进艺人详情页（id 与 tab 同 tick 修改，只记一条历史） */
+  function navigateToArtist(artistId: number | null | undefined) {
+    if (!artistId) return;
+    activeAlbumId.value = null;
+    activePlaylistId.value = null;
+    activeArtistId.value = artistId;
+    activeLibraryTab.value = '艺术家';
+  }
+
+  /** 进专辑详情页（id 与 tab 同 tick 修改，只记一条历史） */
+  function navigateToAlbum(albumId: number | null | undefined) {
+    if (!albumId) return;
+    activeArtistId.value = null;
+    activePlaylistId.value = null;
+    activeAlbumId.value = albumId;
+    activeLibraryTab.value = '专辑';
+  }
+
   // 歌词数据
   const lyrics = ref<LyricLine[]>([]);
 
@@ -652,6 +726,71 @@ const albums = shallowRef<Album[]>([]);
     }
   }
 
+  // ===== 首页数据（stats / insights，迭代记录 2.2 / 2.3） =====
+
+  const stats = ref<LibraryStatsDTO | null>(null);
+  const isLoadingStats = ref(false);
+
+  async function fetchStats() {
+    isLoadingStats.value = true;
+    try {
+      stats.value = await libraryGetStats();
+    } catch (e) {
+      console.error("Failed to fetch library stats:", e);
+    } finally {
+      isLoadingStats.value = false;
+    }
+  }
+
+  const insights = ref<HomeInsights | null>(null);
+  const isLoadingInsights = ref(false);
+
+  /** RankedTrackDTO → RankedTrack（复用统一 DTO 映射器，只多 playCount） */
+  function mapRankedTrack(dto: RankedTrackDTO): RankedTrack {
+    return { ...mapTrackDTO(dto), playCount: dto.play_count };
+  }
+
+  function mapRankedArtist(a: RankedArtistDTO): RankedArtist {
+    return {
+      id: a.id,
+      name: a.name,
+      playCount: a.play_count,
+      trackCount: a.track_count,
+      avatarArtworkId: a.avatar_artwork_id,
+    };
+  }
+
+  function mapRankedAlbum(a: RankedAlbumDTO): RankedAlbum {
+    return {
+      id: a.id,
+      title: a.title,
+      artist: a.artist_name || '未知艺人',
+      coverArtworkId: a.cover_artwork_id,
+      playCount: a.play_count,
+    };
+  }
+
+  async function fetchInsights() {
+    isLoadingInsights.value = true;
+    try {
+      const dto = await libraryGetInsights();
+      insights.value = {
+        topPlayedTracks: dto.top_played_tracks.map(mapRankedTrack),
+        recentPlayedTracks: dto.recent_played_tracks.map(mapRankedTrack),
+        recentAddedTracks: dto.recent_added_tracks.map(mapRankedTrack),
+        favoriteTracks: dto.favorite_tracks.map(mapRankedTrack),
+        topPlayedArtists: dto.top_played_artists.map(mapRankedArtist),
+        topPlayedAlbums: dto.top_played_albums.map(mapRankedAlbum),
+        todayPlayCount: dto.today_play_count,
+        lastPlayed: dto.last_played ? mapRankedTrack(dto.last_played) : null,
+      };
+    } catch (e) {
+      console.error("Failed to fetch library insights:", e);
+    } finally {
+      isLoadingInsights.value = false;
+    }
+  }
+
   async function fetchPlaylists() {
     try {
       const result: PlaylistDTOBackend[] = await libraryGetPlaylists();
@@ -737,6 +876,43 @@ const albums = shallowRef<Album[]>([]);
     }
   }
 
+  /**
+   * 批量设/取消收藏（迭代记录 2.4）。
+   * 乐观更新 + 失败整体回滚，覆盖所有持有该曲的列表：
+   * tracks / 专辑详情 / 艺人详情 / 歌单详情 / 智能歌单 / 播放队列 / 文件夹列表。
+   */
+  async function batchSetFavorite(trackIds: number[], isFavorite: boolean) {
+    if (trackIds.length === 0) return;
+    const idSet = new Set(trackIds);
+    const affected: Track[] = [];
+    const collect = (list?: Track[] | null) => {
+      if (!list) return;
+      for (const t of list) {
+        if (t && idSet.has(t.id)) affected.push(t);
+      }
+    };
+    collect(tracks.value);
+    collect(queue.value);
+    collect(smartPlaylistTracks.value);
+    collect(folderTracks.value);
+    collect(currentAlbumDetailsData.value?.tracks);
+    collect(currentArtistDetailsData.value?.tracks);
+    collect(currentPlaylistDetailsData.value?.tracks);
+
+    const prevStates = affected.map(t => t.isFavorite);
+    affected.forEach(t => { t.isFavorite = isFavorite; });
+
+    try {
+      await librarySetFavoriteBatch(trackIds, isFavorite);
+      // 收藏数变化影响首页「我喜欢的音乐」榜，顺带刷新
+      fetchInsights().catch(() => {});
+    } catch (e) {
+      console.error("Failed to batch set favorite:", e);
+      affected.forEach((t, i) => { t.isFavorite = prevStates[i]; });
+      throw e;
+    }
+  }
+
   async function addToPlaylist(playlistId: number, trackId: number) {
     try {
       await libraryAddToPlaylist(playlistId, trackId);
@@ -747,6 +923,16 @@ const albums = shallowRef<Album[]>([]);
     } catch(e) {
       console.error("Failed to add to playlist:", e);
     }
+  }
+
+  /** 批量添加到歌单（后端单事务去重）。返回 { added, skipped } 供 toast 提示 */
+  async function batchAddToPlaylist(playlistId: number, trackIds: number[]): Promise<{ added: number; skipped: number }> {
+    const [added, skipped] = await libraryAddTracksToPlaylist(playlistId, trackIds);
+    await fetchPlaylists();
+    if (activePlaylistId.value === playlistId) {
+      await refreshCurrentPlaylistTracks(playlistId);
+    }
+    return { added, skipped };
   }
 
   async function fetchPlaylistTracks(playlistId: number) {
@@ -1948,6 +2134,20 @@ const albums = shallowRef<Album[]>([]);
     canGoForward,
     goBack,
     goForward,
+    navigateToTab,
+    goHome,
+    navigateToArtist,
+    navigateToAlbum,
+    // 首页数据
+    stats,
+    isLoadingStats,
+    fetchStats,
+    insights,
+    isLoadingInsights,
+    fetchInsights,
+    // 批量操作
+    batchSetFavorite,
+    batchAddToPlaylist,
     currentTrack,
     currentAlbumDetails,
     currentArtistDetails,

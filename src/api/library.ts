@@ -10,7 +10,9 @@ import type {
   FolderTracksResultDTO,
   LibraryCountsDTO,
   ArtistStatsDTO,
-  TrackFileInfoDTO
+  TrackFileInfoDTO,
+  LibraryStatsDTO,
+  LibraryInsightsDTO
 } from './types';
 
 // Tracks
@@ -61,6 +63,27 @@ export function libraryGetArtistStats(artistId: number): Promise<ArtistStatsDTO>
 // Playlists
 export function libraryCreatePlaylist(name: string, description?: string): Promise<number> {
   return invoke('library_create_playlist', { name, description });
+}
+
+/** 批量添加歌曲到歌单（后端单事务，自动跳过重复）。返回 [成功添加数, 跳过的重复数] */
+export function libraryAddTracksToPlaylist(playlistId: number, trackIds: number[]): Promise<[number, number]> {
+  return invoke('library_add_tracks_to_playlist', { playlistId, trackIds });
+}
+
+/** 批量设置/取消收藏（后端单事务） */
+export function librarySetFavoriteBatch(trackIds: number[], isFavorite: boolean): Promise<void> {
+  return invoke('library_set_favorite_batch', { trackIds, isFavorite });
+}
+
+// Home (stats & insights)
+/** 首页统计：曲库规模 + 收听行为，一条 SQL 聚合 */
+export function libraryGetStats(): Promise<LibraryStatsDTO> {
+  return invoke('library_get_stats');
+}
+
+/** 首页洞察：4 个歌曲榜 + 艺人榜 + 专辑榜 + 今日次数 + 上次听歌，一次 IPC 打包 */
+export function libraryGetInsights(): Promise<LibraryInsightsDTO> {
+  return invoke('library_get_insights');
 }
 
 export function libraryGetPlaylists(): Promise<PlaylistDTOBackend[]> {

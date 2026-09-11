@@ -6,6 +6,7 @@ import { storageGetDbSize, libraryGetCacheSize } from '../../api/library';
 import { playbackGetAudioCacheSize } from '../../api/playback';
 import { getAppVersion, restartApp } from '../../api/platform';
 import { syncGetConfig, syncUploadNow, syncRestoreNow, type SyncConfig } from '../../api/sync';
+import { APP_NAME_CN, APP_VERSION_LABEL, APP_TAGLINE } from '../../config/appInfo';
 import { usePlayerStore } from '../../stores/player';
 import { useUiStore } from '../../stores/ui';
 import { registerBackHandler } from '../../composables/useMobileBack';
@@ -588,12 +589,12 @@ async function runProbe() {
         <div class="flex items-center gap-3">
           <Info class="w-[20px] h-[20px] text-text-muted flex-shrink-0" aria-hidden="true" />
           <div>
-            <p class="text-[15px] font-semibold text-text-primary">LUMO 轻音</p>
-            <p class="text-text-muted font-mono" style="font-size: var(--text-11);">{{ appVersion }}</p>
+            <p class="text-[15px] font-semibold text-text-primary">{{ APP_NAME_CN }}</p>
+            <p class="text-text-muted font-mono" style="font-size: var(--text-11);">{{ APP_VERSION_LABEL }}</p>
           </div>
         </div>
         <p class="text-text-muted mt-2" style="font-size: var(--text-12);">
-          本地音乐播放器 · 你的音乐，只属于你
+          {{ APP_TAGLINE }}
         </p>
 
         <!-- 检查更新提示 -->

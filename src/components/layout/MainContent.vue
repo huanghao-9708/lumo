@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import {
-  Search, Play, List, LayoutGrid, MoreHorizontal, Heart, Loader2, Music, CloudOff,
+  Search, Play, List, LayoutGrid, MoreHorizontal, Heart, Loader2, Music, CloudOff, CheckSquare,
 } from 'lucide-vue-next';
 
 const SKELETON_ROWS = 8;
 import { usePlayerStore, type Album } from '../../stores/player';
 import { useUiStore } from '../../stores/ui';
 import { useVirtualList } from '../../composables/useVirtualList';
+import { useBatchSelect } from '../../composables/useBatchSelect';
+import BatchActionBar from '../shared/BatchActionBar.vue';
 import AlbumGrid from '../content/AlbumGrid.vue';
 import AlbumDetail from '../content/AlbumDetail.vue';
 import PlaylistDetail from '../content/PlaylistDetail.vue';
@@ -21,9 +23,13 @@ import ArtistGrid from '../content/ArtistGrid.vue';
 import ArtistDetail from '../content/ArtistDetail.vue';
 import FolderView from '../content/FolderView.vue';
 import SmartPlaylistView from '../content/SmartPlaylistView.vue';
+import HomeView from '../content/HomeView.vue';
 
 const playerStore = usePlayerStore();
 const uiStore = useUiStore();
+
+/* ============ 批量选择（本视图一份实例） ============ */
+const batch = useBatchSelect();
 
 /* ============ 视图状态 ============ */
 const viewMode = ref<'list' | 'grid'>('list');
@@ -50,6 +56,7 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
 /* ============ 标题 & 元信息 ============ */
 const pageTitle = computed(() => {
   switch (playerStore.activeLibraryTab) {
+    case '首页': return '首页';
     case '最近播放': return '最近播放';
     case '喜欢的音乐': return '我喜欢的音乐';
     case '收藏的专辑': return '收藏的专辑';
@@ -157,6 +164,13 @@ function toggleFav(trackId: number, e: Event) {
   playerStore.toggleFavorite(trackId);
 }
 
+/* ============ 批量选择（全选以已加载列表为准） ============ */
+const isAllSelected = computed(() => batch.count > 0 && batch.count === playerStore.tracks.length);
+function onToggleSelectAll() {
+  if (isAllSelected.value) batch.selectNone();
+  else batch.selectAll(playerStore.tracks);
+}
+
 /* ============ 虚拟列表 ============ */
 const ROW_HEIGHT = 40;
 const scrollContainer = ref<HTMLElement | null>(null);
@@ -183,21 +197,10 @@ function onAlbumSelect(album: Album) {
   playerStore.activeAlbumId = album.id;
 }
 
-function navigateToArtist(artistId: number | null) {
-  if (!artistId) return;
-  playerStore.activeLibraryTab = '艺术家';
-  playerStore.activeArtistId = artistId;
-}
-
-function navigateToAlbum(albumId: number | null) {
-  if (!albumId) return;
-  playerStore.activeLibraryTab = '专辑';
-  playerStore.activeAlbumId = albumId;
-}
-
 /* ============ Tab 切换时重新拉取数据 ============ */
 function loadForCurrentTab() {
   const tab = playerStore.activeLibraryTab;
+  if (tab === '首页') return; // 首页自管数据
   if (tab === '最近播放') playerStore.fetchRecentlyPlayed();
   else if (tab === '喜欢的音乐') playerStore.fetchFavoriteTracks();
   else if (tab === '收藏的专辑') playerStore.fetchFavoriteAlbums();
@@ -214,8 +217,12 @@ watch(() => playerStore.activeLibraryTab, () => {
     searchInput.value = '';
     playerStore.searchQuery = '';
   }
+  // 切换 tab 自动退出多选（本视图跨 全部歌曲/播放列表 常驻，须显式退出）
+  batch.exit();
   loadForCurrentTab();
 });
+// 播放列表详情切换也退出多选，避免选择集跨歌单串扰
+watch(() => playerStore.activePlaylistId, () => batch.exit());
 
 onMounted(() => {
   // 仅在还没有数据时首次拉取，避免覆盖 restoreSession 的状态
@@ -252,6 +259,9 @@ onMounted(() => {
     <!-- ============ 智能歌单 ============ -->
     <SmartPlaylistView v-else-if="playerStore.activeLibraryTab === '智能歌单'" />
 
+    <!-- ============ 首页（自管数据，无共享 Header/Toolbar） ============ -->
+    <HomeView v-else-if="playerStore.activeLibraryTab === '首页'" />
+
     <!-- ============ 其他视图（共享 Header + Toolbar） ============ -->
     <template v-else>
 
@@ -276,26 +286,41 @@ onMounted(() => {
         </div>
       </div>
 
-      <!-- Page Toolbar -->
-      <div class="px-8 py-3 flex items-center justify-end flex-shrink-0">
-        <!-- 视图切换（仅轨道视图有用） -->
-        <div v-if="isTracksView" class="flex items-center gap-0 bg-bg-canvas border border-border-color rounded-[8px] p-[2px]">
+      <!-- Page Toolbar（仅轨道视图显示；修复非轨道视图残留一条空 padding 行的旧布局问题） -->
+      <div v-if="isTracksView" class="px-8 py-3 flex items-center justify-end flex-shrink-0">
+        <div class="flex items-center gap-2">
+          <!-- 批量选择入口 -->
           <button
-            class="w-7 h-7 flex items-center justify-center rounded-[6px] transition-colors-smooth"
-            :class="viewMode === 'list' ? 'bg-list-selected text-text-primary' : 'text-text-muted hover:text-text-primary'"
-            @click="viewMode = 'list'"
-            title="列表视图"
+            class="h-7 px-3 rounded-[6px] text-[12px] border border-border-color transition-colors-smooth"
+            :class="batch.isActive ? 'bg-list-selected text-text-primary border-transparent' : 'text-text-secondary hover:bg-list-hover'"
+            :title="batch.isActive ? '退出多选' : '多选歌曲'"
+            @click="batch.isActive ? batch.exit() : batch.enter()"
           >
-            <List class="w-[14px] h-[14px]" />
+            <span class="flex items-center gap-1.5">
+              <CheckSquare class="w-3.5 h-3.5" />
+              {{ batch.isActive ? '取消多选' : '多选' }}
+            </span>
           </button>
-          <button
-            class="w-7 h-7 flex items-center justify-center rounded-[6px] transition-colors-smooth"
-            :class="viewMode === 'grid' ? 'bg-list-selected text-text-primary' : 'text-text-muted hover:text-text-primary'"
-            @click="viewMode = 'grid'"
-            title="网格视图"
-          >
-            <LayoutGrid class="w-[14px] h-[14px]" />
-          </button>
+
+          <!-- 视图切换 -->
+          <div class="flex items-center gap-0 bg-bg-canvas border border-border-color rounded-[8px] p-[2px]">
+            <button
+              class="w-7 h-7 flex items-center justify-center rounded-[6px] transition-colors-smooth"
+              :class="viewMode === 'list' ? 'bg-list-selected text-text-primary' : 'text-text-muted hover:text-text-primary'"
+              @click="viewMode = 'list'"
+              title="列表视图"
+            >
+              <List class="w-[14px] h-[14px]" />
+            </button>
+            <button
+              class="w-7 h-7 flex items-center justify-center rounded-[6px] transition-colors-smooth"
+              :class="viewMode === 'grid' ? 'bg-list-selected text-text-primary' : 'text-text-muted hover:text-text-primary'"
+              @click="viewMode = 'grid'"
+              title="网格视图"
+            >
+              <LayoutGrid class="w-[14px] h-[14px]" />
+            </button>
+          </div>
         </div>
       </div>
 
@@ -375,33 +400,61 @@ onMounted(() => {
                 :style="{ height: ROW_HEIGHT + 'px' }"
                 :class="{
                   'playing-row bg-list-selected': isPlayingTrack(song.id),
+                  'bg-list-selected/60': batch.isActive && batch.isSelected(song.id),
                 }"
-                @dblclick="playSong(index)"
+                @click="batch.isActive && batch.toggle(song)"
+                @dblclick="!batch.isActive && playSong(index)"
               >
-                <!-- 序号 / 播放图标 -->
+                <!-- 序号 / 复选框 / 播放图标 -->
                 <div class="w-10 text-center shrink-0 text-[12px] font-mono">
-                  <span v-if="isPlayingTrack(song.id)" class="text-brand-orange inline-flex items-center justify-center">
-                    <Loader2 v-if="playerStore.isPlaying" class="w-[14px] h-[14px] animate-spin" />
-                    <Play v-else class="w-[12px] h-[12px] fill-current" />
+                  <!-- 多选态：序号列换成复选框 -->
+                  <span
+                    v-if="batch.isActive"
+                    class="inline-flex items-center justify-center"
+                    @click.stop="batch.toggle(song)"
+                  >
+                    <span
+                      class="w-[14px] h-[14px] rounded-[3px] border flex items-center justify-center transition-colors-smooth"
+                      :class="batch.isSelected(song.id) ? 'bg-brand-orange border-brand-orange' : 'border-border-solid'"
+                    >
+                      <CheckSquare v-if="batch.isSelected(song.id)" class="w-[10px] h-[10px] text-white" />
+                    </span>
                   </span>
                   <template v-else>
-                    <span class="text-text-muted group-hover:hidden tabular-nums">{{ String(index + 1).padStart(2, '0') }}</span>
-                    <Play class="w-[12px] h-[12px] fill-current mx-auto hidden group-hover:block text-text-secondary" />
+                    <span v-if="isPlayingTrack(song.id)" class="text-brand-orange inline-flex items-center justify-center">
+                      <Loader2 v-if="playerStore.isPlaying" class="w-[14px] h-[14px] animate-spin" />
+                      <Play v-else class="w-[12px] h-[12px] fill-current" />
+                    </span>
+                    <template v-else>
+                      <span class="text-text-muted group-hover:hidden tabular-nums">{{ String(index + 1).padStart(2, '0') }}</span>
+                      <Play class="w-[12px] h-[12px] fill-current mx-auto hidden group-hover:block text-text-secondary" />
+                    </template>
                   </template>
                 </div>
 
-                <!-- 收藏 -->
+                <!-- 收藏（多选态下改为切换选择） -->
                 <div class="w-8 shrink-0 flex items-center justify-center">
-                  <Heart
-                    v-if="song.isFavorite"
-                    class="w-[14px] h-[14px] text-brand-orange fill-current cursor-pointer"
-                    @click="toggleFav(song.id, $event)"
-                  />
-                  <Heart
-                    v-else
-                    class="w-[14px] h-[14px] text-text-disabled opacity-0 group-hover:opacity-60 transition-opacity hover:!opacity-100 hover:!text-brand-orange cursor-pointer"
-                    @click="toggleFav(song.id, $event)"
-                  />
+                  <template v-if="batch.isActive">
+                    <span
+                      class="w-[14px] h-[14px] rounded-[3px] border flex items-center justify-center transition-colors-smooth"
+                      :class="batch.isSelected(song.id) ? 'bg-brand-orange border-brand-orange' : 'border-border-solid opacity-0 group-hover:opacity-100'"
+                      @click.stop="batch.toggle(song)"
+                    >
+                      <CheckSquare v-if="batch.isSelected(song.id)" class="w-[10px] h-[10px] text-white" />
+                    </span>
+                  </template>
+                  <template v-else>
+                    <Heart
+                      v-if="song.isFavorite"
+                      class="w-[14px] h-[14px] text-brand-orange fill-current cursor-pointer"
+                      @click="toggleFav(song.id, $event)"
+                    />
+                    <Heart
+                      v-else
+                      class="w-[14px] h-[14px] text-text-disabled opacity-0 group-hover:opacity-60 transition-opacity hover:!opacity-100 hover:!text-brand-orange cursor-pointer"
+                      @click="toggleFav(song.id, $event)"
+                    />
+                  </template>
                 </div>
 
                 <!-- 标题 -->
@@ -411,14 +464,14 @@ onMounted(() => {
                   </span>
                 </div>
 
-                <!-- 艺术家 -->
+                <!-- 艺术家（多选态下改为切换选择） -->
                 <div class="flex-[1.5] min-w-0 hidden sm:block text-[13px] truncate" :class="isTrackGreyed(song.id) ? 'text-text-disabled' : 'text-text-secondary'">
-                  <span class="hover:underline cursor-pointer" @click.stop="navigateToArtist(song.artistId)">{{ song.artist }}</span>
+                  <span class="hover:underline cursor-pointer" @click.stop="batch.isActive ? batch.toggle(song) : playerStore.navigateToArtist(song.artistId)">{{ song.artist }}</span>
                 </div>
 
-                <!-- 专辑（非斜体） -->
+                <!-- 专辑（非斜体；多选态下改为切换选择） -->
                 <div class="flex-[1.5] min-w-0 hidden md:block text-[13px] truncate" :class="isTrackGreyed(song.id) ? 'text-text-disabled' : 'text-text-secondary'">
-                  <span class="hover:underline cursor-pointer" @click.stop="navigateToAlbum(song.albumId)">{{ song.album }}</span>
+                  <span class="hover:underline cursor-pointer" @click.stop="batch.isActive ? batch.toggle(song) : playerStore.navigateToAlbum(song.albumId)">{{ song.album }}</span>
                 </div>
 
                 <!-- 时长 -->
@@ -449,6 +502,15 @@ onMounted(() => {
           </div>
 
         </div>
+
+        <!-- 批量操作条（多选态） -->
+        <BatchActionBar
+          v-if="batch.isActive"
+          :selected-ids="[...batch.selectedIds]"
+          :all-selected="isAllSelected"
+          @exit="batch.exit()"
+          @toggle-select-all="onToggleSelectAll"
+        />
 
       </template>
 

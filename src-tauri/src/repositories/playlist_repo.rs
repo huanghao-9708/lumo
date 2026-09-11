@@ -101,6 +101,52 @@ impl PlaylistRepo {
             Ok(())
         }
 
+    /// 批量添加歌曲到歌单（单事务）。
+    /// playlist_items 无 (playlist_id, track_id) 唯一约束（设计上允许重复添加），
+    /// 因此用 NOT IN 显式跳过已在歌单中的曲目；position 连续分配。
+    /// 返回 (成功添加数, 跳过的重复数)。
+    pub fn add_tracks_to_playlist(conn: &Connection, playlist_id: i64, track_ids: &[i64]) -> rusqlite::Result<(usize, usize)> {
+        if track_ids.is_empty() {
+            return Ok((0, 0));
+        }
+
+        let tx = conn.unchecked_transaction()?;
+
+        // 待插入列表：过滤掉已在歌单中的曲目（去重）
+        let placeholders = track_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let dup_sql = format!(
+            "SELECT track_id FROM playlist_items WHERE playlist_id = ? AND track_id IN ({placeholders})"
+        );
+        let existing: Vec<i64> = {
+            let mut stmt = tx.prepare(&dup_sql)?;
+            let rows = stmt.query_map(rusqlite::params_from_iter(std::iter::once(&playlist_id).chain(track_ids.iter())), |row| row.get(0))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        let to_add: Vec<i64> = {
+            let dup = std::collections::HashSet::<i64>::from_iter(existing);
+            track_ids.iter().copied().filter(|id| !dup.contains(id)).collect()
+        };
+        let skipped = track_ids.len() - to_add.len();
+
+        if !to_add.is_empty() {
+            let max_pos: Option<f64> = tx.query_row(
+                "SELECT MAX(position) FROM playlist_items WHERE playlist_id = ?1",
+                rusqlite::params![playlist_id],
+                |row| row.get(0),
+            ).unwrap_or(None);
+            let mut next_pos = max_pos.unwrap_or(0.0) + 1.0;
+
+            let mut stmt = tx.prepare("INSERT INTO playlist_items (playlist_id, track_id, position) VALUES (?1, ?2, ?3)")?;
+            for track_id in &to_add {
+                stmt.execute(rusqlite::params![playlist_id, track_id, next_pos])?;
+                next_pos += 1.0;
+            }
+        }
+        tx.commit()?;
+
+        Ok((to_add.len(), skipped))
+    }
+
     pub fn add_folder_to_playlist(conn: &rusqlite::Connection, playlist_id: i64, source_id: i64, folder_path: &str) -> rusqlite::Result<()> {
             // media_files.normalized_path 存的是相对 source_root 的小写路径，
             // 但此处接收到的 folder_path 可能是绝对路径或大小写混合。

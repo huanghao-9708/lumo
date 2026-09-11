@@ -121,3 +121,55 @@ export interface SourceDTO {
   created_at: string;
   updated_at: string;
 }
+
+/** library_get_stats 返回：首页统计卡（曲库规模 + 收听行为，一条 SQL 聚合） */
+export interface LibraryStatsDTO {
+  track_count: number;
+  album_count: number;
+  artist_count: number;
+  total_listen_ms: number;
+  today_listen_ms: number;
+  week_listen_ms: number;
+  total_play_count: number;
+  today_play_count: number;
+  playlist_count: number;
+  favorite_album_count: number;
+  favorite_artist_count: number;
+  favorite_track_count: number;
+}
+
+/** 排行榜歌曲：TrackDTO 全部字段 + play_count（后端 serde flatten） */
+export interface RankedTrackDTO extends TrackDTO {
+  play_count: number;
+}
+
+export interface RankedArtistDTO {
+  id: number;
+  name: string;
+  /** 名下所有歌曲累计播放次数 */
+  play_count: number;
+  /** 名下歌曲总数 */
+  track_count: number;
+  avatar_artwork_id?: number | null;
+}
+
+export interface RankedAlbumDTO {
+  id: number;
+  title: string;
+  artist_name: string | null;
+  cover_artwork_id: number | null;
+  /** 专辑内所有歌曲累计播放次数 */
+  play_count: number;
+}
+
+/** library_get_insights 返回：首页 8 个查询一次 IPC 打包 */
+export interface LibraryInsightsDTO {
+  top_played_tracks: RankedTrackDTO[];
+  recent_played_tracks: RankedTrackDTO[];
+  recent_added_tracks: RankedTrackDTO[];
+  favorite_tracks: RankedTrackDTO[];
+  top_played_artists: RankedArtistDTO[];
+  top_played_albums: RankedAlbumDTO[];
+  today_play_count: number;
+  last_played: RankedTrackDTO | null;
+}

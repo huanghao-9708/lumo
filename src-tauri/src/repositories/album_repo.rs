@@ -27,9 +27,8 @@ impl AlbumRepo {
     }
 
     pub fn get_albums_paginated(conn: &Connection, limit: u32, offset: u32, search_keyword: Option<String>) -> rusqlite::Result<Vec<AlbumDTO>> {
-            // ===== [诊断日志] 临时性能分析，问题定位后可移除 =====
-            let t_start = std::time::Instant::now();
-    
+            // 性能说明：本查询只取 30 行且命中 idx_albums_normalized_title_covering，
+            // 实测 <1ms；之前内联的 [PERF] 诊断日志在确认无慢查询后移除。
             // LEFT JOIN artwork 读取 thumbnail_blob，内联返回 base64 缩略图。
             // 这样前端网格视图不再需要逐个发 lumo://artwork 请求，消灭 N+1。
             // 艺人名改用 album_artists GROUP_CONCAT 以支持多艺人。
@@ -55,9 +54,7 @@ impl AlbumRepo {
             } else { None };
     
             sql.push_str(" ORDER BY al.normalized_title ASC, al.id ASC LIMIT ? OFFSET ?");
-    
-            let t_sql_built = t_start.elapsed();
-    
+
             let mut result = Vec::new();
     
             // 把 thumbnail_blob (BLOB) 转为 base64 data URL 的闭包
@@ -94,17 +91,7 @@ impl AlbumRepo {
                 })?;
                 for r in rows { result.push(r?); }
             }
-    
-            let t_end = t_start.elapsed();
-            tracing::info!(
-                "[PERF] get_albums_paginated: limit={}, offset={}, returned={} | \
-                 sql_build={:?} sql_exec={:?} total={:?}",
-                limit, offset, result.len(),
-                t_sql_built,
-                t_end - t_sql_built,
-                t_end
-            );
-    
+
             Ok(result)
         }
 
@@ -204,6 +191,56 @@ impl AlbumRepo {
         } else {
             Ok(None)
         }
+    }
+
+    /// 播放最多的专辑榜（两步法）。
+    ///
+    /// 第一步只聚合出 Top N 的 album_id（SUM 是聚合键，毫秒级）；
+    /// 第二步逐 ID 补齐展示列并重算累计播放次数（走 idx_tracks_album_id 索引），
+    /// 数学上与第一步聚合值等价。艺人名走 album_artists GROUP_CONCAT 以支持多艺人。
+    pub fn get_top_played_albums(conn: &Connection, limit: i64) -> rusqlite::Result<Vec<RankedAlbumDTO>> {
+        let ids: Vec<i64> = {
+            let mut stmt = conn.prepare("
+                SELECT al.id
+                FROM albums al
+                JOIN tracks t ON t.album_id = al.id
+                WHERE t.play_count > 0
+                GROUP BY al.id
+                ORDER BY SUM(t.play_count) DESC, al.id ASC
+                LIMIT ?1
+            ")?;
+            let rows = stmt.query_map([limit], |row| row.get(0))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!("
+            SELECT
+                al.id,
+                al.title,
+                (SELECT GROUP_CONCAT(aa2.name, ', ') FROM album_artists aa1 JOIN artists aa2 ON aa1.artist_id = aa2.id WHERE aa1.album_id = al.id ORDER BY aa1.position) AS artist_name,
+                al.cover_artwork_id,
+                (SELECT COALESCE(SUM(t.play_count), 0) FROM tracks t WHERE t.album_id = al.id) AS play_count
+            FROM albums al
+            WHERE al.id IN ({placeholders})
+            ORDER BY play_count DESC, al.id ASC
+        ");
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(ids.iter()), |row| {
+            Ok(RankedAlbumDTO {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                artist_name: row.get(2)?,
+                cover_artwork_id: row.get(3)?,
+                play_count: row.get(4)?,
+            })
+        })?;
+        let mut result = Vec::new();
+        for r in rows { result.push(r?); }
+        Ok(result)
     }
 
 }

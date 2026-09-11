@@ -236,4 +236,56 @@ impl ArtistRepo {
         }
     }
 
+    /// 听得最多的艺人榜（两步法，只统计播放过的歌手）。
+    ///
+    /// 第一步只聚合出 Top N 的 artist_id（SUM 是聚合键，毫秒级）；
+    /// 第二步逐 ID 补齐展示列并重算累计播放次数——只对 LIMIT 个 ID 求和
+    /// （走 idx_track_artists_artist 索引），数学上与第一步聚合值等价。
+    pub fn get_top_played_artists(conn: &Connection, limit: i64) -> rusqlite::Result<Vec<RankedArtistDTO>> {
+        let ids: Vec<i64> = {
+            let mut stmt = conn.prepare("
+                SELECT ta.artist_id
+                FROM track_artists ta
+                JOIN tracks t ON t.id = ta.track_id
+                WHERE t.play_count > 0
+                GROUP BY ta.artist_id
+                ORDER BY SUM(t.play_count) DESC, ta.artist_id ASC
+                LIMIT ?1
+            ")?;
+            let rows = stmt.query_map([limit], |row| row.get(0))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!("
+            SELECT
+                ar.id,
+                ar.name,
+                ar.track_count,
+                ar.avatar_artwork_id,
+                (SELECT COALESCE(SUM(t.play_count), 0)
+                 FROM track_artists ta JOIN tracks t ON t.id = ta.track_id
+                 WHERE ta.artist_id = ar.id) AS play_count
+            FROM artists ar
+            WHERE ar.id IN ({placeholders})
+            ORDER BY play_count DESC, ar.id ASC
+        ");
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(ids.iter()), |row| {
+            Ok(RankedArtistDTO {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                track_count: row.get(2)?,
+                avatar_artwork_id: row.get(3)?,
+                play_count: row.get(4)?,
+            })
+        })?;
+        let mut result = Vec::new();
+        for r in rows { result.push(r?); }
+        Ok(result)
+    }
+
 }

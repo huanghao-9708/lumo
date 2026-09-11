@@ -1,5 +1,5 @@
  <script setup lang="ts">
-import { ChevronLeft, ChevronRight, Search, Sun, Moon, PanelRight, Settings, Minus, Square, X } from 'lucide-vue-next';
+import { ChevronLeft, ChevronRight, Home, Search, Sun, Moon, PanelRight, Settings, Minus, Square, X } from 'lucide-vue-next';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useUiStore } from '../../stores/ui';
 import { usePlayerStore } from '../../stores/player';
@@ -38,6 +38,15 @@ const close = () => appWindow.close();
         @click="playerStore.goForward()"
       >
         <ChevronRight class="w-[18px] h-[18px]" />
+      </button>
+      <!-- 首页 -->
+      <button
+        class="w-8 h-8 flex items-center justify-center rounded-[8px] transition-colors-smooth"
+        :class="playerStore.activeLibraryTab === '首页' ? 'bg-list-selected text-text-primary' : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover'"
+        title="首页"
+        @click="playerStore.goHome()"
+      >
+        <Home class="w-[18px] h-[18px]" />
       </button>
     </div>
 
@@ -80,7 +89,7 @@ const close = () => appWindow.close();
           class="w-8 h-8 flex items-center justify-center rounded-[8px] transition-colors-smooth"
           :class="playerStore.activeLibraryTab === '设置' ? 'bg-list-selected text-text-primary' : 'text-text-muted hover:text-text-primary hover:bg-bg-hover'"
           title="设置"
-          @click="playerStore.activeLibraryTab = '设置'; playerStore.activeAlbumId = null; playerStore.activeArtistId = null; playerStore.activePlaylistId = null;"
+          @click="playerStore.navigateToTab('设置')"
         >
           <Settings class="w-[18px] h-[18px]" />
         </button>

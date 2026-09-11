@@ -523,6 +523,93 @@ pub fn library_get_counts(
     Ok(counts)
 }
 
+/// 首页统计：一条 SQL 聚合曲库规模与收听行为（8 张统计卡的数据源）。
+/// 「今日/近7天」口径见 models::LibraryStats 注释。
+#[tauri::command]
+pub fn library_get_stats(db_state: State<'_, DbState>) -> Result<crate::models::LibraryStats, AppError> {
+    let _trace = ipc_trace!("library_get_stats");
+    let conn = db_state.db.get()?;
+
+    let stats: crate::models::LibraryStats = conn.query_row(
+        "SELECT
+            (SELECT COUNT(*) FROM tracks) AS track_count,
+            (SELECT COUNT(*) FROM albums) AS album_count,
+            (SELECT COUNT(*) FROM artists) AS artist_count,
+            (SELECT COALESCE(SUM(play_duration_ms), 0) FROM play_history) AS total_listen_ms,
+            (SELECT COALESCE(SUM(play_duration_ms), 0) FROM play_history
+             WHERE played_at >= datetime('now','localtime','start of day','utc')) AS today_listen_ms,
+            (SELECT COALESCE(SUM(play_duration_ms), 0) FROM play_history
+             WHERE played_at >= datetime('now','localtime','start of day','-6 days','utc')) AS week_listen_ms,
+            (SELECT COALESCE(SUM(play_count), 0) FROM tracks) AS total_play_count,
+            (SELECT COUNT(*) FROM play_history
+             WHERE played_at >= datetime('now','localtime','start of day','utc')) AS today_play_count,
+            (SELECT COUNT(*) FROM playlists) AS playlist_count,
+            (SELECT COUNT(*) FROM favorite_albums) AS favorite_album_count,
+            (SELECT COUNT(*) FROM favorite_artists) AS favorite_artist_count,
+            (SELECT COUNT(*) FROM favorite_tracks) AS favorite_track_count",
+        [],
+        |row| Ok(crate::models::LibraryStats {
+            track_count: row.get(0)?,
+            album_count: row.get(1)?,
+            artist_count: row.get(2)?,
+            total_listen_ms: row.get(3)?,
+            today_listen_ms: row.get(4)?,
+            week_listen_ms: row.get(5)?,
+            total_play_count: row.get(6)?,
+            today_play_count: row.get(7)?,
+            playlist_count: row.get(8)?,
+            favorite_album_count: row.get(9)?,
+            favorite_artist_count: row.get(10)?,
+            favorite_track_count: row.get(11)?,
+        }),
+    )?;
+
+    Ok(stats)
+}
+
+/// 首页洞察：8 个查询（4 个歌曲榜 + 艺人榜 + 专辑榜 + 今日次数 + 上次听歌）
+/// 一次 IPC 打包返回，首页开一次就好，避免逐个查询造成 IPC 拥堵。
+///
+/// async 化（第三轮）：Tauri v2 默认 sync 命令跑在主线程且串行执行，
+/// 即使前端 Promise.all 也会排队。`#[tauri::command(async)]`（保持 `pub fn`，
+/// 不用 `pub async fn`）把命令体移到 tokio blocking pool 并发执行，不阻塞其他 IPC。
+#[tauri::command(async)]
+pub fn library_get_insights(db_state: State<'_, DbState>) -> Result<crate::models::LibraryInsights, AppError> {
+    let _trace = ipc_trace!("library_get_insights");
+    let conn = db_state.db.get()?;
+    use crate::repositories::{album_repo::AlbumRepo, artist_repo::ArtistRepo, track_repo::TrackRepo};
+
+    Ok(crate::models::LibraryInsights {
+        top_played_tracks: TrackRepo::get_top_played_ranked(&conn, 5).map_err(|e| AppError::Internal(e.to_string()))?,
+        recent_played_tracks: TrackRepo::get_recent_play_ranked(&conn, 5).map_err(|e| AppError::Internal(e.to_string()))?,
+        recent_added_tracks: TrackRepo::get_recent_added_ranked(&conn, 5).map_err(|e| AppError::Internal(e.to_string()))?,
+        favorite_tracks: TrackRepo::get_favorite_ranked(&conn, 5).map_err(|e| AppError::Internal(e.to_string()))?,
+        top_played_artists: ArtistRepo::get_top_played_artists(&conn, 5).map_err(|e| AppError::Internal(e.to_string()))?,
+        top_played_albums: AlbumRepo::get_top_played_albums(&conn, 5).map_err(|e| AppError::Internal(e.to_string()))?,
+        today_play_count: TrackRepo::get_today_play_count(&conn).map_err(|e| AppError::Internal(e.to_string()))?,
+        last_played: TrackRepo::get_last_played(&conn).map_err(|e| AppError::Internal(e.to_string()))?,
+    })
+}
+
+/// 批量添加歌曲到歌单（单事务，自动跳过已在歌单中的重复曲目）。
+/// 返回 [成功添加数, 跳过的重复数]。
+#[tauri::command]
+pub fn library_add_tracks_to_playlist(db_state: State<'_, DbState>, playlist_id: i64, track_ids: Vec<i64>) -> Result<(usize, usize), AppError> {
+    let _trace = ipc_trace!("library_add_tracks_to_playlist");
+    let conn = db_state.db.get()?;
+    crate::repositories::playlist_repo::PlaylistRepo::add_tracks_to_playlist(&conn, playlist_id, &track_ids)
+        .map_err(|e| e.into())
+}
+
+/// 批量设置/取消收藏（单事务）。
+#[tauri::command]
+pub fn library_set_favorite_batch(db_state: State<'_, DbState>, track_ids: Vec<i64>, is_favorite: bool) -> Result<(), AppError> {
+    let _trace = ipc_trace!("library_set_favorite_batch");
+    let conn = db_state.db.get()?;
+    crate::repositories::track_repo::TrackRepo::set_favorite_batch(&conn, &track_ids, is_favorite)
+        .map_err(|e| e.into())
+}
+
 #[tauri::command]
 pub async fn library_fetch_missing_album_cover(app: tauri::AppHandle, db_state: State<'_, DbState>, album_id: i64, allow_online: Option<bool>) -> Result<Option<i64>, AppError> {
     let _trace = ipc_trace!("library_fetch_missing_album_cover");
