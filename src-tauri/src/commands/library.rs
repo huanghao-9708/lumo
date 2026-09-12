@@ -1,4 +1,6 @@
 use crate::error::AppError;
+use std::collections::HashMap;
+use std::sync::Mutex;
 use tauri::{State, Manager};
 use crate::db::DbState;
 use crate::models::{TrackDTO, AlbumDTO, ArtistDTO, PlaylistDTO, ArtistStatsDTO, ArtistListResult};
@@ -204,26 +206,44 @@ pub fn storage_get_db_size(app: tauri::AppHandle) -> Result<u64, AppError> {
 pub async fn library_get_lyrics(db_state: State<'_, DbState>, track_id: i64, allow_online: Option<bool>) -> Result<Option<String>, AppError> {
     let _trace = ipc_trace!("library_get_lyrics");
 
-    // First, check DB
-    let local_lyrics = {
+    // 本地歌词查询（v1.8.1 重写）：同步(lrc)优先 → lrclib 来源 → 主文件版本 → 最早行。
+    // 此前 `LIMIT 1` 无排序，多文件版本的重复行中取哪行是不确定的。
+    use rusqlite::OptionalExtension;
+    let primary_file_id: Option<i64> = {
         let conn = db_state.db.get()?;
-        use rusqlite::OptionalExtension;
-        let lyr: Option<String> = conn.query_row(
-            "SELECT content FROM lyrics WHERE track_id = ?1 LIMIT 1",
+        conn.query_row(
+            "SELECT primary_file_id FROM tracks WHERE id = ?1",
             params![track_id],
             |row| row.get(0),
-        ).optional()?;
-        lyr
+        ).optional()?
+    };
+    // (id, content, format, synced)
+    let local_lyrics: Option<(i64, String, String, i64)> = {
+        let conn = db_state.db.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, content, format, synced FROM lyrics WHERE track_id = ?1
+             ORDER BY (synced = 1) DESC, (media_file_id = ?2) DESC, id ASC LIMIT 1"
+        )?;
+        stmt.query_row(
+            params![track_id, primary_file_id],
+            |row| {
+                Ok::<(i64, String, String, i64), rusqlite::Error>((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            },
+        )
+        .optional()?
     };
 
-    if local_lyrics.is_some() {
-        return Ok(local_lyrics);
+    // 本地已是同步歌词（嵌入 lrc 质量足够）→ 直接返回
+    if let Some((_, content, _, synced)) = &local_lyrics {
+        if *synced == 1 {
+            return Ok(Some(content.clone()));
+        }
     }
 
     // P0-07 在线元数据隐私：默认拒绝——调用方未显式授权时不向 LRCLIB 发送任何数据，
-    // 直接返回本地结果（可能为 None）。授权开关由设置页「隐私」分区控制。
+    // 返回本地结果（可能为纯文本或 None）。授权开关由设置页「隐私」分区控制。
     if allow_online != Some(true) {
-        return Ok(None);
+        return Ok(local_lyrics.map(|(_, c, _, _)| c));
     }
 
     // Not found in DB, try to download from LRCLIB
@@ -289,13 +309,29 @@ pub async fn library_get_lyrics(db_state: State<'_, DbState>, track_id: i64, all
         let conn = db_state.db.get()?;
         let format = if l.contains("[00:") { "lrc" } else { "plain" };
         let synced = if format == "lrc" { 1 } else { 0 };
-        let _ = conn.execute(
-            "INSERT INTO lyrics (track_id, format, synced, content, source) VALUES (?1, ?2, ?3, ?4, 'lrclib')",
-            params![track_id, format, synced, l]
-        );
+        // 保存（V10 后 track_id 唯一，INSERT OR REPLACE 真正生效）：
+        // - 本地为纯文本且拿到同步歌词 → 覆盖升级；
+        // - 无本地行 → 直接插入。media_file_id 挂主文件版本，与扫描写入口径一致。
+        // 在线也只拿到纯文本时保留本地（若有的话），不做无意义覆盖。
+        let is_upgrade = format == "lrc";
+        let should_save = local_lyrics.is_none() || is_upgrade;
+        if should_save {
+            let result = match primary_file_id {
+                Some(pf) => conn.execute(
+                    "INSERT OR REPLACE INTO lyrics (track_id, media_file_id, format, synced, content, source) VALUES (?1, ?2, ?3, ?4, ?5, 'lrclib')",
+                    params![track_id, pf, format, synced, l]),
+                None => conn.execute(
+                    "INSERT INTO lyrics (track_id, media_file_id, format, synced, content, source) VALUES (?1, NULL, ?2, ?3, ?4, 'lrclib')",
+                    params![track_id, format, synced, l]),
+            };
+            if let Err(e) = result {
+                tracing::warn!("[lyrics] 保存 LRCLIB 歌词失败 track={}: {}", track_id, e);
+            }
+        }
     }
 
-    Ok(fetched_lyrics)
+    // 在线未命中时回退本地纯文本（若有）
+    Ok(fetched_lyrics.or_else(|| local_lyrics.map(|(_, c, _, _)| c)))
 }
 
 #[tauri::command]
@@ -655,9 +691,17 @@ pub fn library_get_startup_bundle(db_state: State<'_, DbState>) -> Result<crate:
     })
 }
 
-/// 专辑封面的真实拉取流程（iTunes 查询 + 600x600 下载 + 缩略图 + 写库）。
+/// 专辑封面的真实拉取流程（网易云 → iTunes 兜底 + 缩略图 + 写库）。
 /// 只在 tokio 后台任务中调用，不占 IPC channel（第七轮）。
-async fn fetch_album_cover_impl(app: &tauri::AppHandle, pool: &crate::db::DbPool, album_id: i64) -> Result<Option<i64>, AppError> {
+/// 返回 (artwork_id, 缩略图 base64)——缩略图随事件下发，前端即时更新网格。
+async fn fetch_album_cover_impl(app_dir: &std::path::Path, pool: &crate::db::DbPool, album_id: i64) -> Result<Option<crate::models::FetchedCover>, AppError> {
+    // 会话级负缓存：近期尝试过就不再发请求（避免每次打开详情都反复拉取未命中的目标）
+    let attempt_key = format!("album:{}", album_id);
+    if cover_attempt_recently(&attempt_key) {
+        return Ok(None);
+    }
+    mark_cover_attempt(&attempt_key);
+
     // 1. Get album info
     let (album_title, artist_name): (String, Option<String>) = {
         let conn = pool.get()?;
@@ -674,53 +718,19 @@ async fn fetch_album_cover_impl(app: &tauri::AppHandle, pool: &crate::db::DbPool
         if let Some(r) = row { r } else { return Ok(None); }
     };
 
-    // 2. Query iTunes
-    let mut term = album_title.clone();
-    if let Some(a) = &artist_name {
-        term = format!("{} {}", a, term);
-    }
-
-    let mut url = url::Url::parse("https://itunes.apple.com/search").unwrap();
-    url.query_pairs_mut().append_pair("term", &term);
-    url.query_pairs_mut().append_pair("entity", "album");
-    url.query_pairs_mut().append_pair("limit", "1");
-
-    let client = reqwest::Client::new();
-    let resp = client.get(url).send().await.map_err(|e| AppError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
-    if !resp.status().is_success() { return Ok(None); }
-
-    #[derive(serde::Deserialize)]
-    struct ItunesResponse {
-        results: Vec<ItunesResult>,
-    }
-    #[derive(serde::Deserialize)]
-    struct ItunesResult {
-        #[serde(rename = "artworkUrl100")]
-        artwork_url_100: Option<String>,
-    }
-
-    let result = resp.json::<ItunesResponse>().await.map_err(|e| AppError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
-    if result.results.is_empty() { return Ok(None); }
-    let artwork_url = if let Some(url) = &result.results[0].artwork_url_100 {
-        url.replace("100x100bb", "600x600bb")
-    } else {
+    // 2. 检索封面：网易云 1500x1500 → iTunes 最大分辨率（v1.8.1 换源）
+    let Some(hit) = crate::services::cover::CoverService::search_album_cover(&album_title, artist_name.as_deref()).await else {
         return Ok(None);
     };
 
-    // 3. Download image
-    let img_resp = client.get(&artwork_url).send().await.map_err(|e| AppError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
-    if !img_resp.status().is_success() { return Ok(None); }
-
-    let mime_type = img_resp.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("image/jpeg").to_string();
-    let bytes = img_resp.bytes().await.map_err(|e| AppError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
-
-    // 4. Save to db
+    // 3. Save to db
     use sha2::{Sha256, Digest};
+    let bytes = hit.bytes;
+    let mime_type = hit.mime_type;
     let mut hasher = Sha256::new();
     hasher.update(&bytes);
     let hash = hex::encode(hasher.finalize());
 
-    let app_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
     let artworks_dir = app_dir.join("artworks");
     if !artworks_dir.exists() {
         let _ = std::fs::create_dir_all(&artworks_dir);
@@ -738,6 +748,11 @@ async fn fetch_album_cover_impl(app: &tauri::AppHandle, pool: &crate::db::DbPool
     }
 
     let thumbnail_blob = crate::services::library::LibraryService::generate_thumbnail(&bytes);
+    // 缩略图随事件下发（data URL），前端立即更新专辑网格，无需等下次全量拉取
+    let thumbnail_base64 = thumbnail_blob.as_ref().map(|b| {
+        use base64::{engine::general_purpose, Engine as _};
+        format!("data:image/jpeg;base64,{}", general_purpose::STANDARD.encode(b))
+    });
 
     let conn = pool.get()?;
     use rusqlite::OptionalExtension;
@@ -763,7 +778,7 @@ async fn fetch_album_cover_impl(app: &tauri::AppHandle, pool: &crate::db::DbPool
         params![artwork_id, album_id],
     )?;
 
-    Ok(Some(artwork_id))
+    Ok(Some(crate::models::FetchedCover { artwork_id, thumbnail_base64 }))
 }
 
 /// 触发专辑封面在线拉取（第七轮：后台化）。
@@ -783,14 +798,19 @@ pub async fn library_fetch_missing_album_cover(app: tauri::AppHandle, db_state: 
 
     // State<'_, DbState> 有生命周期，不能 move 进 spawn；DbPool 内部是 Arc，clone 后 'static。
     let app_clone = app.clone();
+    let app_dir = app.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let pool = db_state.db.clone();
     tokio::spawn(async move {
-        match fetch_album_cover_impl(&app_clone, &pool, album_id).await {
-            Ok(Some(artwork_id)) => {
+        match fetch_album_cover_impl(&app_dir, &pool, album_id).await {
+            Ok(Some(cover)) => {
                 use tauri::Emitter;
                 let _ = app_clone.emit(
                     "album-cover-fetched",
-                    crate::models::CoverFetchedEvent { target_id: album_id, artwork_id },
+                    crate::models::CoverFetchedEvent {
+                        target_id: album_id,
+                        artwork_id: cover.artwork_id,
+                        cover_thumbnail_base64: cover.thumbnail_base64,
+                    },
                 );
             }
             Ok(None) => {}
@@ -801,9 +821,15 @@ pub async fn library_fetch_missing_album_cover(app: tauri::AppHandle, db_state: 
     Ok(None) // 立即返回，不占 WebView 并发
 }
 
-/// 艺人头像的真实拉取流程（iTunes 查询 + 600x600 下载 + 缩略图 + 写库）。
+/// 艺人头像的真实拉取流程（网易云 → iTunes 兜底 + 缩略图 + 写库）。
 /// 只在 tokio 后台任务中调用，不占 IPC channel（第七轮）。
-async fn fetch_artist_cover_impl(app: &tauri::AppHandle, pool: &crate::db::DbPool, artist_id: i64) -> Result<Option<i64>, AppError> {
+async fn fetch_artist_cover_impl(app_dir: &std::path::Path, pool: &crate::db::DbPool, artist_id: i64) -> Result<Option<crate::models::FetchedCover>, AppError> {
+    let attempt_key = format!("artist:{}", artist_id);
+    if cover_attempt_recently(&attempt_key) {
+        return Ok(None);
+    }
+    mark_cover_attempt(&attempt_key);
+
     // 1. Get artist info
     let artist_name: String = {
         let conn = pool.get()?;
@@ -813,48 +839,19 @@ async fn fetch_artist_cover_impl(app: &tauri::AppHandle, pool: &crate::db::DbPoo
         if let Some(r) = row { r } else { return Ok(None); }
     };
 
-    // 2. Query iTunes
-    let mut url = url::Url::parse("https://itunes.apple.com/search").unwrap();
-    url.query_pairs_mut().append_pair("term", &artist_name);
-    url.query_pairs_mut().append_pair("entity", "album"); // artist entity often lacks image, so we use their top album
-    url.query_pairs_mut().append_pair("limit", "1");
-
-    let client = reqwest::Client::new();
-    let resp = client.get(url).send().await.map_err(|e| AppError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
-    if !resp.status().is_success() { return Ok(None); }
-
-    #[derive(serde::Deserialize)]
-    struct ItunesResponse {
-        results: Vec<ItunesResult>,
-    }
-    #[derive(serde::Deserialize)]
-    struct ItunesResult {
-        #[serde(rename = "artworkUrl100")]
-        artwork_url_100: Option<String>,
-    }
-
-    let result = resp.json::<ItunesResponse>().await.map_err(|e| AppError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
-    if result.results.is_empty() { return Ok(None); }
-    let artwork_url = if let Some(url) = &result.results[0].artwork_url_100 {
-        url.replace("100x100bb", "600x600bb")
-    } else {
+    // 2. 检索头像：网易云歌手大图 1200x1200 → iTunes 兜底（最大分辨率）
+    let Some(hit) = crate::services::cover::CoverService::search_artist_cover(&artist_name).await else {
         return Ok(None);
     };
 
-    // 3. Download image
-    let img_resp = client.get(&artwork_url).send().await.map_err(|e| AppError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
-    if !img_resp.status().is_success() { return Ok(None); }
-
-    let mime_type = img_resp.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("image/jpeg").to_string();
-    let bytes = img_resp.bytes().await.map_err(|e| AppError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
-
-    // 4. Save to db
+    // 3. Save to db
     use sha2::{Sha256, Digest};
+    let bytes = hit.bytes;
+    let mime_type = hit.mime_type;
     let mut hasher = Sha256::new();
     hasher.update(&bytes);
     let hash = hex::encode(hasher.finalize());
 
-    let app_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
     let artworks_dir = app_dir.join("artworks");
     if !artworks_dir.exists() {
         let _ = std::fs::create_dir_all(&artworks_dir);
@@ -898,7 +895,7 @@ async fn fetch_artist_cover_impl(app: &tauri::AppHandle, pool: &crate::db::DbPoo
         params![artwork_id, artist_id],
     )?;
 
-    Ok(Some(artwork_id))
+    Ok(Some(crate::models::FetchedCover { artwork_id, thumbnail_base64: None }))
 }
 
 /// 触发艺人头像在线拉取（第七轮：后台化，机制同 library_fetch_missing_album_cover）。
@@ -912,14 +909,19 @@ pub async fn library_fetch_missing_artist_cover(app: tauri::AppHandle, db_state:
     }
 
     let app_clone = app.clone();
+    let app_dir = app.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let pool = db_state.db.clone();
     tokio::spawn(async move {
-        match fetch_artist_cover_impl(&app_clone, &pool, artist_id).await {
-            Ok(Some(artwork_id)) => {
+        match fetch_artist_cover_impl(&app_dir, &pool, artist_id).await {
+            Ok(Some(cover)) => {
                 use tauri::Emitter;
                 let _ = app_clone.emit(
                     "artist-cover-fetched",
-                    crate::models::CoverFetchedEvent { target_id: artist_id, artwork_id },
+                    crate::models::CoverFetchedEvent {
+                        target_id: artist_id,
+                        artwork_id: cover.artwork_id,
+                        cover_thumbnail_base64: cover.thumbnail_base64,
+                    },
                 );
             }
             Ok(None) => {}
@@ -1045,6 +1047,26 @@ pub fn library_set_primary_file(
         rusqlite::params![media_file_id, track_id],
     )?;
     Ok(())
+}
+
+/// 封面/头像拉取的会话级负缓存（v1.8.1）：目标 10 分钟内只尝试一次。
+/// 换源前命中率低导致「每次打开详情都重新拉取」，观感上像"同步没保存"。
+static COVER_ATTEMPTS: Mutex<Option<HashMap<String, std::time::Instant>>> = Mutex::new(None);
+const COVER_ATTEMPT_TTL_SECS: u64 = 600;
+
+fn cover_attempt_recently(key: &str) -> bool {
+    let mut guard = COVER_ATTEMPTS.lock().unwrap();
+    let map = guard.get_or_insert_with(HashMap::new);
+    map.retain(|_, t| t.elapsed().as_secs() < COVER_ATTEMPT_TTL_SECS);
+    map.contains_key(key)
+}
+
+fn mark_cover_attempt(key: &str) {
+    COVER_ATTEMPTS
+        .lock()
+        .unwrap()
+        .get_or_insert_with(HashMap::new)
+        .insert(key.to_string(), std::time::Instant::now());
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]

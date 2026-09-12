@@ -2039,12 +2039,14 @@ const albums = shallowRef<Album[]>([]);
       await fetchAlbums(true);
     });
 
-    // 第七轮：封面后台拉取完成事件 —— 命令已改为立即返回，UI 更新由这里接管
-    unlistenAlbumCoverFetched = await listen<{ target_id: number; artwork_id: number }>('album-cover-fetched', (event) => {
-      const { target_id, artwork_id } = event.payload;
+    // 第七轮：封面后台拉取完成事件 —— 命令已改为立即返回，UI 更新由这里接管。
+    // v1.8.1：事件携带 200x200 缩略图 data URL，网格即时显示（数据已同时入库持久化）
+    unlistenAlbumCoverFetched = await listen<{ target_id: number; artwork_id: number; cover_thumbnail_base64?: string }>('album-cover-fetched', (event) => {
+      const { target_id, artwork_id, cover_thumbnail_base64 } = event.payload;
       const foundAlbum = albums.value.find(a => a.id === target_id);
       if (foundAlbum) {
         foundAlbum.cover_artwork_id = artwork_id;
+        if (cover_thumbnail_base64) foundAlbum.cover_thumb = cover_thumbnail_base64;
         // albums 是 shallowRef，浅拷贝整体替换触发网格重渲染
         albums.value = [...albums.value];
       }

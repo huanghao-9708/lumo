@@ -457,6 +457,16 @@ pub struct CoverFetchedEvent {
     pub target_id: i64,
     /// 新写入的封面/头像 artwork id
     pub artwork_id: i64,
+    /// 200x200 缩略图的 data URL（v1.8.1）：随事件下发，前端网格即时更新
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cover_thumbnail_base64: Option<String>,
+}
+
+/// 单次封面拉取的内部结果（impl → 命令层，非序列化）
+#[derive(Debug)]
+pub struct FetchedCover {
+    pub artwork_id: i64,
+    pub thumbnail_base64: Option<String>,
 }
 
 /// `library_get_startup_bundle` 的返回：App.vue 启动所需数据一次 IPC 打包。

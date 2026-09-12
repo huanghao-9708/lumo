@@ -664,6 +664,22 @@ fn apply_migrations(conn: &Connection, app_dir: &std::path::Path) -> Result<()> 
         tracing::info!("数据库迁移：已升级至 V9（ai_settings AI 推荐设置表）");
     }
 
+    // ===== V10: 歌词表唯一化 =====
+    // 背景：lyrics 表此前无任何索引/唯一键——scanner 的 INSERT OR REPLACE 实际等于
+    // 纯 INSERT（重扫一次翻倍，实测 40,820 行 / 9,100 首重复），读取
+    // `WHERE track_id = ?` 是全表扫描。
+    // 先按 track 去重（保留最早一行，即首个扫描版本的嵌入歌词），再建唯一索引，
+    // 此后 INSERT OR REPLACE 真正生效，读取走索引。
+    if current < 10 {
+        conn.execute_batch(
+            "DELETE FROM lyrics WHERE id NOT IN (SELECT MIN(id) FROM lyrics GROUP BY track_id);
+             CREATE UNIQUE INDEX IF NOT EXISTS idx_lyrics_track_id ON lyrics(track_id);"
+        )?;
+        mark_migration_applied(conn, 10)?;
+        current = 10;
+        tracing::info!("数据库迁移：已升级至 V10（歌词去重 + track_id 唯一索引）");
+    }
+
     let _ = current;
     Ok(())
 }
