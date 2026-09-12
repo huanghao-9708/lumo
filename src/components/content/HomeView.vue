@@ -125,11 +125,11 @@ const favoriteList = computed(() => insights.value?.favoriteTracks ?? []);
 
 <template>
   <div class="flex-1 flex flex-col overflow-hidden">
-    <div class="flex-1 overflow-y-auto px-8 py-6">
+    <div class="flex-1 overflow-y-auto px-4 md:px-8 py-4 md:py-6">
 
       <!-- Header -->
-      <div class="mb-6">
-        <h1 class="text-[32px] font-bold text-text-primary tracking-tight leading-none mb-2">首页</h1>
+      <div class="mb-4 md:mb-6">
+        <h1 class="text-[24px] md:text-[32px] font-bold text-text-primary tracking-tight leading-none mb-2">首页</h1>
         <p class="text-[12px] text-text-muted leading-relaxed font-mono">你的曲库与收听行为概览</p>
       </div>
 
@@ -139,12 +139,12 @@ const favoriteList = computed(() => insights.value?.favoriteTracks ?? []);
       </div>
 
       <template v-else>
-        <!-- ===== 统计卡：两排 8 张 ===== -->
-        <div class="grid grid-cols-4 gap-4 mb-8">
+        <!-- ===== 统计卡：两排 8 张（移动端 2 列） ===== -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 mb-6 md:mb-8">
           <div
             v-for="card in statCards"
             :key="card.label"
-            class="bg-bg-content border border-border-color rounded-[10px] px-4 py-4 min-w-0"
+            class="bg-bg-content border border-border-color rounded-[10px] px-3.5 md:px-4 py-3.5 md:py-4 min-w-0"
           >
             <div class="flex items-center gap-2 mb-3">
               <component :is="card.icon" class="w-[14px] h-[14px] text-brand-orange flex-shrink-0" />
@@ -155,9 +155,9 @@ const favoriteList = computed(() => insights.value?.favoriteTracks ?? []);
           </div>
         </div>
 
-        <!-- ===== 快速访问：6 张 Top5 排行榜卡，两列 ===== -->
+        <!-- ===== 快速访问：6 张 Top5 排行榜卡（移动端单列） ===== -->
         <h2 class="px-1 text-[10px] font-semibold text-text-muted mb-3 uppercase tracking-widest">快速访问</h2>
-        <div class="grid grid-cols-2 gap-4">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
 
           <!-- 播放最多的歌曲：行点击播放，整榜作为队列 -->
           <div class="bg-bg-content border border-border-color rounded-[10px] flex flex-col min-w-0">

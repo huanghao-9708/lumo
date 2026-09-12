@@ -458,3 +458,23 @@ pub struct CoverFetchedEvent {
     /// 新写入的封面/头像 artwork id
     pub artwork_id: i64,
 }
+
+/// `library_get_startup_bundle` 的返回：App.vue 启动所需数据一次 IPC 打包。
+/// 启动 IPC 从 ~7 个降到 2 个（本命令 + source_list，后者凭据解析在 scanner 模块）。
+#[derive(Debug, serde::Serialize)]
+pub struct StartupBundle {
+    /// 曲库与收藏计数（同 library_get_counts）
+    pub counts: LibraryCounts,
+    /// 歌单列表
+    pub playlists: Vec<PlaylistDTO>,
+    /// 专辑网格第一页（30 条，内联缩略图；与前端 albumsPageSize 一致）
+    pub albums: Vec<AlbumDTO>,
+    /// 专辑总数
+    pub album_total: i64,
+    /// 艺人第一页（50 条；与前端 artistsLimit 一致）
+    pub artists: Vec<ArtistDTO>,
+    /// 艺人总数
+    pub artist_total: i64,
+    /// 持久化的播放队列（恢复会话用，同 library_get_play_queue）
+    pub play_queue: Vec<TrackDTO>,
+}

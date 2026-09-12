@@ -70,7 +70,7 @@ function toggleFav(trackId: number) {
       <div class="flex-1 overflow-y-auto">
         <!-- 头像 + 信息 -->
         <div class="flex flex-col items-center px-6 pt-6 pb-2">
-          <div class="w-[120px] h-[120px] rounded-full overflow-hidden bg-gradient-to-br from-gray-400 to-gray-600 flex items-center justify-center mb-4 flex-shrink-0">
+          <div class="w-[120px] h-[120px] rounded-full overflow-hidden bg-gradient-to-br from-warm-400 to-warm-600 flex items-center justify-center mb-4 flex-shrink-0">
             <User class="w-12 h-12 text-white/60" aria-hidden="true" />
           </div>
 

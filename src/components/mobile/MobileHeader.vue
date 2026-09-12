@@ -18,6 +18,7 @@ const isDetailPage = computed(() => {
 // 当前页标题
 const pageTitle = computed(() => {
   switch (playerStore.activeLibraryTab) {
+    case '首页': return '首页';
     case '最近播放': return '最近播放';
     case '喜欢的音乐': return '我喜欢的音乐';
     case '收藏的专辑': return '收藏的专辑';
@@ -43,8 +44,8 @@ const metaText = computed(() => {
   return `${playerStore.tracksTotalCount.toLocaleString()} 首歌曲`;
 });
 
-// 是否显示元信息（详情页不显示）
-const showMeta = computed(() => !isDetailPage.value);
+// 是否显示元信息（详情页与首页不显示）
+const showMeta = computed(() => !isDetailPage.value && playerStore.activeLibraryTab !== '首页');
 
 function onBack() {
   if (isDetailPage.value) {
@@ -61,9 +62,10 @@ function onBack() {
   }
 }
 
-// 是否显示返回按钮（详情页或二级分类非根页）
+// 是否显示返回按钮（详情页或二级分类非根页；首页是根页）
 const showBackButton = computed(() => {
   if (isDetailPage.value) return true;
+  if (playerStore.activeLibraryTab === '首页') return false;
   if (uiStore.activeMobileTab === 'library' && playerStore.activeLibraryTab !== '全部歌曲') return true;
   if (uiStore.activeMobileTab === 'favorites' && playerStore.activeLibraryTab !== '喜欢的音乐') return true;
   return false;

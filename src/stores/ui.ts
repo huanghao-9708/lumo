@@ -9,7 +9,7 @@ import { ref, watch } from "vue";
  *   favorites → 收藏（对应桌面 Sidebar Favorites 组：喜欢的音乐/收藏专辑/收藏歌手）
  *   settings  → 设置（对应桌面 TopBar 更多菜单中的设置页）
  */
-export type MobileTab = 'library' | 'search' | 'favorites' | 'settings';
+export type MobileTab = 'home' | 'library' | 'search' | 'favorites' | 'settings';
 
 /** Toast 类型：error 红色警示 / info 中性提示 */
 export type ToastKind = 'error' | 'info';
@@ -154,9 +154,10 @@ export const useUiStore = defineStore("ui", () => {
   }
 
   // ===== 移动端视图状态 =====
-  // 移动端底部 Tab Bar 的 4 个一级导航（类型见模块顶层 MobileTab）。
+  // 移动端底部 Tab Bar 的一级导航（类型见模块顶层 MobileTab）。
   // Tab 切换时会同步设置 playerStore.activeLibraryTab，使现有视图逻辑无缝复用。
-  const activeMobileTab = ref<MobileTab>('library');
+  // 默认落地首页，与桌面端 activeLibraryTab='首页' 对齐（移动端首页迭代）。
+  const activeMobileTab = ref<MobileTab>('home');
 
   function setMobileTab(tab: MobileTab) {
     activeMobileTab.value = tab;

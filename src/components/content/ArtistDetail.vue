@@ -37,7 +37,7 @@ const albumGrid = computed<Album[]>(() => {
     title: a.title,
     artist: a.artist,
     year: a.year || 0,
-    coverColor: a.coverColor || 'from-gray-500 to-gray-700',
+    coverColor: a.coverColor || 'from-warm-500 to-warm-700',
     cover_artwork_id: a.cover_artwork_id ?? null,
     cover_thumb: a.cover_thumb || null,
     artist_name: a.artist_name,
@@ -132,7 +132,7 @@ function selectAlbum(albumId: number) {
 }
 
 function getColorClass(color: string): string {
-  return color || 'from-gray-500 to-gray-700';
+  return color || 'from-warm-500 to-warm-700';
 }
 
 // ===== 滚动加载更多（过滤未激活时按 30 条/页追加）=====

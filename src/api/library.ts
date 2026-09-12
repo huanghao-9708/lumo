@@ -12,7 +12,8 @@ import type {
   ArtistStatsDTO,
   TrackFileInfoDTO,
   LibraryStatsDTO,
-  LibraryInsightsDTO
+  LibraryInsightsDTO,
+  StartupBundleDTO
 } from './types';
 
 // Tracks
@@ -84,6 +85,11 @@ export function libraryGetStats(): Promise<LibraryStatsDTO> {
 /** 首页洞察：4 个歌曲榜 + 艺人榜 + 专辑榜 + 今日次数 + 上次听歌，一次 IPC 打包 */
 export function libraryGetInsights(): Promise<LibraryInsightsDTO> {
   return invoke('library_get_insights');
+}
+
+/** 启动数据包：counts/playlists/albums/albums 总数/artists/play_queue 一次 IPC 拿回 */
+export function libraryGetStartupBundle(): Promise<StartupBundleDTO> {
+  return invoke('library_get_startup_bundle');
 }
 
 export function libraryGetPlaylists(): Promise<PlaylistDTOBackend[]> {

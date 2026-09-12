@@ -173,3 +173,17 @@ export interface LibraryInsightsDTO {
   today_play_count: number;
   last_played: RankedTrackDTO | null;
 }
+
+/** library_get_startup_bundle 返回：启动数据一次 IPC 打包 */
+export interface StartupBundleDTO {
+  counts: LibraryCountsDTO;
+  playlists: PlaylistDTOBackend[];
+  /** 专辑网格第一页（30 条，与前端 albumsPageSize 一致） */
+  albums: AlbumDTO[];
+  album_total: number;
+  /** 艺人第一页（50 条，与前端 artistsLimit 一致） */
+  artists: ArtistDTO[];
+  artist_total: number;
+  /** 持久化的播放队列 */
+  play_queue: TrackDTO[];
+}

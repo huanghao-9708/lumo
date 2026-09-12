@@ -278,7 +278,7 @@ function clearSearch() {
             >
               <!-- 头像占位 -->
               <div
-                class="w-10 h-10 rounded-full bg-gradient-to-br from-gray-400 to-gray-600 flex items-center justify-center flex-shrink-0"
+                class="w-10 h-10 rounded-full bg-gradient-to-br from-warm-400 to-warm-600 flex items-center justify-center flex-shrink-0"
               >
                 <User class="w-5 h-5 text-white/60" aria-hidden="true" />
               </div>

@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { LibraryBig, Search, Heart, Settings } from 'lucide-vue-next';
+import { Home, LibraryBig, Search, Heart, Settings } from 'lucide-vue-next';
 import { useUiStore, type MobileTab } from '../../stores/ui';
 
 const uiStore = useUiStore();
 
 const tabs: Array<{ key: MobileTab; label: string; icon: typeof LibraryBig }> = [
+  { key: 'home', label: '首页', icon: Home },
   { key: 'library', label: '曲库', icon: LibraryBig },
   { key: 'search', label: '搜索', icon: Search },
   { key: 'favorites', label: '收藏', icon: Heart },

@@ -1,16 +1,27 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, watch } from 'vue';
 import {
-  Play, Shuffle, Loader2, Disc3, Heart, MoreHorizontal, Clock,
+  Play, Shuffle, Loader2, Disc3, Heart, MoreHorizontal, Clock, CheckSquare,
 } from 'lucide-vue-next';
 import { usePlayerStore, type Track } from '../../stores/player';
 import { useArtworkSrc } from '../../composables/useArtworkSrc';
+import { useBatchSelect } from '../../composables/useBatchSelect';
+import BatchActionBar from '../shared/BatchActionBar.vue';
 
 const props = defineProps<{
   albumId: number | null;
 }>();
 
 const playerStore = usePlayerStore();
+
+/* ============ 批量选择（本视图一份实例；切换专辑自动退出） ============ */
+const batch = useBatchSelect();
+watch(() => props.albumId, () => batch.exit());
+const isAllSelected = computed(() => batch.count > 0 && batch.count === tracks.value.length);
+function onToggleSelectAll() {
+  if (isAllSelected.value) batch.selectNone();
+  else batch.selectAll(tracks.value);
+}
 
 const album = computed(() => playerStore.currentAlbumDetails);
 
@@ -143,6 +154,15 @@ function toggleFav(trackId: number, e: Event) {
                 <Shuffle class="w-[14px] h-[14px]" />
                 随机播放
               </button>
+              <!-- 批量选择入口 -->
+              <button
+                class="h-[34px] px-4 rounded-full border border-border-solid text-[13px] font-medium flex items-center gap-2 transition-colors-smooth"
+                :class="batch.isActive ? 'bg-list-selected text-text-primary border-transparent' : 'text-text-primary hover:bg-list-hover'"
+                @click="batch.isActive ? batch.exit() : batch.enter()"
+              >
+                <CheckSquare class="w-[14px] h-[14px]" />
+                {{ batch.isActive ? '取消多选' : '多选' }}
+              </button>
             </div>
           </div>
         </div>
@@ -178,33 +198,60 @@ function toggleFav(trackId: number, e: Event) {
           style="height: 40px;"
           :class="{
             'playing-row bg-list-selected': isPlayingTrack(track.id),
+            'bg-list-selected/60': batch.isActive && batch.isSelected(track.id),
           }"
-          @dblclick="playTrack(index)"
+          @click="batch.isActive && batch.toggle(track)"
+          @dblclick="!batch.isActive && playTrack(index)"
         >
-          <!-- 序号 / 播放图标 -->
+          <!-- 序号 / 复选框 / 播放图标 -->
           <div class="w-10 text-center shrink-0 text-[12px] font-mono">
-            <span v-if="isPlayingTrack(track.id)" class="text-brand-orange inline-flex items-center justify-center">
-              <Loader2 v-if="playerStore.isPlaying" class="w-[14px] h-[14px] animate-spin" />
-              <Play v-else class="w-[12px] h-[12px] fill-current" />
+            <span
+              v-if="batch.isActive"
+              class="inline-flex items-center justify-center"
+              @click.stop="batch.toggle(track)"
+            >
+              <span
+                class="w-[14px] h-[14px] rounded-[3px] border flex items-center justify-center transition-colors-smooth"
+                :class="batch.isSelected(track.id) ? 'bg-brand-orange border-brand-orange' : 'border-border-solid'"
+              >
+                <CheckSquare v-if="batch.isSelected(track.id)" class="w-[10px] h-[10px] text-white" />
+              </span>
             </span>
             <template v-else>
-              <span class="text-text-muted group-hover:hidden tabular-nums">{{ String(index + 1).padStart(2, '0') }}</span>
-              <Play class="w-[12px] h-[12px] fill-current mx-auto hidden group-hover:block text-text-secondary" />
+              <span v-if="isPlayingTrack(track.id)" class="text-brand-orange inline-flex items-center justify-center">
+                <Loader2 v-if="playerStore.isPlaying" class="w-[14px] h-[14px] animate-spin" />
+                <Play v-else class="w-[12px] h-[12px] fill-current" />
+              </span>
+              <template v-else>
+                <span class="text-text-muted group-hover:hidden tabular-nums">{{ String(index + 1).padStart(2, '0') }}</span>
+                <Play class="w-[12px] h-[12px] fill-current mx-auto hidden group-hover:block text-text-secondary" />
+              </template>
             </template>
           </div>
 
-          <!-- 收藏 -->
+          <!-- 收藏（多选态下改为切换选择） -->
           <div class="w-8 shrink-0 flex items-center justify-center">
-            <Heart
-              v-if="track.isFavorite"
-              class="w-[14px] h-[14px] text-brand-orange fill-current cursor-pointer"
-              @click="toggleFav(track.id, $event)"
-            />
-            <Heart
-              v-else
-              class="w-[14px] h-[14px] text-text-disabled opacity-0 group-hover:opacity-60 transition-opacity hover:!opacity-100 hover:!text-brand-orange cursor-pointer"
-              @click="toggleFav(track.id, $event)"
-            />
+            <template v-if="batch.isActive">
+              <span
+                class="w-[14px] h-[14px] rounded-[3px] border flex items-center justify-center transition-colors-smooth"
+                :class="batch.isSelected(track.id) ? 'bg-brand-orange border-brand-orange' : 'border-border-solid opacity-0 group-hover:opacity-100'"
+                @click.stop="batch.toggle(track)"
+              >
+                <CheckSquare v-if="batch.isSelected(track.id)" class="w-[10px] h-[10px] text-white" />
+              </span>
+            </template>
+            <template v-else>
+              <Heart
+                v-if="track.isFavorite"
+                class="w-[14px] h-[14px] text-brand-orange fill-current cursor-pointer"
+                @click="toggleFav(track.id, $event)"
+              />
+              <Heart
+                v-else
+                class="w-[14px] h-[14px] text-text-disabled opacity-0 group-hover:opacity-60 transition-opacity hover:!opacity-100 hover:!text-brand-orange cursor-pointer"
+                @click="toggleFav(track.id, $event)"
+              />
+            </template>
           </div>
 
           <!-- 标题 -->
@@ -214,8 +261,8 @@ function toggleFav(trackId: number, e: Event) {
             </span>
           </div>
 
-          <!-- 艺术家 -->
-          <div class="flex-[1.5] min-w-0 hidden sm:block text-[13px] text-text-secondary truncate"><span class="hover:underline cursor-pointer" @click.stop="if(track.artistId) { playerStore.activeLibraryTab = '艺术家'; playerStore.activeArtistId = track.artistId; }">{{ track.artist }}</span></div>
+          <!-- 艺术家（多选态下改为切换选择） -->
+          <div class="flex-[1.5] min-w-0 hidden sm:block text-[13px] text-text-secondary truncate"><span class="hover:underline cursor-pointer" @click.stop="batch.isActive ? batch.toggle(track) : playerStore.navigateToArtist(track.artistId)">{{ track.artist }}</span></div>
 
           <!-- 时长 -->
           <div class="w-[56px] text-right shrink-0 text-[12px] font-mono text-text-muted tabular-nums">{{ track.duration }}</div>
@@ -227,6 +274,15 @@ function toggleFav(trackId: number, e: Event) {
         </div>
 
       </div>
+
+      <!-- 批量操作条（多选态） -->
+      <BatchActionBar
+        v-if="batch.isActive"
+        :selected-ids="[...batch.selectedIds]"
+        :all-selected="isAllSelected"
+        @exit="batch.exit()"
+        @toggle-select-all="onToggleSelectAll"
+      />
     </template>
   </div>
 </template>

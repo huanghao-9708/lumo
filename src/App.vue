@@ -83,15 +83,13 @@ onMounted(async () => {
   window.addEventListener('online', handleOnline);
   window.addEventListener('offline', handleOffline);
 
-  // 1. 恢复播放会话（队列 / 进度 / 音量）
-  await playerStore.restoreSession();
-  // 2. 拉取侧边栏与库的基础数据（并行）
-  await Promise.all([
-    playerStore.fetchPlaylists(),
-    playerStore.fetchSources(),
-    playerStore.fetchAlbums(true),
-    playerStore.fetchArtists(true),
-  ]);
+  // 1. 启动数据包（遗留事项 2）：一次 IPC 拿回 counts/playlists/albums/artists/play_queue，
+  //    加上 fetchSources（凭据解析在 scanner 模块）共 2 个启动 IPC（此前 ~7 个）
+  const bundle = await playerStore.fetchStartupBundle();
+  // 2. 恢复播放会话（队列已随启动包就位，这里做播放模式/音量/进度的本地恢复）
+  await playerStore.restoreSession(bundle);
+  // 3. 数据源列表（来源管理与文件夹视图用）
+  await playerStore.fetchSources();
 });
 
 onUnmounted(() => {

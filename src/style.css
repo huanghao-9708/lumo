@@ -145,6 +145,15 @@
   --color-status-success: var(--status-success);
   --color-status-warning: var(--status-warning);
   --color-status-error: var(--status-error);
+
+  /* LDL v2.0 暖色中性阶梯（Warm Neutral Ladder）——占位渐变统一走 warm-*，
+     替代 Tailwind 冷灰 gray-*（LDL：绝不冷灰）。取值即 Tailwind stone 阶梯。 */
+  --color-warm-300: #d6d3d1;
+  --color-warm-400: #a8a29e;
+  --color-warm-500: #78716c;
+  --color-warm-600: #57534e;
+  --color-warm-700: #44403c;
+  --color-warm-800: #292524;
 }
 
 body {

@@ -42,6 +42,9 @@ watch(() => uiStore.activeMobileTab, (tab) => {
   playerStore.activePlaylistId = null;
 
   switch (tab) {
+    case 'home':
+      playerStore.activeLibraryTab = '首页';
+      break;
     case 'library':
       if (!isLibraryTab(playerStore.activeLibraryTab)) {
         playerStore.activeLibraryTab = '全部歌曲';

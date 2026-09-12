@@ -15,7 +15,7 @@ function selectArtist(artistId: number) {
 }
 
 function getColorClass(color: string): string {
-  return color || 'from-gray-500 to-gray-700';
+  return color || 'from-warm-500 to-warm-700';
 }
 
 /** IntersectionObserver: 滚动到底部自动加载下一批 */

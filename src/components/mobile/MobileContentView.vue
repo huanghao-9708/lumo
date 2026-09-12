@@ -9,6 +9,7 @@ import MobileSettings from './MobileSettings.vue';
 import MobileAddLocalSource from './MobileAddLocalSource.vue';
 import MobileWebdavSourceEditor from './MobileWebdavSourceEditor.vue';
 import MobileArtistDetail from './MobileArtistDetail.vue';
+import HomeView from '../content/HomeView.vue';
 import ActionSheet from './ActionSheet.vue';
 import type { ActionItem } from './ActionSheet.vue';
 
@@ -67,6 +68,9 @@ const isFavoriteArtistsView = computed(() =>
 const isSettingsView = computed(() =>
   playerStore.activeLibraryTab === '设置'
 );
+const isHomeView = computed(() =>
+  playerStore.activeLibraryTab === '首页'
+);
 const showAddLocalSource = ref(false);
 function openAddLocalSource() {
   showAddLocalSource.value = true;
@@ -87,6 +91,7 @@ function closeAddWebdavSource() {
 
 function loadForCurrentTab() {
   const tab = playerStore.activeLibraryTab;
+  if (tab === '首页') return; // 首页自管数据
   if (tab === '最近播放') playerStore.fetchRecentlyPlayed();
   else if (tab === '喜欢的音乐') playerStore.fetchFavoriteTracks();
   else if (tab === '专辑') playerStore.fetchAlbums(true);
@@ -300,8 +305,11 @@ function onAlbumTrackLongPress(trackId: number) {
 <template>
   <div class="flex-1 flex flex-col bg-bg-content overflow-hidden relative" style="min-height: 0;">
 
+    <!-- ===== 首页（自管数据，统计卡 + 排行榜） ===== -->
+    <HomeView v-if="isHomeView" />
+
     <!-- ===== 专辑详情 ===== -->
-    <template v-if="isAlbumDetailView">
+    <template v-else-if="isAlbumDetailView">
       <div v-if="isLoadingAlbum" class="flex-1 flex flex-col items-center justify-center gap-3 text-text-muted">
         <Loader2 class="w-5 h-5 animate-spin text-brand-orange" aria-hidden="true" />
         <span class="text-[12px]">加载专辑…</span>
@@ -430,7 +438,7 @@ function onAlbumTrackLongPress(trackId: number) {
       <div v-if="playerStore.artists.length > 0" class="grid gap-4 pb-4" style="grid-template-columns: repeat(2, 1fr);">
         <div v-for="artist in playerStore.artists" :key="artist.id" class="cursor-pointer min-w-0" @click="selectArtist(artist.id)">
           <div class="w-full aspect-square rounded-[10px] overflow-hidden bg-bg-hover mb-2 flex items-center justify-center">
-            <div class="w-full h-full bg-gradient-to-br from-gray-400 to-gray-600 flex items-center justify-center">
+            <div class="w-full h-full bg-gradient-to-br from-warm-400 to-warm-600 flex items-center justify-center">
               <span class="text-white/70 text-[28px] font-bold">{{ artist.name.charAt(0) }}</span>
             </div>
           </div>
@@ -553,7 +561,7 @@ function onAlbumTrackLongPress(trackId: number) {
           @click="selectArtist(artist.id)"
         >
           <div class="w-full aspect-square rounded-[10px] overflow-hidden bg-bg-hover mb-2 flex items-center justify-center">
-            <div class="w-full h-full bg-gradient-to-br from-gray-400 to-gray-600 flex items-center justify-center">
+            <div class="w-full h-full bg-gradient-to-br from-warm-400 to-warm-600 flex items-center justify-center">
               <span class="text-white/70 text-[28px] font-bold">{{ artist.name.charAt(0) }}</span>
             </div>
           </div>

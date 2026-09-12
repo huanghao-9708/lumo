@@ -610,6 +610,51 @@ pub fn library_set_favorite_batch(db_state: State<'_, DbState>, track_ids: Vec<i
         .map_err(|e| e.into())
 }
 
+/// 启动数据包：一次 IPC 拿回 App.vue 启动所需的全部数据（遗留事项 2）。
+/// 把启动 IPC 从 ~7 个降到 2 个（本命令 + source_list——凭据解析逻辑在 scanner 模块，
+/// 保持独立）。async 化理由同其他 list-load 命令。
+#[tauri::command(async)]
+pub fn library_get_startup_bundle(db_state: State<'_, DbState>) -> Result<crate::models::StartupBundle, AppError> {
+    let _trace = ipc_trace!("library_get_startup_bundle");
+    let conn = db_state.db.get()?;
+    use crate::repositories::{album_repo::AlbumRepo, artist_repo::ArtistRepo, playlist_repo::PlaylistRepo, track_repo::TrackRepo};
+
+    // 计数（与 library_get_counts 同一条 SQL）
+    let counts: crate::models::LibraryCounts = conn.query_row(
+        "SELECT
+            (SELECT COUNT(*) FROM tracks),
+            (SELECT COUNT(*) FROM favorite_tracks),
+            (SELECT COUNT(*) FROM favorite_albums),
+            (SELECT COUNT(*) FROM favorite_artists),
+            (SELECT COUNT(*) FROM tracks WHERE last_played_at IS NOT NULL)",
+        [],
+        |row| Ok(crate::models::LibraryCounts {
+            tracks: row.get(0)?,
+            favorite_tracks: row.get(1)?,
+            favorite_albums: row.get(2)?,
+            favorite_artists: row.get(3)?,
+            recently_played: row.get(4)?,
+        }),
+    )?;
+
+    // 专辑网格第一页 30 条 / 艺人第一页 50 条——与前端 albumsPageSize / artistsLimit 一致，
+    // 前端据此续接增量加载。缩略图/计数等参数与各自独立命令完全同形。
+    let albums = AlbumRepo::get_albums_paginated(&conn, 30, 0, None).map_err(|e| AppError::Internal(e.to_string()))?;
+    let album_total = AlbumRepo::get_album_count(&conn, None).map_err(|e| AppError::Internal(e.to_string()))?;
+    let ArtistListResult { artists, total } = ArtistRepo::get_artists_paginated(&conn, 50, 0, None)
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    Ok(crate::models::StartupBundle {
+        counts,
+        playlists: PlaylistRepo::get_playlists(&conn).map_err(|e| AppError::Internal(e.to_string()))?,
+        albums,
+        album_total,
+        artists,
+        artist_total: total,
+        play_queue: TrackRepo::get_play_queue(&conn).map_err(|e| AppError::Internal(e.to_string()))?,
+    })
+}
+
 /// 专辑封面的真实拉取流程（iTunes 查询 + 600x600 下载 + 缩略图 + 写库）。
 /// 只在 tokio 后台任务中调用，不占 IPC channel（第七轮）。
 async fn fetch_album_cover_impl(app: &tauri::AppHandle, pool: &crate::db::DbPool, album_id: i64) -> Result<Option<i64>, AppError> {

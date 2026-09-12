@@ -13,6 +13,7 @@ import {
   libraryGetArtistById,
   libraryGetSmartPlaylist,
   libraryGetStats, libraryGetInsights, libraryAddTracksToPlaylist, librarySetFavoriteBatch,
+  libraryGetStartupBundle,
 } from '../api/library';
 import {
   playbackPlay, playbackPause, playbackResume, playbackSetVolume, playbackSeek
@@ -29,7 +30,7 @@ import { useUiStore } from './ui';
 
 
 // ================= 后端 DTO 接口（与 Rust 端 models.rs 保持一致） =================
-import type { TrackDTO, ArtistDTO, AlbumDTO, PlaylistDTOBackend, FolderChildrenResultDTO, FolderTracksResultDTO, LibraryStatsDTO, RankedTrackDTO, RankedArtistDTO, RankedAlbumDTO } from '../api/types';
+import type { TrackDTO, ArtistDTO, AlbumDTO, PlaylistDTOBackend, FolderChildrenResultDTO, FolderTracksResultDTO, LibraryStatsDTO, RankedTrackDTO, RankedArtistDTO, RankedAlbumDTO, StartupBundleDTO } from '../api/types';
 
 // ================= 前端展示模型 =================
 
@@ -198,7 +199,7 @@ export const usePlayerStore = defineStore("player", () => {
       hash = str.charCodeAt(i) + ((hash << 5) - hash);
     }
     const colors = [
-      'from-gray-500 to-gray-800',
+      'from-warm-500 to-warm-800',
       'from-blue-500 to-blue-800',
       'from-green-500 to-green-800',
       'from-red-500 to-red-800',
@@ -1540,13 +1541,73 @@ const albums = shallowRef<Album[]>([]);
   });
 
   // 恢复状态与队列
-  async function restoreSession() {
+  // 启动数据包（遗留事项 2）：一次 IPC 拿回 counts/playlists/albums/artists/play_queue，
+  // 返回的 bundle 交给 restoreSession 做纯本地恢复；失败时返回 null，restoreSession
+  // 自动回退到旧的逐个 IPC 路径。
+  async function fetchStartupBundle(): Promise<StartupBundleDTO | null> {
     try {
-      // 1. 恢复播放队列
-      const savedQueue: TrackDTO[] = await libraryGetPlayQueue();
-      if (savedQueue && savedQueue.length > 0) {
-        queue.value = mapTrackList(savedQueue);
+      const b = await libraryGetStartupBundle();
+
+      Object.assign(libraryCounts, b.counts);
+      tracksTotalCount.value = b.counts.tracks;
+
+      playlists.value = b.playlists.map(p => ({
+        id: p.id,
+        name: p.name,
+        description: p.description,
+        count: p.track_count
+      }));
+
+      const newAlbums: Album[] = b.albums.map((a) => ({
+        id: a.id,
+        title: a.title,
+        artist: a.artist_name || '未知艺人',
+        year: a.release_year || 0,
+        coverColor: getDeterministicColor(a.title || 'Unknown'),
+        cover_artwork_id: a.cover_artwork_id,
+        cover_thumb: a.cover_thumbnail_base64,
+        artist_name: a.artist_name,
+        track_count: a.track_count
+      }));
+      albums.value = newAlbums;
+      albumsOffset = b.albums.length;
+      albumsTotalCount.value = b.album_total;
+      hasMoreAlbums.value = b.albums.length >= albumsPageSize && b.albums.length < b.album_total;
+
+      const newArtists: Artist[] = b.artists.map((a) => ({
+        id: a.id,
+        name: a.name,
+        trackCount: a.track_count,
+        avatarColor: getDeterministicColor(a.name || 'Unknown'),
+        track_count: a.track_count,
+        avatar_artwork_id: a.avatar_artwork_id
+      }));
+      artists.value = newArtists;
+      artistsOffset = b.artists.length;
+      artistsTotalCount.value = b.artist_total;
+      hasMoreArtists.value = b.artists.length < b.artist_total;
+
+      if (b.play_queue.length > 0) {
+        queue.value = mapTrackList(b.play_queue);
         lastSavedQueueSignature = queue.value.map(t => t.id).join(',');
+      }
+
+      return b;
+    } catch (e) {
+      console.error("Failed to fetch startup bundle:", e);
+      return null;
+    }
+  }
+
+  async function restoreSession(bundle?: StartupBundleDTO | null) {
+    try {
+      // 1. 恢复播放队列（启动包已带入 queue；bundle 缺失时兜底单独拉）
+      if (!bundle && queue.value.length === 0) {
+        const savedQueue: TrackDTO[] = await libraryGetPlayQueue();
+        if (savedQueue && savedQueue.length > 0) {
+          queue.value = mapTrackList(savedQueue);
+          lastSavedQueueSignature = queue.value.map(t => t.id).join(',');
+        }
       }
 
       // 2. 恢复播放模式
@@ -1585,7 +1646,8 @@ const albums = shallowRef<Album[]>([]);
     } catch (e) {
       console.error("Failed to restore session:", e);
     }
-    fetchCounts();
+    // bundle 已含 counts；兜底路径才需要单独拉
+    if (!bundle) fetchCounts();
   }
 
   // ================= 歌单操作 Actions =================
@@ -2186,6 +2248,7 @@ const albums = shallowRef<Album[]>([]);
     isLoadingArtists,
     hasMoreTracks,
     restoreSession,
+    fetchStartupBundle,
     deletePlaylist,
     removeTrackFromPlaylist,
     // 专辑无限滚动

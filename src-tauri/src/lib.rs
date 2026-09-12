@@ -294,16 +294,6 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .register_uri_scheme_protocol("lumo", |ctx, request| {
-            // ===== [诊断日志] 统计 artwork 请求频率 =====
-            use std::sync::atomic::{AtomicU64, Ordering};
-            static ARTWORK_REQ_COUNT: AtomicU64 = AtomicU64::new(0);
-            static ARTWORK_LAST_LOG: AtomicU64 = AtomicU64::new(0);
-            let n = ARTWORK_REQ_COUNT.fetch_add(1, Ordering::Relaxed);
-            if n / 100 != ARTWORK_LAST_LOG.load(Ordering::Relaxed) / 100 {
-                ARTWORK_LAST_LOG.store(n, Ordering::Relaxed);
-                tracing::info!("[PERF] artwork_requests_total={} (every 100th logged)", n + 1);
-            }
-
             let app = ctx.app_handle();
             let uri = request.uri().to_string();
             // 兼容 Windows WebView2 (`http://lumo.localhost/artwork/1`) 和 标准 (`lumo://artwork/1`)
@@ -465,6 +455,7 @@ pub fn run() {
             crate::commands::library::library_get_counts,
             crate::commands::library::library_get_stats,
             crate::commands::library::library_get_insights,
+            crate::commands::library::library_get_startup_bundle,
             crate::commands::library::library_add_tracks_to_playlist,
             crate::commands::library::library_set_favorite_batch,
             crate::commands::library::library_fetch_missing_album_cover,
