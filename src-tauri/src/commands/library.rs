@@ -977,8 +977,11 @@ pub fn library_get_playability(
 
     for chunk in track_ids.chunks(500) {
         let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        // media_files 无 path 列：完整路径 = root_uri + '/' + relative_path（与
+        // library_get_track_file_info 等命令的拼接口径一致），下游 Path::join(p) 的
+        // p 即相对路径。
         let sql = format!(
-            "SELECT t.id, m.id, s.kind, s.root_uri, m.path
+            "SELECT t.id, m.id, s.kind, s.root_uri, m.relative_path
              FROM tracks t
              LEFT JOIN media_files m ON m.id = COALESCE(t.primary_file_id, (SELECT mf.id FROM media_files mf WHERE mf.track_id = t.id ORDER BY mf.id LIMIT 1))
              LEFT JOIN sources s ON s.id = m.source_id
