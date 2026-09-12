@@ -335,7 +335,12 @@ pub fn source_remove(db_state: State<'_, DbState>, source_id: i64) -> Result<(),
         |row| row.get::<_, Option<String>>(0),
     ) {
         if let Some((_, entry)) = cred.split_once("##kr:") {
+            // kr 引用只在桌面端产生（Android 无钥匙串，见 resolve_source_credential 注释），
+            // keyring_delete 仅桌面编译；Android 走空分支。
+            #[cfg(not(target_os = "android"))]
             crate::services::secret::keyring_delete(entry);
+            #[cfg(target_os = "android")]
+            let _ = entry;
         }
     }
 
