@@ -7,35 +7,35 @@ use rusqlite::params;
 use crate::ipc_trace;
 // For storing PlaybackManager state
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_get_tracks(db_state: State<'_, DbState>, limit: u32, offset: u32, search_keyword: Option<String>) -> Result<Vec<TrackDTO>, AppError> {
     let _trace = ipc_trace!("library_get_tracks");
     let conn = db_state.db.get()?;
     crate::repositories::track_repo::TrackRepo::get_tracks_paginated(&conn, limit, offset, search_keyword).map_err(|e| e.into())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_get_albums(db_state: State<'_, DbState>, limit: u32, offset: u32, search_keyword: Option<String>) -> Result<Vec<AlbumDTO>, AppError> {
     let _trace = ipc_trace!("library_get_albums");
     let conn = db_state.db.get()?;
     crate::repositories::album_repo::AlbumRepo::get_albums_paginated(&conn, limit, offset, search_keyword).map_err(|e| e.into())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_get_album_count(db_state: State<'_, DbState>, search_keyword: Option<String>) -> Result<i64, AppError> {
     let _trace = ipc_trace!("library_get_album_count");
     let conn = db_state.db.get()?;
     crate::repositories::album_repo::AlbumRepo::get_album_count(&conn, search_keyword).map_err(|e| e.into())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_get_artists(db_state: State<'_, DbState>, limit: u32, offset: u32, search_keyword: Option<String>) -> Result<ArtistListResult, AppError> {
     let _trace = ipc_trace!("library_get_artists");
     let conn = db_state.db.get()?;
     crate::repositories::artist_repo::ArtistRepo::get_artists_paginated(&conn, limit, offset, search_keyword).map_err(|e| e.into())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_get_album_tracks(db_state: State<'_, DbState>, album_id: i64) -> Result<Vec<TrackDTO>, AppError> {
     let _trace = ipc_trace!("library_get_album_tracks");
     let conn = db_state.db.get()?;
@@ -56,21 +56,21 @@ pub fn library_get_artist_by_id(db_state: State<'_, DbState>, artist_id: i64) ->
     crate::repositories::artist_repo::ArtistRepo::get_artist_by_id(&conn, artist_id).map_err(|e| e.into())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_get_artist_albums(db_state: State<'_, DbState>, artist_id: i64, limit: u32, offset: u32) -> Result<Vec<AlbumDTO>, AppError> {
     let _trace = ipc_trace!("library_get_artist_albums");
     let conn = db_state.db.get()?;
     crate::repositories::artist_repo::ArtistRepo::get_artist_albums(&conn, artist_id, limit, offset).map_err(|e| e.into())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_get_artist_album_count(db_state: State<'_, DbState>, artist_id: i64) -> Result<i64, AppError> {
     let _trace = ipc_trace!("library_get_artist_album_count");
     let conn = db_state.db.get()?;
     crate::repositories::artist_repo::ArtistRepo::get_artist_album_count(&conn, artist_id).map_err(|e| e.into())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_get_artist_tracks(db_state: State<'_, DbState>, artist_id: i64, limit: u32, offset: u32) -> Result<Vec<TrackDTO>, AppError> {
     let _trace = ipc_trace!("library_get_artist_tracks");
     let conn = db_state.db.get()?;
@@ -610,18 +610,12 @@ pub fn library_set_favorite_batch(db_state: State<'_, DbState>, track_ids: Vec<i
         .map_err(|e| e.into())
 }
 
-#[tauri::command]
-pub async fn library_fetch_missing_album_cover(app: tauri::AppHandle, db_state: State<'_, DbState>, album_id: i64, allow_online: Option<bool>) -> Result<Option<i64>, AppError> {
-    let _trace = ipc_trace!("library_fetch_missing_album_cover");
-
-    // P0-07 在线元数据隐私：默认拒绝，未显式授权不向 iTunes 发送专辑/艺人名称
-    if allow_online != Some(true) {
-        return Ok(None);
-    }
-
+/// 专辑封面的真实拉取流程（iTunes 查询 + 600x600 下载 + 缩略图 + 写库）。
+/// 只在 tokio 后台任务中调用，不占 IPC channel（第七轮）。
+async fn fetch_album_cover_impl(app: &tauri::AppHandle, pool: &crate::db::DbPool, album_id: i64) -> Result<Option<i64>, AppError> {
     // 1. Get album info
     let (album_title, artist_name): (String, Option<String>) = {
-        let conn = db_state.db.get()?;
+        let conn = pool.get()?;
         let mut stmt = conn.prepare("
             SELECT al.title, (SELECT name FROM artists WHERE id = (SELECT artist_id FROM track_artists WHERE track_id = t.id LIMIT 1))
             FROM albums al
@@ -640,7 +634,7 @@ pub async fn library_fetch_missing_album_cover(app: tauri::AppHandle, db_state: 
     if let Some(a) = &artist_name {
         term = format!("{} {}", a, term);
     }
-    
+
     let mut url = url::Url::parse("https://itunes.apple.com/search").unwrap();
     url.query_pairs_mut().append_pair("term", &term);
     url.query_pairs_mut().append_pair("entity", "album");
@@ -671,7 +665,7 @@ pub async fn library_fetch_missing_album_cover(app: tauri::AppHandle, db_state: 
     // 3. Download image
     let img_resp = client.get(&artwork_url).send().await.map_err(|e| AppError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
     if !img_resp.status().is_success() { return Ok(None); }
-    
+
     let mime_type = img_resp.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("image/jpeg").to_string();
     let bytes = img_resp.bytes().await.map_err(|e| AppError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
 
@@ -697,10 +691,10 @@ pub async fn library_fetch_missing_album_cover(app: tauri::AppHandle, db_state: 
     if !cache_path.exists() {
         let _ = std::fs::write(&cache_path, &bytes);
     }
-    
+
     let thumbnail_blob = crate::services::library::LibraryService::generate_thumbnail(&bytes);
 
-    let conn = db_state.db.get()?;
+    let conn = pool.get()?;
     use rusqlite::OptionalExtension;
     // Check if hash exists
     let existing_id: Option<i64> = conn.query_row(
@@ -708,7 +702,7 @@ pub async fn library_fetch_missing_album_cover(app: tauri::AppHandle, db_state: 
         params![hash],
         |row| row.get(0),
     ).optional()?;
-    
+
     let artwork_id = if let Some(id) = existing_id {
         id
     } else {
@@ -727,18 +721,47 @@ pub async fn library_fetch_missing_album_cover(app: tauri::AppHandle, db_state: 
     Ok(Some(artwork_id))
 }
 
+/// 触发专辑封面在线拉取（第七轮：后台化）。
+///
+/// dev 模式 IPC 走 `http://ipc.localhost`，受 WebView2 HTTP/1.1 单 host 6 并发上限约束；
+/// 此命令单次 2-10s，若同步占用 channel，5+ 个无封面专辑就会把其他列表 IPC 全部
+/// Stalled 5-15s。因此命令体立即返回 `Ok(None)` 不占并发坑位，真实下载在
+/// tokio 后台任务执行，完成后 emit `album-cover-fetched` 事件，由前端订阅更新 UI。
 #[tauri::command]
-pub async fn library_fetch_missing_artist_cover(app: tauri::AppHandle, db_state: State<'_, DbState>, artist_id: i64, allow_online: Option<bool>) -> Result<Option<i64>, AppError> {
-    let _trace = ipc_trace!("library_fetch_missing_artist_cover");
+pub async fn library_fetch_missing_album_cover(app: tauri::AppHandle, db_state: State<'_, DbState>, album_id: i64, allow_online: Option<bool>) -> Result<Option<i64>, AppError> {
+    let _trace = ipc_trace!("library_fetch_missing_album_cover");
 
-    // P0-07 在线元数据隐私：默认拒绝，未显式授权不向 iTunes 发送艺人名称
+    // P0-07 在线元数据隐私：默认拒绝，未显式授权不向 iTunes 发送专辑/艺人名称
     if allow_online != Some(true) {
         return Ok(None);
     }
 
+    // State<'_, DbState> 有生命周期，不能 move 进 spawn；DbPool 内部是 Arc，clone 后 'static。
+    let app_clone = app.clone();
+    let pool = db_state.db.clone();
+    tokio::spawn(async move {
+        match fetch_album_cover_impl(&app_clone, &pool, album_id).await {
+            Ok(Some(artwork_id)) => {
+                use tauri::Emitter;
+                let _ = app_clone.emit(
+                    "album-cover-fetched",
+                    crate::models::CoverFetchedEvent { target_id: album_id, artwork_id },
+                );
+            }
+            Ok(None) => {}
+            Err(e) => tracing::warn!("[cover] album={} fetch failed: {}", album_id, e),
+        }
+    });
+
+    Ok(None) // 立即返回，不占 WebView 并发
+}
+
+/// 艺人头像的真实拉取流程（iTunes 查询 + 600x600 下载 + 缩略图 + 写库）。
+/// 只在 tokio 后台任务中调用，不占 IPC channel（第七轮）。
+async fn fetch_artist_cover_impl(app: &tauri::AppHandle, pool: &crate::db::DbPool, artist_id: i64) -> Result<Option<i64>, AppError> {
     // 1. Get artist info
     let artist_name: String = {
-        let conn = db_state.db.get()?;
+        let conn = pool.get()?;
         let mut stmt = conn.prepare("SELECT name FROM artists WHERE id = ?1 LIMIT 1")?;
         use rusqlite::OptionalExtension;
         let row = stmt.query_row(params![artist_id], |row| row.get(0)).optional()?;
@@ -776,7 +799,7 @@ pub async fn library_fetch_missing_artist_cover(app: tauri::AppHandle, db_state:
     // 3. Download image
     let img_resp = client.get(&artwork_url).send().await.map_err(|e| AppError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
     if !img_resp.status().is_success() { return Ok(None); }
-    
+
     let mime_type = img_resp.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("image/jpeg").to_string();
     let bytes = img_resp.bytes().await.map_err(|e| AppError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
 
@@ -802,19 +825,19 @@ pub async fn library_fetch_missing_artist_cover(app: tauri::AppHandle, db_state:
     if !cache_path.exists() {
         let _ = std::fs::write(&cache_path, &bytes);
     }
-    
+
     let thumbnail_blob = crate::services::library::LibraryService::generate_thumbnail(&bytes);
 
-    let conn = db_state.db.get()?;
+    let conn = pool.get()?;
     use rusqlite::OptionalExtension;
-    
+
     // Check if hash exists
     let existing_id: Option<i64> = conn.query_row(
         "SELECT id FROM artwork WHERE content_hash = ?1",
         params![hash],
         |row| row.get(0),
     ).optional()?;
-    
+
     let artwork_id = if let Some(id) = existing_id {
         id
     } else {
@@ -831,6 +854,35 @@ pub async fn library_fetch_missing_artist_cover(app: tauri::AppHandle, db_state:
     )?;
 
     Ok(Some(artwork_id))
+}
+
+/// 触发艺人头像在线拉取（第七轮：后台化，机制同 library_fetch_missing_album_cover）。
+#[tauri::command]
+pub async fn library_fetch_missing_artist_cover(app: tauri::AppHandle, db_state: State<'_, DbState>, artist_id: i64, allow_online: Option<bool>) -> Result<Option<i64>, AppError> {
+    let _trace = ipc_trace!("library_fetch_missing_artist_cover");
+
+    // P0-07 在线元数据隐私：默认拒绝，未显式授权不向 iTunes 发送艺人名称
+    if allow_online != Some(true) {
+        return Ok(None);
+    }
+
+    let app_clone = app.clone();
+    let pool = db_state.db.clone();
+    tokio::spawn(async move {
+        match fetch_artist_cover_impl(&app_clone, &pool, artist_id).await {
+            Ok(Some(artwork_id)) => {
+                use tauri::Emitter;
+                let _ = app_clone.emit(
+                    "artist-cover-fetched",
+                    crate::models::CoverFetchedEvent { target_id: artist_id, artwork_id },
+                );
+            }
+            Ok(None) => {}
+            Err(e) => tracing::warn!("[cover] artist={} fetch failed: {}", artist_id, e),
+        }
+    });
+
+    Ok(None) // 立即返回，不占 WebView 并发
 }
 
 /// 智能歌单查询 command。

@@ -1301,19 +1301,10 @@ const albums = shallowRef<Album[]>([]);
 
       if (album) {
         try {
-          // 不要 await 阻塞 tracks 的加载，改为异步后台执行
+          // 不要 await 阻塞 tracks 的加载，改为后台触发（第七轮：命令立即返回不占 IPC
+          // 并发，完成后由 album-cover-fetched 事件回调统一更新 UI）
           if (album.cover_artwork_id == null && uiStore.fetchCoversOnline) {
-            libraryFetchMissingAlbumCover(newId, true).then((newCoverId) => {
-              if (newCoverId) {
-                // 如果当前选中的专辑还是这一个，更新它的封面
-                if (currentAlbumDetailsData.value?.id === newId) {
-                  currentAlbumDetailsData.value.cover_artwork_id = newCoverId;
-                }
-                // 更新列表中的封面
-                const foundAlbum = albums.value.find(a => a.id === newId);
-                if (foundAlbum) foundAlbum.cover_artwork_id = newCoverId;
-              }
-            }).catch(console.error);
+            libraryFetchMissingAlbumCover(newId, true).catch(console.error);
           }
           const result: TrackDTO[] = await libraryGetAlbumTracks(newId);
           const tracksData = mapTrackList(result);
@@ -1466,16 +1457,8 @@ const albums = shallowRef<Album[]>([]);
 
       try {
         if (artist.avatar_artwork_id == null && uiStore.fetchCoversOnline) {
-          // 不阻塞，异步获取封面
-          libraryFetchMissingArtistCover(newId, true).then((newCoverId) => {
-            if (newCoverId) {
-              if (currentArtistDetailsData.value?.id === newId) {
-                currentArtistDetailsData.value.avatar_artwork_id = newCoverId;
-              }
-              const foundArtist = artists.value.find(a => a.id === newId);
-              if (foundArtist) foundArtist.avatar_artwork_id = newCoverId;
-            }
-          }).catch(console.error);
+          // 不阻塞，后台触发（第七轮：完成后由 artist-cover-fetched 事件回调统一更新 UI）
+          libraryFetchMissingArtistCover(newId, true).catch(console.error);
         }
         
         // 并行加载统计信息，不阻塞轨道和专辑
@@ -1956,12 +1939,16 @@ const albums = shallowRef<Album[]>([]);
   let unlistenScanProgress: (() => void) | null = null;
   let unlistenScanComplete: (() => void) | null = null;
   let unlistenArtworkBackfill: (() => void) | null = null;
+  let unlistenAlbumCoverFetched: (() => void) | null = null;
+  let unlistenArtistCoverFetched: (() => void) | null = null;
 
   async function initEventListeners() {
     // 先清理可能残留的旧监听（Vite HMR 场景）
     unlistenScanProgress?.();
     unlistenScanComplete?.();
     unlistenArtworkBackfill?.();
+    unlistenAlbumCoverFetched?.();
+    unlistenArtistCoverFetched?.();
 
     unlistenScanProgress = await listen('scan-progress', (event: any) => {
       const payload = event.payload as { source_id: number; scanned_count: number; skipped_count?: number; current_path: string };
@@ -1988,6 +1975,29 @@ const albums = shallowRef<Album[]>([]);
     unlistenArtworkBackfill = await listen('artwork-backfill-complete', async () => {
       console.log('[artwork-backfill-complete] 缩略图回填完成，重新拉取专辑列表');
       await fetchAlbums(true);
+    });
+
+    // 第七轮：封面后台拉取完成事件 —— 命令已改为立即返回，UI 更新由这里接管
+    unlistenAlbumCoverFetched = await listen<{ target_id: number; artwork_id: number }>('album-cover-fetched', (event) => {
+      const { target_id, artwork_id } = event.payload;
+      const foundAlbum = albums.value.find(a => a.id === target_id);
+      if (foundAlbum) {
+        foundAlbum.cover_artwork_id = artwork_id;
+        // albums 是 shallowRef，浅拷贝整体替换触发网格重渲染
+        albums.value = [...albums.value];
+      }
+      if (currentAlbumDetailsData.value?.id === target_id) {
+        currentAlbumDetailsData.value.cover_artwork_id = artwork_id;
+      }
+    });
+
+    unlistenArtistCoverFetched = await listen<{ target_id: number; artwork_id: number }>('artist-cover-fetched', (event) => {
+      const { target_id, artwork_id } = event.payload;
+      const foundArtist = artists.value.find(a => a.id === target_id);
+      if (foundArtist) foundArtist.avatar_artwork_id = artwork_id;
+      if (currentArtistDetailsData.value?.id === target_id) {
+        currentArtistDetailsData.value.avatar_artwork_id = artwork_id;
+      }
     });
   }
 

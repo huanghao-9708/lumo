@@ -448,3 +448,13 @@ pub struct LibraryInsights {
     /// 上次听歌（最近一条有播放时间的曲目，含 last_played_at）
     pub last_played: Option<RankedTrackDTO>,
 }
+
+/// 封面后台拉取完成事件（`album-cover-fetched` / `artist-cover-fetched`）的 payload。
+/// 第七轮：封面拉取脱离 IPC channel 后，前端靠此事件更新对应条目的封面 id。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CoverFetchedEvent {
+    /// 专辑 id 或艺人 id
+    pub target_id: i64,
+    /// 新写入的封面/头像 artwork id
+    pub artwork_id: i64,
+}

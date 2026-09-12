@@ -14,10 +14,14 @@ import MobileLayout from './components/mobile/MobileLayout.vue';
 import MobileNowPlaying from './components/mobile/MobileNowPlaying.vue';
 import { useUiStore } from './stores/ui';
 import { usePlatform } from './composables/usePlatform';
+import { useAutoScrollbar } from './composables/useAutoScrollbar';
 
 const playerStore = usePlayerStore();
 const uiStore = useUiStore();
 const { isMobile } = usePlatform();
+
+// 滚动条 auto-hide：单一全局 scroll 监听，滚动中的容器临时加 .scrolling（第四轮）
+useAutoScrollbar();
 
 // 键盘快捷键监听
 const handleGlobalKeyDown = (e: KeyboardEvent) => {

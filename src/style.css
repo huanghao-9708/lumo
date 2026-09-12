@@ -177,6 +177,50 @@ body {
   background: var(--scrollbar-thumb-hover);
 }
 
+/* ===== Auto-Hide Scrollbar（第四轮） =====
+   行为：鼠标未进入滚动区域 thumb 完全透明；hover 滚动容器 200ms 淡入暖灰；
+   滚动中立即可见（.scrolling 类，由 useAutoScrollbar 维护，停滚 600ms 后移除）；
+   hover thumb 自身加深。
+   注意：thumb 宽度保留 8px，绝不写 width: 0——避免 hover 显现时挤压内容布局。
+   .scrollbar-always 预留给需要常驻位置感的容器（加此类即始终显示）。 */
+.overflow-y-auto::-webkit-scrollbar-thumb,
+.overflow-x-auto::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  transition: background-color 0.2s ease-out;
+}
+.overflow-y-auto:hover::-webkit-scrollbar-thumb,
+.overflow-x-auto:hover::-webkit-scrollbar-thumb,
+.overflow-y-auto.scrolling::-webkit-scrollbar-thumb,
+.overflow-x-auto.scrolling::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+}
+.overflow-y-auto::-webkit-scrollbar-thumb:hover,
+.overflow-x-auto::-webkit-scrollbar-thumb:hover,
+.overflow-y-auto.scrolling::-webkit-scrollbar-thumb:hover,
+.overflow-x-auto.scrolling::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-thumb-hover);
+}
+
+/* Firefox：scrollbar-color 双值（thumb, track）；hover/滚动中显现 */
+.overflow-y-auto,
+.overflow-x-auto {
+  scrollbar-color: transparent transparent;
+}
+.overflow-y-auto:hover,
+.overflow-x-auto:hover,
+.overflow-y-auto.scrolling,
+.overflow-x-auto.scrolling {
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+/* 常驻滚动条（预留） */
+.scrollbar-always::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb) !important;
+}
+.scrollbar-always {
+  scrollbar-color: var(--scrollbar-thumb) transparent !important;
+}
+
 /* ===== LDL 动画体系：只用 150 / 200 / 250ms ease-out，禁弹簧/缩放 ===== */
 .transition-smooth {
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);

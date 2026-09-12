@@ -43,6 +43,8 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 quick-xml = { version = "0.40.1", features = ["serialize"] }
 chrono = "0.4.45"
 url = "2.5.8"
+# 封面后台拉取（第七轮）：tokio::spawn 需要显式依赖；reqwest 0.13 自带 tokio 但不对外暴露
+tokio = { version = "1", features = ["rt", "macros"] }
 thiserror = "2.0.18"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp"] }
 base64 = "0.22"
