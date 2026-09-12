@@ -2,7 +2,7 @@
 import { computed, onMounted } from 'vue';
 import {
   Clock, Play, Disc, Heart, Flame, User, History, CalendarPlus,
-  ChevronRight, Loader2, Music,
+  ChevronRight, Loader2, Music, Sparkles,
 } from 'lucide-vue-next';
 import { usePlayerStore, type RankedTrack } from '../../stores/player';
 import { formatRelativeTime } from '../../utils/datetime';
@@ -139,6 +139,19 @@ const favoriteList = computed(() => insights.value?.favoriteTracks ?? []);
       </div>
 
       <template v-else>
+        <!-- ===== AI 电台入口（PRD-AI推荐歌单） ===== -->
+        <button
+          class="w-full mb-6 md:mb-8 bg-gradient-to-r from-brand-orange/12 to-transparent border border-brand-orange/30 rounded-[10px] px-4 py-3.5 flex items-center gap-3 hover:border-brand-orange/60 transition-colors-smooth text-left"
+          @click="playerStore.navigateToTab('AI 电台')"
+        >
+          <Sparkles class="w-[18px] h-[18px] text-brand-orange flex-shrink-0" />
+          <div class="flex-1 min-w-0">
+            <p class="text-[13px] font-semibold text-text-primary">AI 电台</p>
+            <p class="text-[11px] text-text-muted truncate">基于你的曲库与收听口味，生成一份应景歌单</p>
+          </div>
+          <ChevronRight class="w-4 h-4 text-text-muted flex-shrink-0" />
+        </button>
+
         <!-- ===== 统计卡：两排 8 张（移动端 2 列） ===== -->
         <div class="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 mb-6 md:mb-8">
           <div

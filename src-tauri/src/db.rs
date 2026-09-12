@@ -643,6 +643,27 @@ fn apply_migrations(conn: &Connection, app_dir: &std::path::Path) -> Result<()> 
         tracing::info!("数据库迁移：已升级至 V8（sync_config 同步配置表）");
     }
 
+    // ===== V9: AI 推荐设置表（PRD-AI推荐歌单） =====
+    // 单行表（id 固定为 1）。API key 不落库：credential_ref 存 "kr:<uuid>"（桌面钥匙串
+    // 引用）或 "v2:seal:..."（Android 机器绑定加密），与来源凭据（P1-08）同机制。
+    if current < 9 {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS ai_settings (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                enabled INTEGER NOT NULL DEFAULT 0,
+                base_url TEXT NOT NULL DEFAULT '',
+                model TEXT NOT NULL DEFAULT '',
+                temperature REAL NOT NULL DEFAULT 0.8,
+                credential_ref TEXT,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            INSERT OR IGNORE INTO ai_settings (id) VALUES (1);",
+        )?;
+        mark_migration_applied(conn, 9)?;
+        current = 9;
+        tracing::info!("数据库迁移：已升级至 V9（ai_settings AI 推荐设置表）");
+    }
+
     let _ = current;
     Ok(())
 }

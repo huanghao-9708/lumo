@@ -9,3 +9,4 @@ pub mod file_priority;
 pub mod platform;
 pub mod queue;
 pub mod secret;
+pub mod ai;

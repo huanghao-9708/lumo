@@ -698,5 +698,12 @@ impl TrackRepo {
         tx.commit()?;
         Ok(())
     }
+
+    /// 按 ID 集合取完整 13 列 TrackDTO（AI 推荐结果回表用）。
+    /// 不保证返回顺序与 ids 一致，调用方自行按序重排。
+    pub fn get_tracks_by_ids(conn: &Connection, ids: &[i64]) -> rusqlite::Result<Vec<TrackDTO>> {
+        let ranked = Self::ranked_details(conn, ids, "t.id ASC")?;
+        Ok(ranked.into_iter().map(|r| r.track).collect())
+    }
 }
 

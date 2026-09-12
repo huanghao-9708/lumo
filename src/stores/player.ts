@@ -2240,6 +2240,7 @@ const albums = shallowRef<Album[]>([]);
     refreshCurrentPlaylistTracks,
     activeLyricIndex,
     currentTrackFileInfo,
+    mapTrackDTO,
     isErrorTracks,
     isErrorAlbums,
     isErrorArtists,

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
 import type { Component } from 'vue';
-import { Palette, Database, RefreshCw, HardDrive, Info, ShieldCheck, Server, FolderOpen, Upload, Download, AlertTriangle } from 'lucide-vue-next';
+import { Palette, Database, RefreshCw, HardDrive, Info, ShieldCheck, Server, FolderOpen, Upload, Download, AlertTriangle, Sparkles, Loader2 } from 'lucide-vue-next';
 import { usePlayerStore } from '../../stores/player';
 import { useUiStore } from '../../stores/ui';
 import { useSyncStore } from '../../stores/sync';
@@ -11,17 +11,20 @@ import ToggleSwitch from '../shared/ToggleSwitch.vue';
 import SourceManagerModal from './settings/SourceManagerModal.vue';
 import WebdavFolderPicker from '../shared/WebdavFolderPicker.vue';
 import { APP_NAME, APP_VERSION_LABEL, APP_DESCRIPTION } from '../../config/appInfo';
+import { useAiStore } from '../../stores/ai';
+import { useUiStore as useUiStore2 } from '../../stores/ui';
 
 const playerStore = usePlayerStore();
 const uiStore = useUiStore();
 const syncStore = useSyncStore();
 
 // ===== 左栏分类导航 =====
-type SectionId = 'appearance' | 'privacy' | 'sources' | 'sync' | 'storage' | 'about';
+type SectionId = 'appearance' | 'privacy' | 'ai' | 'sources' | 'sync' | 'storage' | 'about';
 const activeSection = ref<SectionId>('appearance');
 const navItems: { id: SectionId; label: string; icon: Component }[] = [
   { id: 'appearance', label: '外观', icon: Palette },
   { id: 'privacy', label: '隐私', icon: ShieldCheck },
+  { id: 'ai', label: 'AI 推荐', icon: Sparkles },
   { id: 'sources', label: '数据源', icon: Database },
   { id: 'sync', label: '数据同步', icon: RefreshCw },
   { id: 'storage', label: '存储', icon: HardDrive },
@@ -39,6 +42,70 @@ const isClearingCache = ref(false);
 const showFolderPicker = ref(false);
 const showRemotePrompt = ref(false);
 
+// ===== AI 推荐（PRD-AI推荐歌单） =====
+const aiStore = useAiStore();
+const aiEnabled = ref(false);
+const aiBaseUrl = ref('');
+const aiModel = ref('');
+const aiApiKey = ref(''); // 输入为空 = 保持已存 Key 不变
+const aiTesting = ref(false);
+const aiTestResult = ref<{ ok: boolean; message: string } | null>(null);
+const aiSaveState = ref<'idle' | 'saving' | 'saved'>('idle');
+let aiSaveTimer: ReturnType<typeof setTimeout> | null = null;
+
+async function loadAiSettings() {
+  await aiStore.fetchSettings();
+  const s = aiStore.settings;
+  if (s) {
+    aiEnabled.value = s.enabled;
+    aiBaseUrl.value = s.base_url;
+    aiModel.value = s.model;
+  }
+}
+
+async function saveAiSettings() {
+  const ok = await aiStore.saveSettings({
+    enabled: aiEnabled.value,
+    baseUrl: aiBaseUrl.value,
+    model: aiModel.value,
+    apiKey: aiApiKey.value === '' ? null : aiApiKey.value,
+  });
+  if (ok) {
+    aiApiKey.value = '';
+    aiSaveState.value = 'saved';
+    if (aiSaveTimer) clearTimeout(aiSaveTimer);
+    aiSaveTimer = setTimeout(() => { aiSaveState.value = 'idle'; }, 2000);
+  } else {
+    useUiStore2().showToast('AI 设置保存失败，请重试');
+  }
+}
+
+function clearAiKey() {
+  aiApiKey.value = '';
+  aiStore.saveSettings({ apiKey: '' }).then(() => useUiStore2().showToast('已清除 API Key'));
+}
+
+async function testAiConnection() {
+  aiTesting.value = true;
+  aiTestResult.value = null;
+  try {
+    // 先落盘当前表单再测试，保证测的是用户看到的内容
+    await aiStore.saveSettings({
+      enabled: aiEnabled.value,
+      baseUrl: aiBaseUrl.value,
+      model: aiModel.value,
+      apiKey: aiApiKey.value === '' ? null : aiApiKey.value,
+    });
+    aiApiKey.value = '';
+    const r = await aiStore.testConnection();
+    aiTestResult.value = { ok: r.ok, message: r.message };
+  } catch (e) {
+    aiTestResult.value = { ok: false, message: typeof e === 'string' ? e : '连接失败' };
+  } finally {
+    aiTesting.value = false;
+  }
+}
+
 onMounted(async () => {
   try {
     const [artworkSize, audioSize] = await Promise.all([
@@ -49,6 +116,8 @@ onMounted(async () => {
     cacheSize.value = size > 0 ? `${(size / 1024 / 1024).toFixed(1)} MB` : '0 MB';
   } catch { cacheSize.value = '—'; }
 
+  // 加载 AI 推荐设置与同步配置
+  await loadAiSettings();
   // 加载同步配置
   await syncStore.fetchConfig();
 
@@ -154,6 +223,84 @@ async function clearCache() {
                 :model-value="uiStore.fetchCoversOnline"
                 @update:model-value="uiStore.setFetchCoversOnline($event)"
               />
+            </div>
+          </div>
+        </section>
+
+        <!-- ---- AI 推荐 ---- -->
+        <section v-else-if="activeSection === 'ai'">
+          <h2 class="text-[24px] font-bold text-text-primary tracking-tight leading-none">AI 推荐</h2>
+          <p class="text-[12px] text-text-muted mt-1.5 mb-6">从本地曲库生成推荐歌单；请求只包含歌曲标题与艺人名</p>
+
+          <div class="space-y-2">
+            <div class="flex items-center justify-between px-4 py-3.5 bg-bg-canvas border border-border-color rounded-[8px]">
+              <div class="min-w-0 pr-3">
+                <p class="text-[13px] text-text-primary">启用 AI 电台</p>
+                <p class="text-[11px] text-text-muted mt-0.5">关闭时完全离线，不发出任何 AI 请求；入口将显示引导页</p>
+              </div>
+              <ToggleSwitch v-model="aiEnabled" />
+            </div>
+
+            <div class="px-4 py-3.5 bg-bg-canvas border border-border-color rounded-[8px] space-y-3">
+              <div>
+                <p class="text-[13px] text-text-primary mb-1">Base URL <span class="text-[11px] text-text-muted font-mono ml-1">OpenAI 兼容</span></p>
+                <input
+                  v-model="aiBaseUrl"
+                  type="text"
+                  placeholder="https://api.openai.com/v1 或 http://localhost:11434/v1"
+                  class="w-full h-[32px] px-2.5 text-[12px] bg-bg-content border border-border-color rounded-[6px] text-text-primary placeholder:text-text-muted focus:border-brand-orange/50"
+                />
+              </div>
+              <div>
+                <p class="text-[13px] text-text-primary mb-1">模型名</p>
+                <input
+                  v-model="aiModel"
+                  type="text"
+                  placeholder="gpt-4o-mini / deepseek-chat / qwen2.5:7b"
+                  class="w-full h-[32px] px-2.5 text-[12px] bg-bg-content border border-border-color rounded-[6px] text-text-primary placeholder:text-text-muted focus:border-brand-orange/50"
+                />
+              </div>
+              <div>
+                <div class="flex items-center justify-between mb-1">
+                  <p class="text-[13px] text-text-primary">API Key <span v-if="aiStore.settings?.has_key" class="text-[11px] text-status-success ml-1">已保存（留空保持不变）</span></p>
+                  <button
+                    v-if="aiStore.settings?.has_key"
+                    class="text-[11px] text-text-muted hover:text-status-error transition-colors-smooth"
+                    @click="clearAiKey"
+                  >清除</button>
+                </div>
+                <input
+                  v-model="aiApiKey"
+                  type="password"
+                  autocomplete="off"
+                  placeholder="sk-…（本地 Ollama 可留空）"
+                  class="w-full h-[32px] px-2.5 text-[12px] bg-bg-content border border-border-color rounded-[6px] text-text-primary placeholder:text-text-muted focus:border-brand-orange/50"
+                />
+                <p class="text-[11px] text-text-muted mt-1.5">Key 存入系统钥匙串，不写入数据库。使用本地 Ollama（localhost）时数据不出本机。</p>
+              </div>
+
+              <div class="flex items-center gap-2 pt-1">
+                <button
+                  class="h-[30px] px-3.5 rounded-[6px] text-[12px] bg-text-primary text-bg-canvas hover:opacity-90 transition-opacity flex items-center gap-1.5"
+                  :disabled="aiSaveState === 'saving'"
+                  @click="saveAiSettings"
+                >
+                  { aiSaveState === 'saved' ? '已保存 ✓' : aiSaveState === 'saving' ? '保存中…' : '保存设置' }
+                </button>
+                <button
+                  class="h-[30px] px-3.5 rounded-[6px] text-[12px] bg-list-hover text-text-primary hover:bg-list-selected transition-colors-smooth flex items-center gap-1.5"
+                  :disabled="aiTesting"
+                  @click="testAiConnection"
+                >
+                  <Loader2 v-if="aiTesting" class="w-3 h-3 animate-spin" />
+                  测试连接
+                </button>
+                <span
+                  v-if="aiTestResult"
+                  class="text-[12px] truncate"
+                  :class="aiTestResult.ok ? 'text-status-success' : 'text-status-error'"
+                >{ aiTestResult.message }</span>
+              </div>
             </div>
           </div>
         </section>

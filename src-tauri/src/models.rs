@@ -143,7 +143,7 @@ pub struct MediaFile {
 }
 
 /// 传输给前端的歌曲数据传输对象 (Data Transfer Object)
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct TrackDTO {
     /// 歌曲 ID
     pub id: i64,
@@ -477,4 +477,45 @@ pub struct StartupBundle {
     pub artist_total: i64,
     /// 持久化的播放队列（恢复会话用，同 library_get_play_queue）
     pub play_queue: Vec<TrackDTO>,
+}
+
+/// AI 设置（ai_settings 表）。API key 永不序列化出后端，前端只见 has_key。
+#[derive(Debug, serde::Serialize)]
+pub struct AiSettingsDTO {
+    pub enabled: bool,
+    pub base_url: String,
+    pub model: String,
+    pub temperature: f64,
+    pub has_key: bool,
+}
+
+/// AI 推荐歌单结果。source="fallback" 时 degraded_reason 说明降级原因。
+#[derive(Debug, serde::Serialize)]
+pub struct AiPlaylistResult {
+    /// 歌单名（AI 起名；兜底时为规则名）
+    pub name: String,
+    /// 一句话简介
+    pub description: String,
+    /// "ai" | "fallback"
+    pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub degraded_reason: Option<String>,
+    pub tracks: Vec<AiRankedTrackDTO>,
+}
+
+/// AI 推荐歌单条目：TrackDTO + 一句话推荐理由
+#[derive(Debug, serde::Serialize)]
+pub struct AiRankedTrackDTO {
+    #[serde(flatten)]
+    pub track: TrackDTO,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// AI 连接测试结果
+#[derive(Debug, serde::Serialize)]
+pub struct AiTestConnectionResult {
+    pub ok: bool,
+    pub message: String,
+    pub latency_ms: u64,
 }

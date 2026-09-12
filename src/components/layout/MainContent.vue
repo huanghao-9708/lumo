@@ -24,6 +24,7 @@ import ArtistDetail from '../content/ArtistDetail.vue';
 import FolderView from '../content/FolderView.vue';
 import SmartPlaylistView from '../content/SmartPlaylistView.vue';
 import HomeView from '../content/HomeView.vue';
+import AiPlaylistView from '../content/AiPlaylistView.vue';
 
 const playerStore = usePlayerStore();
 const uiStore = useUiStore();
@@ -57,6 +58,7 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
 const pageTitle = computed(() => {
   switch (playerStore.activeLibraryTab) {
     case '首页': return '首页';
+    case 'AI 电台': return 'AI 电台';
     case '最近播放': return '最近播放';
     case '喜欢的音乐': return '我喜欢的音乐';
     case '收藏的专辑': return '收藏的专辑';
@@ -201,6 +203,7 @@ function onAlbumSelect(album: Album) {
 function loadForCurrentTab() {
   const tab = playerStore.activeLibraryTab;
   if (tab === '首页') return; // 首页自管数据
+  if (tab === 'AI 电台') return; // AI 电台自管数据
   if (tab === '最近播放') playerStore.fetchRecentlyPlayed();
   else if (tab === '喜欢的音乐') playerStore.fetchFavoriteTracks();
   else if (tab === '收藏的专辑') playerStore.fetchFavoriteAlbums();
@@ -261,6 +264,9 @@ onMounted(() => {
 
     <!-- ============ 首页（自管数据，无共享 Header/Toolbar） ============ -->
     <HomeView v-else-if="playerStore.activeLibraryTab === '首页'" />
+
+    <!-- ============ AI 电台（自管数据） ============ -->
+    <AiPlaylistView v-else-if="playerStore.activeLibraryTab === 'AI 电台'" />
 
     <!-- ============ 其他视图（共享 Header + Toolbar） ============ -->
     <template v-else>
