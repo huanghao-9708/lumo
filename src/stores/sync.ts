@@ -15,13 +15,13 @@ import {
 } from '../api/sync';
 
 /**
- * 跨设备数据同步状态。
+ * WebDAV 数据库备份恢复状态（整库快照上传 / 覆盖恢复，非合并同步）。
  *
- * 管理 WebDAV 同步配置的读写、文件夹浏览、上传/恢复操作。
+ * 管理备份配置的读写、文件夹浏览、快照上传与覆盖恢复。
  * 配置数据存于本地 SQLite 的 sync_config 表（密码用跨设备固定密钥加密）。
  */
 export const useSyncStore = defineStore('sync', () => {
-  // ===== 同步配置 =====
+  // ===== 备份恢复配置 =====
   const config = ref<SyncConfig>({
     enabled: false,
     webdav_url: null,
@@ -47,23 +47,23 @@ export const useSyncStore = defineStore('sync', () => {
   const lastError = ref('');
   const lastResult = ref('');
 
-  /** 从后端加载同步配置 */
+  /** 从后端加载备份配置 */
   async function fetchConfig() {
     try {
       const c = await syncGetConfig();
       config.value = c;
       isLoaded.value = true;
     } catch (e: any) {
-      lastError.value = `加载同步配置失败: ${e}`;
+      lastError.value = `加载备份配置失败: ${e}`;
     }
   }
 
-  /** 保存同步配置到后端 */
+  /** 保存备份配置到后端 */
   async function saveConfig() {
     try {
       await syncSaveConfig(config.value);
       lastError.value = '';
-      lastResult.value = '同步配置已保存';
+      lastResult.value = '备份配置已保存';
     } catch (e: any) {
       lastError.value = `保存失败: ${e}`;
     }
@@ -109,7 +109,7 @@ export const useSyncStore = defineStore('sync', () => {
     }
   }
 
-  /** 立即同步上传 */
+  /** 立即上传整库快照 */
   async function uploadNow(): Promise<SyncResult | null> {
     isSyncing.value = true;
     lastError.value = '';
@@ -118,7 +118,7 @@ export const useSyncStore = defineStore('sync', () => {
       const result = await syncUploadNow();
       config.value.last_sync_at = result.timestamp;
       config.value.last_sync_direction = 'upload';
-      lastResult.value = `同步完成（${(result.bytes_uploaded / 1024 / 1024).toFixed(1)} MB）`;
+      lastResult.value = `备份完成（${(result.bytes_uploaded / 1024 / 1024).toFixed(1)} MB）`;
       return result;
     } catch (e: any) {
       lastError.value = `同步失败: ${e}`;

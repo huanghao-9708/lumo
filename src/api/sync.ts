@@ -28,12 +28,12 @@ export interface WebdavFile {
   last_modified: string;
 }
 
-/** 获取同步配置 */
+/** 获取备份恢复配置 */
 export function syncGetConfig(): Promise<SyncConfig> {
   return invoke('sync_get_config');
 }
 
-/** 保存同步配置 */
+/** 保存备份恢复配置 */
 export function syncSaveConfig(config: SyncConfig): Promise<void> {
   return invoke('sync_save_config', { config });
 }
@@ -48,7 +48,7 @@ export function syncCreateFolder(url: string, username: string | null, password:
   return invoke('sync_create_folder', { url, username, password, path });
 }
 
-/** 立即同步上传 */
+/** 立即上传整库快照 */
 export function syncUploadNow(): Promise<SyncResult> {
   return invoke('sync_upload_now');
 }
@@ -58,7 +58,7 @@ export function syncRestoreNow(): Promise<string> {
   return invoke('sync_restore_now');
 }
 
-/** 检查云端是否有同步数据 */
+/** 检查云端是否存在快照 */
 export function syncCheckRemote(url: string, username: string | null, password: string | null, path: string): Promise<RemoteCheckResult> {
   return invoke('sync_check_remote', { url, username, password, path });
 }

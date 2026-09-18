@@ -103,7 +103,7 @@ function onOverlayClick(e: MouseEvent) {
     <div class="bg-bg-canvas rounded-[12px] w-[480px] max-h-[70vh] shadow-lg flex flex-col overflow-hidden">
       <!-- Header -->
       <div class="px-6 pt-6 pb-3 flex items-center justify-between">
-        <h2 class="text-[16px] font-bold text-text-primary">选择同步文件夹</h2>
+        <h2 class="text-[16px] font-bold text-text-primary">选择备份文件夹</h2>
         <button class="text-text-muted hover:text-text-primary transition-colors-smooth" @click="cancel">
           <X class="w-5 h-5" />
         </button>

@@ -26,7 +26,7 @@ const navItems: { id: SectionId; label: string; icon: Component }[] = [
   { id: 'privacy', label: '隐私', icon: ShieldCheck },
   { id: 'ai', label: 'AI 推荐', icon: Sparkles },
   { id: 'sources', label: '数据源', icon: Database },
-  { id: 'sync', label: '数据同步', icon: RefreshCw },
+  { id: 'sync', label: '备份恢复', icon: RefreshCw },
   { id: 'storage', label: '存储', icon: HardDrive },
   { id: 'about', label: '关于', icon: Info },
 ];
@@ -116,12 +116,12 @@ onMounted(async () => {
     cacheSize.value = size > 0 ? `${(size / 1024 / 1024).toFixed(1)} MB` : '0 MB';
   } catch { cacheSize.value = '—'; }
 
-  // 加载 AI 推荐设置与同步配置
+  // 加载 AI 推荐设置与备份恢复配置
   await loadAiSettings();
-  // 加载同步配置
+  // 加载备份恢复配置
   await syncStore.fetchConfig();
 
-  // 首次加载：如果同步已启用且有完整配置，自动检查云端
+  // 首次加载：如果备份已启用且有完整配置，自动检查云端
   if (syncStore.config.enabled && syncStore.config.webdav_url && syncStore.config.remote_path) {
     const result = await syncStore.checkRemote();
     if (result?.has_data) {
@@ -207,7 +207,7 @@ async function clearCache() {
             <div class="flex items-center justify-between px-4 py-3.5 bg-bg-canvas border border-border-color rounded-[8px]">
               <div class="min-w-0 pr-3">
                 <p class="text-[13px] text-text-primary">在线歌词匹配</p>
-                <p class="text-[11px] text-text-muted mt-0.5">未命中本地歌词时，向 LRCLIB 发送歌名、艺人、专辑与时长以匹配歌词</p>
+                <p class="text-[11px] text-text-muted mt-0.5">本地缺少带时间轴的歌词时，向 LRCLIB 发送歌名、艺人、专辑与时长以匹配歌词</p>
               </div>
               <ToggleSwitch
                 :model-value="uiStore.fetchLyricsOnline"
@@ -217,7 +217,7 @@ async function clearCache() {
             <div class="flex items-center justify-between px-4 py-3.5 bg-bg-canvas border border-border-color rounded-[8px]">
               <div class="min-w-0 pr-3">
                 <p class="text-[13px] text-text-primary">在线封面匹配</p>
-                <p class="text-[11px] text-text-muted mt-0.5">专辑或艺人缺少封面时，向 iTunes 发送对应名称以搜索封面</p>
+                <p class="text-[11px] text-text-muted mt-0.5">专辑或艺人缺少封面时，向网易云音乐与 iTunes 搜索对应名称，并下载其返回的封面图片</p>
               </div>
               <ToggleSwitch
                 :model-value="uiStore.fetchCoversOnline"
@@ -230,7 +230,7 @@ async function clearCache() {
         <!-- ---- AI 推荐 ---- -->
         <section v-else-if="activeSection === 'ai'">
           <h2 class="text-[24px] font-bold text-text-primary tracking-tight leading-none">AI 推荐</h2>
-          <p class="text-[12px] text-text-muted mt-1.5 mb-6">从本地曲库生成推荐歌单；请求只包含歌曲标题与艺人名</p>
+          <p class="text-[12px] text-text-muted mt-1.5 mb-6">从本地曲库生成推荐歌单；请求发往你自行配置的 AI 服务商，包含候选歌曲的标题、艺人与播放次数，不含文件路径与凭据</p>
 
           <div class="space-y-2">
             <div class="flex items-center justify-between px-4 py-3.5 bg-bg-canvas border border-border-color rounded-[8px]">
@@ -337,16 +337,16 @@ async function clearCache() {
           </div>
         </section>
 
-        <!-- ---- 数据同步 ---- -->
+        <!-- ---- 备份恢复 ---- -->
         <section v-else-if="activeSection === 'sync'">
-          <h2 class="text-[24px] font-bold text-text-primary tracking-tight leading-none">数据同步</h2>
-          <p class="text-[12px] text-text-muted mt-1.5 mb-6">通过 WebDAV 跨设备同步歌单、收藏和播放历史</p>
+          <h2 class="text-[24px] font-bold text-text-primary tracking-tight leading-none">备份恢复</h2>
+          <p class="text-[12px] text-text-muted mt-1.5 mb-6">把整个 Lumo 数据库快照上传到 WebDAV，或在其他设备拉取覆盖本机。这是<strong>整库替换</strong>，不合并两台设备的差异</p>
 
           <!-- 开关 -->
           <div class="flex items-center justify-between px-4 py-3.5 bg-bg-canvas border border-border-color rounded-[8px]">
             <div>
-              <p class="text-[13px] text-text-primary font-medium">启用 WebDAV 数据同步</p>
-              <p class="text-[11px] text-text-muted mt-0.5">连接后可上传 / 恢复歌单与播放数据</p>
+              <p class="text-[13px] text-text-primary font-medium">启用 WebDAV 备份</p>
+              <p class="text-[11px] text-text-muted mt-0.5">快照包含曲库、本地路径、播放历史与歌单；不含任何密码或 API Key</p>
             </div>
             <ToggleSwitch
               :model-value="syncStore.config.enabled"
@@ -377,7 +377,7 @@ async function clearCache() {
                 @blur="syncStore.saveConfig()"
               />
 
-              <!-- 同步文件夹选择 -->
+              <!-- 备份文件夹选择 -->
               <div class="flex items-center gap-2">
                 <input
                   :value="syncStore.config.remote_path || '/'"
@@ -394,10 +394,10 @@ async function clearCache() {
                 </button>
               </div>
 
-              <!-- 上次同步时间 -->
+              <!-- 上次备份时间 -->
               <p v-if="syncStore.config.last_sync_at" class="text-[10px] text-text-muted/60 mt-1">
-                上次同步：{{ syncStore.config.last_sync_at }}
-                ({{ syncStore.config.last_sync_direction === 'upload' ? '上传' : '下载' }})
+                上次操作：{{ syncStore.config.last_sync_at }}
+                ({{ syncStore.config.last_sync_direction === 'upload' ? '上传快照' : '拉取覆盖' }})
               </p>
 
               <!-- 操作按钮 -->
@@ -409,7 +409,7 @@ async function clearCache() {
                 >
                   <Upload v-if="!syncStore.isSyncing" class="w-3.5 h-3.5" />
                   <RefreshCw v-else class="w-3.5 h-3.5 animate-spin" />
-                  {{ syncStore.isSyncing ? '同步中…' : '立即同步' }}
+                  {{ syncStore.isSyncing ? '备份中…' : '立即备份' }}
                 </button>
                 <button
                   class="h-[34px] px-4 rounded-full border border-border-color text-text-secondary text-[12px] font-medium flex items-center gap-1.5 hover:bg-list-hover transition-colors-smooth disabled:opacity-40"
@@ -429,7 +429,7 @@ async function clearCache() {
               >
                 <AlertTriangle class="w-4 h-4 text-brand-orange shrink-0 mt-0.5" />
                 <div>
-                  检测到云端已有同步数据，是否拉取覆盖本地？
+                  云端已有一份 Lumo 快照。拉取会<strong>覆盖本机全部曲库、歌单与播放历史</strong>，且不会合并两台设备的差异。
                   <button
                     class="ml-2 font-medium text-brand-orange hover:underline"
                     @click="syncStore.restoreNow(); showRemotePrompt = false"
@@ -490,7 +490,7 @@ async function clearCache() {
   <!-- 数据源管理弹窗 -->
   <SourceManagerModal v-if="showSourceManager" @close="showSourceManager = false" />
 
-  <!-- WebDAV 文件夹选择器（数据同步用） -->
+  <!-- WebDAV 文件夹选择器（备份恢复用） -->
   <WebdavFolderPicker
     v-if="showFolderPicker"
     @select="(path: string) => { syncStore.config.remote_path = path; syncStore.saveConfig(); showFolderPicker = false; }"

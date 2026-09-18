@@ -99,7 +99,7 @@ async function onUploadBackup() {
     syncFeedback.value = { type: 'ok', text: `备份成功（${fmtBytes(res.bytes_uploaded)}）` };
     await refreshSyncConfig();
   } catch (e: any) {
-    syncFeedback.value = { type: 'err', text: e?.message || '备份失败，请先在电脑端或设置中配置 WebDAV 同步' };
+    syncFeedback.value = { type: 'err', text: e?.message || '备份失败，请先配置 WebDAV 备份恢复' };
   } finally {
     syncing.value = false;
   }
