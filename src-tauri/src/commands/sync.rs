@@ -4,7 +4,7 @@ use crate::ipc_trace;
 use crate::models::{RemoteCheckResult, SyncConfigDTO, SyncResult};
 use crate::services::sync::SyncService;
 use crate::services::webdav::WebdavFile;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::{Manager, State};
 
 // ========================= 配置读写 =========================
@@ -87,6 +87,31 @@ pub fn sync_create_folder(
 
 // ========================= 同步操作 =========================
 
+/// 从云端恢复中途失败后，用恢复前副本回滚 live 库，并把结果翻译成分级的错误文案。
+/// 回滚也失败时必须给出副本路径：那是用户唯一的历史数据，静默丢弃等于让他丢库。
+fn rollback(
+    conn: &mut rusqlite::Connection,
+    backup_path: &Path,
+    cause: rusqlite::Error,
+) -> AppError {
+    match conn.restore(
+        rusqlite::DatabaseName::Main,
+        backup_path,
+        Some(|_| {}),
+    ) {
+        Ok(_) => AppError::Internal(format!(
+            "恢复数据库失败，已回滚到恢复前的本地副本: {}",
+            cause
+        )),
+        Err(e) => AppError::Internal(format!(
+            "恢复数据库失败（{}），自动回滚也失败（{}）。请先停止使用备份恢复功能：恢复前的副本仍保留在 {}，可手动还原",
+            cause,
+            e,
+            backup_path.display()
+        )),
+    }
+}
+
 /// 立即同步上传：VACUUM INTO → PUT 到远程路径。
 #[tauri::command]
 pub fn sync_upload_now(
@@ -133,30 +158,25 @@ pub fn sync_restore_now(
     }
 
     let temp_path = SyncService::sync_download_to_temp(&app_dir, &config)?;
-    let meta = std::fs::metadata(&temp_path)
-        .map_err(|e| AppError::Internal(format!("无法读取下载的文件: {}", e)))?;
-    if meta.len() == 0 {
-        let _ = std::fs::remove_file(&temp_path);
-        return Err(AppError::Internal("下载的文件为空，恢复终止".to_string()));
-    }
-    if let Err(e) = SyncService::validate_snapshot(&temp_path, &app_dir) {
+    // 空文件 / HTML 错误页 / 非 Lumo 库 / 版本越界 / integrity_check 不通过
+    // 全部由 validate_snapshot 拒绝，此时本地库尚未被触碰。
+    if let Err(e) = SyncService::validate_snapshot(&temp_path) {
         let _ = std::fs::remove_file(&temp_path);
         return Err(AppError::Internal(e));
     }
 
-    // Online Backup API keeps the managed DbState valid and gives us a rollback copy.
+    // 在线 Backup API：既保持受管 DbState 有效，又给回滚留一份副本。
     let backup_path = app_dir.join("lumo.sqlite.restore_bak");
     let _ = std::fs::remove_file(&backup_path);
     let restore_result = (|| -> Result<(), AppError> {
         let mut conn = db_state.db.get()?;
         conn.backup(rusqlite::DatabaseName::Main, &backup_path, None)
             .map_err(|e| AppError::Internal(format!("备份当前数据库失败: {}", e)))?;
+
+        // 回滚失败是这条链路上最危险的分支：live 库可能停在半恢复状态，
+        // 而唯一能救回的副本就在 backup_path。绝不能 let _ = 把失败吞掉。
         if let Err(e) = conn.restore(rusqlite::DatabaseName::Main, &temp_path, Some(|_| {})) {
-            let _ = conn.restore(rusqlite::DatabaseName::Main, &backup_path, Some(|_| {}));
-            return Err(AppError::Internal(format!(
-                "恢复数据库失败，已尝试回滚: {}",
-                e
-            )));
+            return Err(rollback(&mut conn, &backup_path, e));
         }
 
         use chrono::Utc;
@@ -165,14 +185,18 @@ pub fn sync_restore_now(
             "UPDATE sync_config SET last_sync_at = ?1, last_sync_direction = 'download' WHERE id = 1",
             rusqlite::params![ts],
         ) {
-            let _ = conn.restore(rusqlite::DatabaseName::Main, &backup_path, Some(|_| {}));
-            return Err(AppError::Internal(format!("更新同步状态失败，已尝试回滚: {}", e)));
+            return Err(rollback(&mut conn, &backup_path, e));
         }
         Ok(())
     })();
 
     let _ = std::fs::remove_file(&temp_path);
-    let _ = std::fs::remove_file(&backup_path);
+    if restore_result.is_err() {
+        // 失败时**保留**副本：它此刻是用户唯一的本地历史数据。
+        tracing::error!("从云端恢复失败，回滚副本保留于 {}", backup_path.display());
+    } else {
+        let _ = std::fs::remove_file(&backup_path);
+    }
     restore_result?;
     Ok("数据库已通过校验并从云端恢复成功".to_string())
 }

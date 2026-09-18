@@ -287,6 +287,11 @@ CREATE TABLE IF NOT EXISTS artwork (
 );
 ";
 
+/// 当前代码支持的 schema 版本上界（= apply_migrations 的最后一个版本块）。
+/// 恢复云端快照时用它做下界校验：版本高于本机的快照说明来自更新版本的 Lumo，
+/// 就地迁移会写出本机读不懂的 schema，必须拒绝而不是强行升级。
+pub const TARGET_SCHEMA_VERSION: i64 = 10;
+
 /// 读取当前已应用到的迁移版本（0 表示全新库）
 fn get_current_version(conn: &Connection) -> Result<i64> {
     // schema_migrations 表已经在 BASE_SCHEMA_SQL 中创建
@@ -310,6 +315,27 @@ fn mark_migration_applied(conn: &Connection, version: i64) -> Result<()> {
     Ok(())
 }
 
+/// 判断表中是否已存在某列（SQLite 的 ALTER TABLE ADD COLUMN 没有 IF NOT EXISTS）
+fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({})", table))?;
+    let found = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .any(|name| name == column);
+    Ok(found)
+}
+
+/// 幂等加列：列已存在则跳过。
+/// 迁移一旦在「ALTER 已执行、版本号未写入」之间崩溃，重跑会因 duplicate column 报错
+/// 并让 init_db 失败——那是应用彻底无法启动的 P0。故所有加列必须走这里。
+fn add_column_if_missing(conn: &Connection, table: &str, column: &str, ddl: &str) -> Result<()> {
+    if column_exists(conn, table, column)? {
+        return Ok(());
+    }
+    conn.execute_batch(&format!("ALTER TABLE {} ADD COLUMN {};", table, ddl))?;
+    Ok(())
+}
+
 /// 版本化迁移：按顺序应用每个版本的补丁，每个版本只执行一次。
 /// 每个迁移函数应当做到幂等（IF NOT EXISTS / 包裹在 try 中），以便重试安全。
 fn apply_migrations(conn: &Connection, app_dir: &std::path::Path) -> Result<()> {
@@ -317,6 +343,10 @@ fn apply_migrations(conn: &Connection, app_dir: &std::path::Path) -> Result<()> 
 
     // ===== V1: 索引与去重唯一约束（首次为已有库补齐索引） =====
     if current < 1 {
+        // 整个版本块在一个事务内完成：语句与 schema_migrations 版本号原子提交，
+        // 中途失败（断电/进程被杀/唯一约束冲突）一律回滚，不留半迁移状态。
+        let __tx = conn.unchecked_transaction()?;
+        let conn: &Connection = &__tx;
         // 关键索引：覆盖常用查询路径，避免曲库变大后全表扫描
         conn.execute_batch(
             "
@@ -347,6 +377,7 @@ fn apply_migrations(conn: &Connection, app_dir: &std::path::Path) -> Result<()> 
             ",
         )?;
         mark_migration_applied(conn, 1)?;
+        __tx.commit()?;
         current = 1;
         tracing::info!("数据库迁移：已升级至 V1（索引补齐）");
     }
@@ -356,16 +387,29 @@ fn apply_migrations(conn: &Connection, app_dir: &std::path::Path) -> Result<()> 
     // 分页接口耗时 30-50ms。把 track_count 冗余到 albums 表后变成 O(1) 直接读字段。
     // 维护点：① index_file 新建 track 时 +1；② source_remove 删孤儿 track 时同步减。
     if current < 2 {
+        // 整个版本块在一个事务内完成：语句与 schema_migrations 版本号原子提交，
+        // 中途失败（断电/进程被杀/唯一约束冲突）一律回滚，不留半迁移状态。
+        let __tx = conn.unchecked_transaction()?;
+        let conn: &Connection = &__tx;
         // albums.track_count
-        conn.execute_batch(
-            "ALTER TABLE albums ADD COLUMN track_count INTEGER NOT NULL DEFAULT 0;",
+        add_column_if_missing(
+            conn,
+            "albums",
+            "track_count",
+            "track_count INTEGER NOT NULL DEFAULT 0",
         )?;
         // artists.track_count / artists.album_count（艺人页 stats 查询同样受益）
-        conn.execute_batch(
-            "ALTER TABLE artists ADD COLUMN track_count INTEGER NOT NULL DEFAULT 0;",
+        add_column_if_missing(
+            conn,
+            "artists",
+            "track_count",
+            "track_count INTEGER NOT NULL DEFAULT 0",
         )?;
-        conn.execute_batch(
-            "ALTER TABLE artists ADD COLUMN album_count INTEGER NOT NULL DEFAULT 0;",
+        add_column_if_missing(
+            conn,
+            "artists",
+            "album_count",
+            "album_count INTEGER NOT NULL DEFAULT 0",
         )?;
 
         // 一次性回填：albums.track_count = 该专辑下的 track 数
@@ -403,6 +447,7 @@ fn apply_migrations(conn: &Connection, app_dir: &std::path::Path) -> Result<()> 
         )?;
 
         mark_migration_applied(conn, 2)?;
+        __tx.commit()?;
         current = 2;
         tracing::info!("数据库迁移：已升级至 V2（冗余统计字段 + 覆盖索引）");
     }
@@ -414,11 +459,19 @@ fn apply_migrations(conn: &Connection, app_dir: &std::path::Path) -> Result<()> 
     // library_get_albums 一次性内联返回 base64，彻底消灭 N+1 封面请求。
     // 已有库需重新扫描才会填充缩略图；未填充时前端 fallback 到 lumo:// 协议。
     if current < 3 {
-        conn.execute_batch("ALTER TABLE artwork ADD COLUMN thumbnail_blob BLOB;")?;
-        conn.execute_batch(
-            "ALTER TABLE artwork ADD COLUMN thumbnail_mime TEXT NOT NULL DEFAULT 'image/jpeg';",
+        // 整个版本块在一个事务内完成：语句与 schema_migrations 版本号原子提交，
+        // 中途失败（断电/进程被杀/唯一约束冲突）一律回滚，不留半迁移状态。
+        let __tx = conn.unchecked_transaction()?;
+        let conn: &Connection = &__tx;
+        add_column_if_missing(conn, "artwork", "thumbnail_blob", "thumbnail_blob BLOB")?;
+        add_column_if_missing(
+            conn,
+            "artwork",
+            "thumbnail_mime",
+            "thumbnail_mime TEXT NOT NULL DEFAULT 'image/jpeg'",
         )?;
         mark_migration_applied(conn, 3)?;
+        __tx.commit()?;
         current = 3;
         tracing::info!("数据库迁移：已升级至 V3（artwork 表加缩略图 BLOB 字段）");
     }
@@ -430,7 +483,12 @@ fn apply_migrations(conn: &Connection, app_dir: &std::path::Path) -> Result<()> 
     // 现在改成：迁移只标记版本号,实际回填在 lib.rs setup 末尾 spawn 后台线程异步执行。
     // 应用立即启动,回填在后台慢慢跑,期间前端用 lumo:// 协议(有 semaphore 限流保护)。
     if current < 4 {
+        // 整个版本块在一个事务内完成：语句与 schema_migrations 版本号原子提交，
+        // 中途失败（断电/进程被杀/唯一约束冲突）一律回滚，不留半迁移状态。
+        let __tx = conn.unchecked_transaction()?;
+        let conn: &Connection = &__tx;
         mark_migration_applied(conn, 4)?;
+        __tx.commit()?;
         current = 4;
         tracing::info!("数据库迁移：已升级至 V4（缩略图回填标记，实际回填在后台异步执行）");
     }
@@ -440,6 +498,10 @@ fn apply_migrations(conn: &Connection, app_dir: &std::path::Path) -> Result<()> 
     // 且 track_artists / albums.album_artist_id 都引用它。V5 将其拆分为
     // 独立的 "A" 和 "B" 艺人记录，新增 album_artists 表用于专辑-艺人多对多。
     if current < 5 {
+        // 整个版本块在一个事务内完成：语句与 schema_migrations 版本号原子提交，
+        // 中途失败（断电/进程被杀/唯一约束冲突）一律回滚，不留半迁移状态。
+        let __tx = conn.unchecked_transaction()?;
+        let conn: &Connection = &__tx;
         // 1. 把已有 albums.album_artist_id 迁移到 album_artists（幂等）
         conn.execute_batch(
             "INSERT OR IGNORE INTO album_artists (album_id, artist_id, role, position)
@@ -496,12 +558,7 @@ fn apply_migrations(conn: &Connection, app_dir: &std::path::Path) -> Result<()> 
                 .replace(" Feat. ", "/")
                 .replace(" Ft. ", "/")
                 .replace(" & ", "/")
-                .replace('&', "/")
-                .replace(';', "/")
-                .replace('；', "/")
-                .replace('、', "/")
-                .replace('，', "/")
-                .replace(',', "/");
+                .replace(['&', ';', '；', '、', '，', ','], "/");
 
             let parts: Vec<&str> = cleaned
                 .split('/')
@@ -611,12 +668,17 @@ fn apply_migrations(conn: &Connection, app_dir: &std::path::Path) -> Result<()> 
         )?;
 
         mark_migration_applied(conn, 5)?;
+        __tx.commit()?;
         current = 5;
         tracing::info!("数据库迁移：已升级至 V5（album_artists 多对多表 + 拆分组合艺人）");
     }
 
     // ===== V6: 将已有的明文 WebDAV 凭据迁移为加密存储 =====
     if current < 6 {
+        // 整个版本块在一个事务内完成：语句与 schema_migrations 版本号原子提交，
+        // 中途失败（断电/进程被杀/唯一约束冲突）一律回滚，不留半迁移状态。
+        let __tx = conn.unchecked_transaction()?;
+        let conn: &Connection = &__tx;
         let webdav_sources: Vec<(i64, String)> = {
             let mut stmt = conn.prepare(
                 "SELECT id, credential_ref FROM sources WHERE kind = 'webdav' AND credential_ref IS NOT NULL"
@@ -643,14 +705,25 @@ fn apply_migrations(conn: &Connection, app_dir: &std::path::Path) -> Result<()> 
         }
 
         mark_migration_applied(conn, 6)?;
+        __tx.commit()?;
         current = 6;
         tracing::info!("数据库迁移：已升级至 V6（WebDAV 凭据加密迁移）");
     }
 
     // ===== V7: 给 artists 表加头像字段 =====
     if current < 7 {
-        conn.execute_batch("ALTER TABLE artists ADD COLUMN avatar_artwork_id INTEGER REFERENCES artwork(id) ON DELETE SET NULL;")?;
+        // 整个版本块在一个事务内完成：语句与 schema_migrations 版本号原子提交，
+        // 中途失败（断电/进程被杀/唯一约束冲突）一律回滚，不留半迁移状态。
+        let __tx = conn.unchecked_transaction()?;
+        let conn: &Connection = &__tx;
+        add_column_if_missing(
+            conn,
+            "artists",
+            "avatar_artwork_id",
+            "avatar_artwork_id INTEGER REFERENCES artwork(id) ON DELETE SET NULL",
+        )?;
         mark_migration_applied(conn, 7)?;
+        __tx.commit()?;
         current = 7;
         tracing::info!("数据库迁移：已升级至 V7（artists 加 avatar_artwork_id 字段）");
     }
@@ -659,6 +732,10 @@ fn apply_migrations(conn: &Connection, app_dir: &std::path::Path) -> Result<()> 
     // 单行表（id 固定为 1），存储 WebDAV 同步源地址、凭据、远程路径和上次同步时间。
     // 密码用同步专用密钥加密（不依赖机器绑定的 derive_credential_key），跨设备可解密。
     if current < 8 {
+        // 整个版本块在一个事务内完成：语句与 schema_migrations 版本号原子提交，
+        // 中途失败（断电/进程被杀/唯一约束冲突）一律回滚，不留半迁移状态。
+        let __tx = conn.unchecked_transaction()?;
+        let conn: &Connection = &__tx;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS sync_config (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -673,6 +750,7 @@ fn apply_migrations(conn: &Connection, app_dir: &std::path::Path) -> Result<()> 
             INSERT OR IGNORE INTO sync_config (id) VALUES (1);",
         )?;
         mark_migration_applied(conn, 8)?;
+        __tx.commit()?;
         current = 8;
         tracing::info!("数据库迁移：已升级至 V8（sync_config 同步配置表）");
     }
@@ -681,6 +759,10 @@ fn apply_migrations(conn: &Connection, app_dir: &std::path::Path) -> Result<()> 
     // 单行表（id 固定为 1）。API key 不落库：credential_ref 存 "kr:<uuid>"（桌面钥匙串
     // 引用）或 "v2:seal:..."（Android 机器绑定加密），与来源凭据（P1-08）同机制。
     if current < 9 {
+        // 整个版本块在一个事务内完成：语句与 schema_migrations 版本号原子提交，
+        // 中途失败（断电/进程被杀/唯一约束冲突）一律回滚，不留半迁移状态。
+        let __tx = conn.unchecked_transaction()?;
+        let conn: &Connection = &__tx;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS ai_settings (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -694,6 +776,7 @@ fn apply_migrations(conn: &Connection, app_dir: &std::path::Path) -> Result<()> 
             INSERT OR IGNORE INTO ai_settings (id) VALUES (1);",
         )?;
         mark_migration_applied(conn, 9)?;
+        __tx.commit()?;
         current = 9;
         tracing::info!("数据库迁移：已升级至 V9（ai_settings AI 推荐设置表）");
     }
@@ -705,15 +788,195 @@ fn apply_migrations(conn: &Connection, app_dir: &std::path::Path) -> Result<()> 
     // 先按 track 去重（保留最早一行，即首个扫描版本的嵌入歌词），再建唯一索引，
     // 此后 INSERT OR REPLACE 真正生效，读取走索引。
     if current < 10 {
+        // 整个版本块在一个事务内完成：语句与 schema_migrations 版本号原子提交，
+        // 中途失败（断电/进程被杀/唯一约束冲突）一律回滚，不留半迁移状态。
+        let __tx = conn.unchecked_transaction()?;
+        let conn: &Connection = &__tx;
         conn.execute_batch(
             "DELETE FROM lyrics WHERE id NOT IN (SELECT MIN(id) FROM lyrics GROUP BY track_id);
              CREATE UNIQUE INDEX IF NOT EXISTS idx_lyrics_track_id ON lyrics(track_id);",
         )?;
         mark_migration_applied(conn, 10)?;
+        __tx.commit()?;
         current = 10;
         tracing::info!("数据库迁移：已升级至 V10（歌词去重 + track_id 唯一索引）");
     }
 
     let _ = current;
     Ok(())
+}
+
+/// 测试专用：用完即删的临时目录。放在主模块里（而非某个 test 模块）
+/// 让 db 与 sync 两侧回归测试共用，避免各写一份、各自漏删。
+#[cfg(test)]
+pub(crate) mod test_util {
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    pub(crate) struct TempDir(PathBuf);
+
+    impl TempDir {
+        pub(crate) fn new(label: &str) -> Self {
+            static SEQ: AtomicU64 = AtomicU64::new(0);
+            let n = SEQ.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "lumo_test_{}_{}_{}",
+                label,
+                std::process::id(),
+                n
+            ));
+            std::fs::create_dir_all(&path).expect("创建测试临时目录失败");
+            Self(path)
+        }
+
+        pub(crate) fn path(&self) -> &PathBuf {
+            &self.0
+        }
+
+        pub(crate) fn db_path(&self) -> PathBuf {
+            self.0.join("lumo.sqlite")
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+}
+
+/// DATA-001：schema 迁移回归。
+///
+/// 覆盖计划要求的三类断言——迁移结果正确、重复执行幂等、崩溃在
+/// 「SQL 已执行 / 版本号未写入」之间后能够续跑（V1–V10 事务化 + 幂等加列的根因修复）。
+///
+/// 注意：这里做的是**同库重放**，不等同于真实历史版本 fixture。
+/// v1.1.1 / v1.3.0 / v1.8.0 三份真库回归仍需人工产出样本后补入
+/// `resources/doc/commercial-maturity/03_数据可靠性与WebDAV兼容性.md` §DATA-001 登记的缺口。
+#[cfg(test)]
+mod tests {
+    use super::test_util::TempDir;
+    use super::*;
+
+    fn applied_versions(conn: &Connection) -> Vec<i64> {
+        let mut stmt = conn
+            .prepare("SELECT version FROM schema_migrations ORDER BY version")
+            .unwrap();
+        stmt.query_map([], |row| row.get::<_, i64>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    }
+
+    fn assert_required_tables(conn: &Connection) {
+        for table in [
+            "sources",
+            "tracks",
+            "media_files",
+            "artists",
+            "albums",
+            "lyrics",
+            "playlists",
+            "sync_config",
+            "ai_settings",
+        ] {
+            let exists: bool = conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+                    [table],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(exists, "迁移后缺少必要表: {}", table);
+        }
+    }
+
+    #[test]
+    fn fresh_database_applies_every_migration_once() {
+        let dir = TempDir::new("db_fresh");
+        let pool = init_db(dir.db_path()).expect("首次初始化数据库失败");
+        let conn = pool.get().unwrap();
+
+        assert_eq!(get_current_version(&conn).unwrap(), TARGET_SCHEMA_VERSION);
+        let expected: Vec<i64> = (1..=TARGET_SCHEMA_VERSION).collect();
+        assert_eq!(applied_versions(&conn), expected, "版本号出现重复或缺项");
+        assert_required_tables(&conn);
+    }
+
+    #[test]
+    fn reopening_database_does_not_reapply_migrations() {
+        let dir = TempDir::new("db_reopen");
+        drop(init_db(dir.db_path()).expect("首次初始化数据库失败"));
+        let pool = init_db(dir.db_path()).expect("二次打开数据库失败");
+        let conn = pool.get().unwrap();
+
+        let expected: Vec<i64> = (1..=TARGET_SCHEMA_VERSION).collect();
+        assert_eq!(applied_versions(&conn), expected, "重启后迁移被重复执行");
+    }
+
+    /// 迁移必须能从「schema 已改、版本号没写」的状态续跑：
+    /// 这正是 V1–V10 事务化之前会卡死应用启动的形态（G-02）。
+    #[test]
+    fn migrations_resume_when_bookkeeping_lags_behind_schema() {
+        let dir = TempDir::new("db_resume");
+        let pool = init_db(dir.db_path()).expect("初始化失败");
+
+        // 放一条数据，验证重放不会顺手清掉用户内容
+        conn_insert_source(&pool);
+
+        for cut in 0..TARGET_SCHEMA_VERSION {
+            let conn = pool.get().unwrap();
+            conn.execute("DELETE FROM schema_migrations WHERE version > ?1", [cut])
+                .unwrap();
+            assert_eq!(get_current_version(&conn).unwrap(), cut);
+
+            apply_migrations(&conn, dir.path())
+                .unwrap_or_else(|e| panic!("从 V{} 续跑迁移失败: {}", cut, e));
+
+            let expected: Vec<i64> = (1..=TARGET_SCHEMA_VERSION).collect();
+            assert_eq!(
+                applied_versions(&conn),
+                expected,
+                "从 V{} 续跑后版本号不连续",
+                cut
+            );
+            assert_eq!(
+                conn.query_row("SELECT COUNT(*) FROM sources", [], |r| r.get::<_, i64>(0))
+                    .unwrap(),
+                1,
+                "从 V{} 续跑迁移时丢失了已有数据",
+                cut
+            );
+        }
+    }
+
+    #[test]
+    fn migrated_database_is_integrity_clean() {
+        let dir = TempDir::new("db_integrity");
+        let pool = init_db(dir.db_path()).expect("初始化失败");
+        let conn = pool.get().unwrap();
+
+        let integrity: String = conn
+            .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(integrity, "ok");
+        let fk_violations: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_foreign_key_check()",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(fk_violations, 0);
+        assert_required_tables(&conn);
+    }
+
+    fn conn_insert_source(pool: &DbPool) {
+        let conn = pool.get().unwrap();
+        conn.execute(
+            "INSERT INTO sources (name, kind, root_uri, enabled) VALUES ('测试曲库', 'local', 'C:/music', 1)",
+            [],
+        )
+        .unwrap();
+    }
 }

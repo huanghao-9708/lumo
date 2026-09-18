@@ -80,6 +80,15 @@ pub async fn ai_test_connection(
         let conn = db_state.db.get()?;
         crate::services::ai::AiService::load_settings(&conn)?
     };
+    // 隐私门禁：AI 未开启时不得产生任何外联请求（含 Authorization 头里的 API Key）。
+    // 见 resources/doc/product/NETWORK_BEHAVIOR.md §2D 与 FEATURE_MATRIX.md G-06。
+    if let Some(msg) = settings.validate() {
+        return Ok(AiTestConnectionResult {
+            ok: false,
+            message: msg,
+            latency_ms: 0,
+        });
+    }
     Ok(crate::services::ai::AiService::test_connection(&settings, &app_dir).await)
 }
 
@@ -174,16 +183,11 @@ async fn generate_inner(
     let (settings, candidates, system, user) = prepared;
 
     if candidates.is_empty() {
-        return Ok(make_fallback(
-            db_state,
-            mode,
-            seed_track_id,
-            "曲库为空，没有可推荐的候选",
-        )?);
+        return make_fallback(db_state, mode, seed_track_id, "曲库为空，没有可推荐的候选");
     }
 
     // ===== Phase 2（异步）：LLM 调用 + 解析校验，失败重试一次，全程可取消 =====
-    let mut picked: Option<(String, String, Vec<(i64, String)>)> = None;
+    let mut picked: Option<crate::services::ai::PickedPlaylist> = None;
     let mut last_err = String::new();
 
     for attempt in 0..2 {
@@ -216,12 +220,7 @@ async fn generate_inner(
             let finalized = crate::services::ai::AiService::finalize_tracks(&conn, &tracks)
                 .map_err(|e| AppError::Internal(e.to_string()))?;
             if finalized.is_empty() {
-                return Ok(make_fallback(
-                    db_state,
-                    mode,
-                    seed_track_id,
-                    "AI 结果回表为空",
-                )?);
+                return make_fallback(db_state, mode, seed_track_id, "AI 结果回表为空");
             }
             Ok(AiPlaylistResult {
                 name,

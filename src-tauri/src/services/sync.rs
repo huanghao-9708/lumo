@@ -1,9 +1,25 @@
 use crate::models::{SyncConfigDTO, SyncResult};
 use crate::services::webdav::{WebdavClient, WebdavFile};
 use rusqlite::{params, Connection};
+use std::fs::File;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
-/// 旧版同步密钥（硬编码，全设备相同）——仅用于读取历史存量数据（P1-08），
+/// 可恢复快照的最低 schema 版本：更早的库缺少必需表，且其迁移链未经历史 fixture 验证。
+const MIN_RESTORE_SCHEMA_VERSION: i64 = 8;
+
+/// 快照体积上限（2 GiB）。这不是产品配额，而是「这份文件根本不像是本应用的数据库」的兜底判断：
+/// 远端被替换成音视频、目录转储或超大文件时立刻拒绝，不进入 open/迁移流程。
+const MAX_SNAPSHOT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+/// 远程快照文件名与其校验和 sidecar 名。
+const REMOTE_SNAPSHOT_NAME: &str = "lumo.sqlite";
+const REMOTE_CHECKSUM_NAME: &str = "lumo.sqlite.sha256";
+
+/// SQLite 文件头魔数（前 16 字节）。合法数据库必然以它开头。
+const SQLITE_HEADER_MAGIC: &[u8; 16] = b"SQLite format 3\0";
+
+/// 读取旧版同步密钥（硬编码，全设备相同）——仅用于读取历史存量数据（P1-08），
 /// 读取成功后由 get_config 懒迁移为 v3 机器绑定格式。
 fn derive_sync_key() -> [u8; 32] {
     let seed = b"com.hao.lumo.sync";
@@ -73,16 +89,47 @@ fn decrypt_sync_password(
 pub struct SyncService;
 
 impl SyncService {
-    /// Validate and migrate a downloaded snapshot before it can touch the live database.
-    pub fn validate_snapshot(path: &Path, app_dir: &Path) -> Result<(), String> {
-        let _ = crate::db::init_db(path.to_path_buf())
+    /// 校验并迁移一份下载的快照，使其可以安全进入本机 live 库。
+    ///
+    /// 顺序至关重要：**先判定「这是不是一份 Lumo 数据库」，再迁移**。
+    /// `db::init_db` 对任何可打开的 SQLite 文件都会建表并把版本推到最新，
+    /// 所以若先迁移，远端的 0 字节文件 / 其它软件的 DB 也会被加工成
+    /// 「看起来合法」的 Lumo 库，随后整库覆盖本地数据。
+    pub fn validate_snapshot(path: &Path) -> Result<(), String> {
+        let result = Self::validate_and_migrate_snapshot(path);
+        // 校验过程会以 WAL 打开快照（见 db::init_db）。-wal 必须与主文件配对才有意义，
+        // 因此所有连接释放后再收掉辅助文件：留着它，下一次恢复会拿半截 WAL 去"修复"一个新主文件。
+        Self::remove_sidecar_files(path);
+        result
+    }
+
+    fn validate_and_migrate_snapshot(path: &Path) -> Result<(), String> {
+        let version_before = Self::assert_lumo_snapshot(path)?;
+
+        // 历史 schema：先迁移到本机版本，恢复后 live 库无需再次升级即可使用
+        crate::db::init_db(path.to_path_buf())
             .map_err(|e| format!("无法初始化同步数据库快照: {}", e))?;
+
         let conn = Connection::open(path).map_err(|e| format!("无法打开同步数据库快照: {}", e))?;
+
         let integrity: String = conn
             .query_row("PRAGMA integrity_check", [], |row| row.get(0))
             .map_err(|e| format!("同步数据库完整性检查失败: {}", e))?;
         if !integrity.eq_ignore_ascii_case("ok") {
             return Err(format!("同步数据库完整性检查未通过: {}", integrity));
+        }
+
+        // 外键检查：VACUUM INTO 不校验引用一致性，快照脱敏等写入也可能留下孤儿行，
+        // 孤儿会在新版本 UI 里渲染成空白条目，宁可在这里拒绝。
+        let orphans: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM (SELECT * FROM pragma_foreign_key_check() LIMIT 1)",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        if orphans > 0 {
+            return Err("同步数据库存在外键不一致的记录，已拒绝恢复".to_string());
         }
 
         let required_tables = [
@@ -105,18 +152,97 @@ impl SyncService {
             }
         }
 
-        let version: i64 = conn
-            .query_row(
-                "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(|e| format!("读取同步数据库版本失败: {}", e))?;
-        if version < 8 {
-            return Err(format!("同步数据库版本过旧（{}），需要至少 V8", version));
+        let version_after = Self::snapshot_schema_version(&conn)?;
+        if version_after < version_before {
+            return Err(format!(
+                "快照迁移后版本回退（{} < {}），已拒绝恢复",
+                version_after, version_before
+            ));
         }
-        let _ = app_dir;
         Ok(())
+    }
+
+    /// 迁移前的甄别：文件头是 SQLite、能打开、schema 版本落在本机可处理区间。
+    /// 返回迁移前版本号。任何一条不满足都说明远端那份东西不该覆盖本地库。
+    fn assert_lumo_snapshot(path: &Path) -> Result<i64, String> {
+        let size = std::fs::metadata(path)
+            .map_err(|e| format!("无法读取下载的文件: {}", e))?
+            .len();
+        if size < SQLITE_HEADER_MAGIC.len() as u64 || size > MAX_SNAPSHOT_BYTES {
+            return Err(format!("云端快照大小异常（{} 字节），已拒绝恢复", size));
+        }
+
+        let mut header = [0u8; 16];
+        let mut file = File::open(path).map_err(|e| format!("无法打开下载的文件: {}", e))?;
+        file.read_exact(&mut header)
+            .map_err(|e| format!("读取文件头失败: {}", e))?;
+        if &header != SQLITE_HEADER_MAGIC {
+            // 典型成因：登录重定向返回的 HTML 错误页、网关提示页、目录列表
+            return Err(
+                "云端文件不是有效的 SQLite 数据库（服务器可能返回了错误页面），已拒绝恢复"
+                    .to_string(),
+            );
+        }
+
+        let conn = Connection::open(path).map_err(|e| format!("无法打开同步数据库快照: {}", e))?;
+        let version = Self::snapshot_schema_version(&conn).map_err(|e| {
+            // 读不到版本号 = 没有 schema_migrations 表 = 这不是 Lumo 的库
+            format!("云端文件不是 Lumo 数据库，已拒绝恢复（{}）", e)
+        })?;
+        if version < MIN_RESTORE_SCHEMA_VERSION {
+            return Err(format!(
+                "同步数据库版本过旧（V{}），需要至少 V{}，请先在来源设备上升级并重新备份",
+                version, MIN_RESTORE_SCHEMA_VERSION
+            ));
+        }
+        if version > crate::db::TARGET_SCHEMA_VERSION {
+            return Err(format!(
+                "云端快照来自更新版本的 Lumo（V{}），当前版本最高支持 V{}，请先升级本机再恢复",
+                version,
+                crate::db::TARGET_SCHEMA_VERSION
+            ));
+        }
+        Ok(version)
+    }
+
+    fn snapshot_schema_version(conn: &Connection) -> Result<i64, String> {
+        conn.query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("读取同步数据库版本失败: {}", e))
+    }
+
+    /// 删除 SQLite 随文件产生的 -wal / -shm 辅助文件。
+    fn remove_sidecar_files(path: &Path) {
+        for suffix in ["-wal", "-shm"] {
+            let mut p = path.as_os_str().to_os_string();
+            p.push(suffix);
+            let _ = std::fs::remove_file(PathBuf::from(p));
+        }
+    }
+
+    /// 清理历史恢复残留的下载临时文件（下载中途进程被杀时会留下）。
+    /// 只删 1 小时前的，避免动到同一时刻另一次正在写入的下载。
+    fn cleanup_stale_downloads(app_dir: &Path) {
+        let Ok(entries) = std::fs::read_dir(app_dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !name.starts_with(REMOTE_SNAPSHOT_NAME) || !name.ends_with(".download") {
+                continue;
+            }
+            let stale = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .map(|t| t.elapsed().map(|d| d.as_secs() > 3600).unwrap_or(false))
+                .unwrap_or(false);
+            if stale {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
     }
 
     /// 读取同步配置（密码解密后返回）。需要机器密钥（P1-08 v3 格式 + 旧格式懒迁移）。
@@ -193,6 +319,7 @@ impl SyncService {
         let snapshot_path = app_dir.join("lumo_sync_snapshot.sqlite");
         // 先清理旧快照
         let _ = std::fs::remove_file(&snapshot_path);
+        Self::remove_sidecar_files(&snapshot_path);
         let sql = format!(
             "VACUUM INTO '{}'",
             snapshot_path.to_string_lossy().replace('\'', "''")
@@ -200,14 +327,39 @@ impl SyncService {
         conn.execute_batch(&sql)
             .map_err(|e| format!("Failed to create DB snapshot: {}", e))?;
 
-        // MOB-005: 快照脱敏处理：清空密码字段，确保上传至云端的快照绝不携带可还原密码
-        if let Ok(snap_conn) = Connection::open(&snapshot_path) {
-            let _ = snap_conn.execute_batch(
-                "
-                UPDATE sync_config SET password_encrypted = NULL;
-                UPDATE sources SET credential_ref = NULL WHERE kind = 'webdav';
-            ",
-            );
+        let mut snap_conn =
+            Connection::open(&snapshot_path).map_err(|e| format!("无法打开生成的快照: {}", e))?;
+
+        // MOB-005: 快照脱敏——清空所有可还原凭据，确保上传到云端的快照绝不携带密码。
+        // 这一步失败必须中止上传：过去写成 `let _ =` 会让带凭据的快照照常发出去，
+        // 等于把「凭据不上云」这条产品承诺建立在一次 UPDATE 必然成功的前提上。
+        let sanitize = snap_conn
+            .transaction()
+            .and_then(|tx| {
+                tx.execute("UPDATE sync_config SET password_encrypted = NULL", [])?;
+                tx.execute(
+                    "UPDATE sources SET credential_ref = NULL WHERE kind = 'webdav'",
+                    [],
+                )?;
+                tx.commit()
+            })
+            .err()
+            .map(|e| format!("快照凭据脱敏失败，已中止上传: {}", e));
+        if let Some(err) = sanitize {
+            let _ = std::fs::remove_file(&snapshot_path);
+            return Err(err);
+        }
+
+        // 上传前自检：本地库已经损坏时，在这里失败远好过在用户最需要恢复的时候失败。
+        let integrity: String = snap_conn
+            .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+            .map_err(|e| format!("快照完整性检查失败: {}", e))?;
+        // 同上：脱敏与检查的连接必须先释放，再删 -wal/-shm。
+        drop(snap_conn);
+        Self::remove_sidecar_files(&snapshot_path);
+        if !integrity.eq_ignore_ascii_case("ok") {
+            let _ = std::fs::remove_file(&snapshot_path);
+            return Err(format!("快照完整性检查未通过，已中止上传: {}", integrity));
         }
 
         Ok(snapshot_path)
@@ -235,7 +387,13 @@ impl SyncService {
         Ok(joined.to_string())
     }
 
-    /// 上传同步快照：VACUUM INTO → PUT 到 remote_path/lumo.sqlite
+    /// 上传同步快照：VACUUM INTO → PUT 到 remote_path 的临时名 → 校验和 sidecar → MOVE 覆盖正式名。
+    ///
+    /// 为什么绕这一圈：PUT 直接覆盖 `lumo.sqlite` 时，若网络在中途断开，
+    /// 远端会留下半截快照，而下一次「从云端恢复」会把这份损坏数据整库灌进本地。
+    /// 先写临时名、再 MOVE 替换，让正式名要么完整、要么是上一次的完整版本。
+    /// 不支持 MOVE 的服务器退回直接 PUT（见 `WEBDAV_COMPATIBILITY.md`），
+    /// 此时兜底防线是恢复侧的 SQLite 文件头 + integrity_check 校验。
     pub fn sync_upload(
         conn: &Connection,
         app_dir: &Path,
@@ -246,6 +404,7 @@ impl SyncService {
         let file_size = std::fs::metadata(&snapshot)
             .map_err(|e| e.to_string())?
             .len();
+        let checksum = sha256_of_file(&snapshot)?;
         let data = std::fs::read(&snapshot).map_err(|e| format!("读取快照失败: {}", e))?;
 
         // 确保远程目录存在
@@ -255,11 +414,29 @@ impl SyncService {
             let _ = client.mkcol(&dir_url); // 忽略 405 已存在
         }
 
-        let upload_url = Self::remote_file_url(config, "lumo.sqlite")?;
-        client.put_file(&upload_url, data)?;
+        let upload_url = Self::remote_file_url(config, REMOTE_SNAPSHOT_NAME)?;
+        let checksum_url = Self::remote_file_url(config, REMOTE_CHECKSUM_NAME)?;
+        let staging_name = format!("{}.tmp-{}", REMOTE_SNAPSHOT_NAME, staging_suffix());
+        let staging_url = Self::remote_file_url(config, &staging_name)?;
 
-        // 清理本地快照
+        let upload_result = (|| -> Result<(), String> {
+            client.put_file(&staging_url, data.clone())?;
+            // 校验和先于正式名就位：任何时刻远端的 `lumo.sqlite` 都不会配上更新的校验和，
+            // 最坏情况是校验和比库新（恢复侧按「不匹配」拒绝，重新备份一次即可自愈），
+            // 而不是校验和比库旧（会放过损坏数据）。
+            client.put_file(&checksum_url, checksum.as_bytes().to_vec())?;
+            if let Err(e) = client.move_file(&staging_url, &upload_url) {
+                tracing::warn!("WebDAV MOVE 不可用，退回直接 PUT 覆盖：{}", e);
+                let _ = client.delete(&staging_url);
+                client.put_file(&upload_url, data)?;
+            }
+            Ok(())
+        })();
+
+        // 本地快照无论成败都清掉：它是完整库的副本，留在数据目录里只会被误读
         let _ = std::fs::remove_file(&snapshot);
+        Self::remove_sidecar_files(&snapshot);
+        upload_result?;
 
         use chrono::Utc;
         let timestamp = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -277,16 +454,45 @@ impl SyncService {
         })
     }
 
-    /// 下载云端快照到本地临时文件，返回文件路径。
-    /// 调用方负责替换 DB 并热重载。
+    /// 下载云端快照到本地唯一临时文件，返回文件路径。
+    /// 调用方负责校验、替换 DB 与清理。临时名带随机后缀：固定名会让上一次半途失败的残留
+    /// 文件被这一次当成「刚下载好的内容」直接恢复。
     pub fn sync_download_to_temp(
         app_dir: &Path,
         config: &SyncConfigDTO,
     ) -> Result<PathBuf, String> {
+        Self::cleanup_stale_downloads(app_dir);
         let client = Self::build_client(config)?;
-        let download_url = Self::remote_file_url(config, "lumo.sqlite")?;
-        let temp_path = app_dir.join("lumo_sync_remote.sqlite");
+        let download_url = Self::remote_file_url(config, REMOTE_SNAPSHOT_NAME)?;
+        let temp_path = app_dir.join(format!(
+            "{}.{}.download",
+            REMOTE_SNAPSHOT_NAME,
+            staging_suffix()
+        ));
         client.download_to_file(&download_url, &temp_path)?;
+
+        // 校验和 sidecar 存在则比对；不存在（老版本备份、服务器拒绝）跳过，
+        // 由 validate_snapshot 的结构校验兜底。
+        let checksum_url = Self::remote_file_url(config, REMOTE_CHECKSUM_NAME)?;
+        match client.fetch_text(&checksum_url, 256) {
+            Ok(Some(text)) => match parse_checksum(&text) {
+                Some(expected) => {
+                    let actual = sha256_of_file(&temp_path)?;
+                    if actual != expected {
+                        let _ = std::fs::remove_file(&temp_path);
+                        return Err(
+                            "云端快照校验失败（下载内容不完整或已被改写），已拒绝恢复".to_string()
+                        );
+                    }
+                }
+                None => {
+                    tracing::warn!("云端校验和文件格式异常，跳过校验和比对");
+                }
+            },
+            Ok(None) => {}
+            Err(e) => tracing::warn!("读取云端校验和失败（{}），跳过校验和比对", e),
+        }
+
         Ok(temp_path)
     }
 
@@ -305,7 +511,7 @@ impl SyncService {
 
         // 查找 lumo.sqlite
         for f in &files {
-            if f.path.ends_with("lumo.sqlite") {
+            if f.path.ends_with(REMOTE_SNAPSHOT_NAME) {
                 return Ok(crate::models::RemoteCheckResult {
                     has_data: true,
                     remote_size: Some(f.size),
@@ -332,5 +538,207 @@ impl SyncService {
     pub fn create_remote_folder(config: &SyncConfigDTO, path: &str) -> Result<(), String> {
         let client = Self::build_client(config)?;
         client.mkcol(path)
+    }
+}
+
+/// 流式计算文件 SHA-256（十六进制小写）。快照可能有上百 MB，不能整体读进内存。
+fn sha256_of_file(path: &Path) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    let mut file = File::open(path).map_err(|e| format!("无法读取快照文件: {}", e))?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = file
+            .read(&mut buf)
+            .map_err(|e| format!("读取快照文件失败: {}", e))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hex::encode(hasher.finalize()))
+}
+
+/// 解析远端校验和文件：只接受 64 位十六进制（允许尾随空白）。
+/// 服务器返回 HTML 错误页、目录页时被识别为「无校验和」而不是拿乱码去比对。
+fn parse_checksum(text: &str) -> Option<String> {
+    let token = text.split_whitespace().next()?;
+    if token.len() != 64 || !token.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(token.to_lowercase())
+}
+
+/// 临时文件后缀：纳秒时间戳 + 进程号，同一秒内多次操作也不会撞名。
+fn staging_suffix() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{}-{}", std::process::id(), nanos)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_checksum_accepts_plain_and_sum_format() {
+        let digest = "a".repeat(64);
+        assert_eq!(
+            parse_checksum(&format!("{}\n", digest)),
+            Some(digest.clone())
+        );
+        // `sha256sum` 输出格式（"hash  filename"）同样接受
+        assert_eq!(
+            parse_checksum(&format!("{}  lumo.sqlite", digest)),
+            Some(digest)
+        );
+    }
+
+    #[test]
+    fn parse_checksum_rejects_non_checksum_bodies() {
+        assert_eq!(parse_checksum("<html><body>404</body></html>"), None);
+        assert_eq!(parse_checksum(""), None);
+        assert_eq!(parse_checksum(&"z".repeat(64)), None);
+        assert_eq!(parse_checksum(&"a".repeat(63)), None);
+    }
+
+    /// DATA-002：恢复前的快照甄别。
+    /// 这里的每一种输入都是"恢复"这条链路上会真的覆盖本地库的输入，
+    /// 断言它们被拒绝，等于断言用户不会因为远端一份坏文件而丢曲库。
+    mod snapshot_validation {
+        use crate::db::test_util::TempDir;
+        use rusqlite::Connection;
+
+        /// 生成一份「本机刚备份出去」的快照。
+        fn snapshot_in(dir: &TempDir) -> std::path::PathBuf {
+            let path = dir.db_path();
+            crate::db::init_db(path.clone()).expect("构造测试库失败");
+            path
+        }
+
+        #[test]
+        fn accepts_a_current_lumo_database() {
+            let dir = TempDir::new("snap_current");
+            let path = snapshot_in(&dir);
+            super::SyncService::validate_snapshot(&path).expect("合法快照应通过校验");
+        }
+
+        #[test]
+        fn migrates_a_historical_schema_before_accepting() {
+            let dir = TempDir::new("snap_history");
+            let path = snapshot_in(&dir);
+            // 退回到"旧版本备份"：schema 停在 V8，版本号也只剩 1..=8
+            let conn = Connection::open(&path).unwrap();
+            conn.execute("DELETE FROM schema_migrations WHERE version > 8", [])
+                .unwrap();
+            drop(conn);
+
+            super::SyncService::validate_snapshot(&path).expect("历史快照应先迁移再接受");
+
+            let conn = Connection::open(&path).unwrap();
+            let version: i64 = conn
+                .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| {
+                    r.get(0)
+                })
+                .unwrap();
+            assert_eq!(
+                version,
+                crate::db::TARGET_SCHEMA_VERSION,
+                "恢复前必须把历史 schema 迁到本机版本"
+            );
+        }
+
+        #[test]
+        fn rejects_html_error_page_and_empty_file() {
+            let dir = TempDir::new("snap_garbage");
+
+            let html = dir.path().join("lumo_gw.html");
+            std::fs::write(
+                &html,
+                b"<!DOCTYPE html><html><head><title>Gateway</title></head></html>",
+            )
+            .unwrap();
+            let err = super::SyncService::validate_snapshot(&html)
+                .expect_err("网关错误页绝不能被当成数据库恢复");
+            assert!(err.contains("不是有效的 SQLite"), "文案失真: {}", err);
+
+            let empty = dir.path().join("lumo_empty.sqlite");
+            std::fs::write(&empty, []).unwrap();
+            assert!(super::SyncService::validate_snapshot(&empty).is_err());
+        }
+
+        #[test]
+        fn rejects_other_software_database() {
+            let dir = TempDir::new("snap_foreign");
+            let path = dir.path().join("lumo_foreign.sqlite");
+            // 有效 SQLite 文件，但不是 Lumo 的库：没有 schema_migrations
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch("CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT);")
+                .unwrap();
+            drop(conn);
+
+            let err = super::SyncService::validate_snapshot(&path)
+                .expect_err("外部数据库绝不能覆盖本地曲库");
+            assert!(err.contains("不是 Lumo 数据库"), "文案失真: {}", err);
+            // 关键：拒绝不得以"顺手建表"的方式把它加工成 Lumo 库
+            let conn = Connection::open(&path).unwrap();
+            let created: bool = conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='tracks')",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert!(!created, "校验失败前不得对快照做任何写入");
+        }
+
+        #[test]
+        fn rejects_snapshot_from_a_newer_app_version() {
+            let dir = TempDir::new("snap_future");
+            let path = snapshot_in(&dir);
+            let conn = Connection::open(&path).unwrap();
+            conn.execute("INSERT INTO schema_migrations (version) VALUES (99)", [])
+                .unwrap();
+            drop(conn);
+
+            let err = super::SyncService::validate_snapshot(&path)
+                .expect_err("来自更新版本的快照不能强行降级恢复");
+            assert!(err.contains("更新版本"), "文案失真: {}", err);
+        }
+
+        #[test]
+        fn rejects_truncated_snapshot_and_leaves_no_wal_behind() {
+            let dir = TempDir::new("snap_truncated");
+            let path = snapshot_in(&dir);
+            // 半截下载：截掉后一半页（保留合法文件头，骗过 header 魔数检查）
+            let full = std::fs::read(&path).unwrap();
+            std::fs::write(&path, &full[..full.len() / 2]).unwrap();
+
+            let err = super::SyncService::validate_snapshot(&path)
+                .expect_err("截断的快照必须被拒绝，而不是恢复出一个残缺曲库");
+            assert!(!err.is_empty());
+
+            // 校验过程以 WAL 打开过快照；残留的 -wal 会让下一次恢复读到过期页
+            assert!(!dir.path().join("lumo.sqlite-wal").exists());
+        }
+
+        #[test]
+        fn staging_names_are_unique_and_checksum_format_is_stable() {
+            assert_ne!(super::staging_suffix(), super::staging_suffix());
+            let dir = TempDir::new("snap_hash");
+            let path = snapshot_in(&dir);
+            let digest = super::sha256_of_file(&path).unwrap();
+            assert_eq!(digest.len(), 64);
+            assert_eq!(super::parse_checksum(&digest), Some(digest.clone()));
+            // 同一文件重算一致；改动一位则不同
+            std::fs::write(dir.path().join("copy"), "x").unwrap();
+            assert_ne!(
+                digest,
+                super::sha256_of_file(&dir.path().join("copy")).unwrap()
+            );
+        }
     }
 }

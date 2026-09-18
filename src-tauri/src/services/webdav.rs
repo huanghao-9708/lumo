@@ -28,9 +28,10 @@ pub struct WebdavProbeResult {
 #[derive(Clone)]
 pub struct WebdavClient {
     pub client: Client,
-    /// 整文件下载专用客户端：保留连接超时但**不设总超时**——
-    /// reqwest 的总超时覆盖整个响应体读取，大文件后台缓存下载会被 60s 掐断。
-    pub download_client: Client,
+    /// 大体积传输专用客户端（整文件下载、DB 快照上传）：保留连接超时，但**不设总超时**——
+    /// reqwest 的总超时覆盖整个响应体，大文件传输会被 60s 掐断。
+    /// 取而代之用 `read_timeout` 兜住「连接挂着不动」：只要还在持续收/发字节就允许继续。
+    pub bulk_client: Client,
     pub base_url: String,
     pub username: Option<String>,
     pub password: Option<String>,
@@ -42,14 +43,23 @@ impl WebdavClient {
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(60))
             .build()
-            .unwrap_or_else(|_| Client::new());
-        let download_client = Client::builder()
+            .unwrap_or_else(|e| {
+                // 退回到无超时的 Client 会让请求可能永久挂住，只有在 TLS 后端缺失时才会走到这里；
+                // 保留可用性，但必须留痕，否则线上表现为"点了没反应"。
+                tracing::error!("无法构建带超时的 HTTP 客户端，退回默认客户端: {}", e);
+                Client::new()
+            });
+        let bulk_client = Client::builder()
             .connect_timeout(Duration::from_secs(10))
+            .read_timeout(Duration::from_secs(120))
             .build()
-            .unwrap_or_else(|_| Client::new());
+            .unwrap_or_else(|e| {
+                tracing::error!("无法构建大文件传输 HTTP 客户端，退回默认客户端: {}", e);
+                Client::new()
+            });
         Self {
             client,
-            download_client,
+            bulk_client,
             base_url: base_url.trim_end_matches('/').to_string(),
             username,
             password,
@@ -194,7 +204,9 @@ impl WebdavClient {
         }
 
         let xml = resp.text().map_err(|e| e.to_string())?;
-        let parsed = self.parse_propfind(&xml);
+        // 解析失败必须报错而非返回半截列表：调用方据此置 scan_failed，
+        // 否则截断的 PROPFIND 会让"本次未遍历到"的文件被批量误标 missing。
+        let parsed = self.parse_propfind(&xml)?;
 
         let req_url_path = reqwest::Url::parse(&url)
             .map_err(|e| format!("无效的请求地址: {}", e))?
@@ -240,7 +252,7 @@ impl WebdavClient {
         }
     }
 
-    fn parse_propfind(&self, xml: &str) -> Vec<WebdavFile> {
+    fn parse_propfind(&self, xml: &str) -> Result<Vec<WebdavFile>, String> {
         let mut reader = Reader::from_str(xml);
         reader.config_mut().trim_text(true);
 
@@ -258,7 +270,7 @@ impl WebdavClient {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) => {
                     let tag_name = String::from_utf8_lossy(e.name().as_ref()).to_lowercase();
-                    let local_name = tag_name.split(':').last().unwrap_or(&tag_name);
+                    let local_name = tag_name.split(':').next_back().unwrap_or(&tag_name);
                     inside_tag = local_name.to_string();
 
                     if inside_tag == "response" {
@@ -272,7 +284,7 @@ impl WebdavClient {
                 }
                 Ok(Event::Empty(ref e)) => {
                     let tag_name = String::from_utf8_lossy(e.name().as_ref()).to_lowercase();
-                    let local_name = tag_name.split(':').last().unwrap_or(&tag_name);
+                    let local_name = tag_name.split(':').next_back().unwrap_or(&tag_name);
                     if local_name == "collection" {
                         current_is_dir = true;
                     }
@@ -288,7 +300,7 @@ impl WebdavClient {
                 }
                 Ok(Event::End(ref e)) => {
                     let tag_name = String::from_utf8_lossy(e.name().as_ref()).to_lowercase();
-                    let local_name = tag_name.split(':').last().unwrap_or(&tag_name);
+                    let local_name = tag_name.split(':').next_back().unwrap_or(&tag_name);
 
                     if local_name == "response" {
                         files.push(WebdavFile {
@@ -301,31 +313,35 @@ impl WebdavClient {
                     inside_tag = String::new();
                 }
                 Ok(Event::Eof) => break,
-                Err(_) => break,
+                Err(e) => {
+                    // 关键：XML 中途出错（响应被截断、编码异常、服务端返回 HTML 错误页）
+                    // 必须向上报错，让扫描判定为失败，不能把"已解析到的部分"当完整列表。
+                    return Err(format!("PROPFIND 响应解析失败：{}", e));
+                }
                 _ => {}
             }
             buf.clear();
         }
 
-        files
+        Ok(files)
     }
 
     /// 用单个 GET 请求下载完整文件到指定本地路径（带认证）。
     /// 用于云端文件透明缓存与「服务器不支持 Range」时的整文件降级：
     /// 播放 WebDAV 歌曲时后台异步拉取完整文件，
     /// 下次播放同一首歌即可命中本地缓存，实现「零网络请求」秒开。
-    /// 走 download_client（无总超时），大文件不会被 60s 掐断。
+    /// 走 bulk_client（无总超时，仅 120s 读空闲超时），大文件不会被 60s 掐断。
     /// 返回写入的字节数。
     pub fn download_to_file(&self, file_url: &str, dest: &Path) -> Result<u64, String> {
-        let req = self.apply_auth(self.download_client.get(file_url));
+        let req = self.apply_auth(self.bulk_client.get(file_url));
         let mut resp = req
             .send()
             .map_err(|e| WebdavClient::describe_reqwest_error(&e))?;
         if !resp.status().is_success() {
             let s = resp.status().as_u16();
             let msg = match s {
-                401 => format!("下载失败：认证失败 (401)"),
-                403 => format!("下载失败：权限不足 (403)"),
+                401 => "下载失败：认证失败 (401)".to_string(),
+                403 => "下载失败：权限不足 (403)".to_string(),
                 _ => format!("下载失败: HTTP {}", s),
             };
             return Err(msg);
@@ -358,8 +374,9 @@ impl WebdavClient {
     }
 
     /// PUT：上传文件内容到指定 URL（上传 DB 快照用）。
+    /// 走 bulk_client：快照可能有上百 MB，60s 总超时会把慢速上传掐断在半程。
     pub fn put_file(&self, file_url: &str, data: Vec<u8>) -> Result<(), String> {
-        let req = self.apply_auth(self.client.put(file_url).body(data));
+        let req = self.apply_auth(self.bulk_client.put(file_url).body(data));
         let resp = req
             .send()
             .map_err(|e| format!("PUT request failed: {}", e))?;
@@ -368,6 +385,48 @@ impl WebdavClient {
         } else {
             Err(format!("PUT failed: HTTP {}", resp.status()))
         }
+    }
+
+    /// MOVE：把远程 src 重命名/移动到 dst（RFC 4918 §9.10）。
+    /// 用于「先 PUT 到临时名、再原子替换正式名」的上传流程。
+    /// `Overwrite: T` 允许目标已存在时覆盖；201/204 视为成功。
+    pub fn move_file(&self, src_url: &str, dst_url: &str) -> Result<(), String> {
+        let req = self.apply_auth(
+            self.client
+                .request(reqwest::Method::from_bytes(b"MOVE").unwrap(), src_url)
+                .header("Destination", dst_url)
+                .header("Overwrite", "T"),
+        );
+        let resp = req
+            .send()
+            .map_err(|e| format!("MOVE request failed: {}", e))?;
+        let status = resp.status();
+        if status.is_success() {
+            Ok(())
+        } else {
+            Err(format!("MOVE failed: HTTP {}", status))
+        }
+    }
+
+    /// 读取小体积文本资源（校验和 sidecar 等），最多 max_bytes 字节。
+    /// 404 返回 Ok(None)——调用方据此区分「资源不存在」与「读取失败」。
+    pub fn fetch_text(&self, file_url: &str, max_bytes: u64) -> Result<Option<String>, String> {
+        let req = self.apply_auth(self.client.get(file_url));
+        let resp = req
+            .send()
+            .map_err(|e| WebdavClient::describe_reqwest_error(&e))?;
+        let status = resp.status();
+        if status.as_u16() == 404 || status.as_u16() == 403 {
+            return Ok(None);
+        }
+        if !status.is_success() {
+            return Err(format!("GET failed: HTTP {}", status));
+        }
+        let mut buf = Vec::new();
+        resp.take(max_bytes)
+            .read_to_end(&mut buf)
+            .map_err(|e| format!("读取响应失败: {}", e))?;
+        Ok(Some(String::from_utf8_lossy(&buf).into_owned()))
     }
 
     /// DELETE：删除远程文件（清理旧快照用）。
@@ -478,10 +537,7 @@ impl Read for HttpRangeReader {
                     Ok(r) => r,
                     Err(e) => {
                         tracing::error!("HttpRangeReader fetch failed for url: {}", self.url);
-                        return Err(io::Error::new(
-                            io::ErrorKind::Other,
-                            WebdavClient::describe_reqwest_error(&e),
-                        ));
+                        return Err(io::Error::other(WebdavClient::describe_reqwest_error(&e)));
                     }
                 };
 
