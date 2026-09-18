@@ -99,6 +99,19 @@
   `bulk_client`：连接 10s + **无总超时**（reqwest blocking 无读超时能力，改用 TCP keepalive
   空闲 30s / 间隔 10s 探测死连接），用于整文件下载与快照 PUT，
   大文件不会再被 60s 掐断（I3/G-09）。构建失败退回默认客户端时会 `tracing::error!` 留痕。
+- **重试与退避（I3/G-12）**：重试只发生在**同一已声明端点**上，不新增目标主机或字段。
+  - Range 读（`HttpRangeReader::read`）：429/5xx、连接层失败、提前断流、流读错误共用一份预算
+    ——每次 `read` 最多 3 次重试，等待 100ms 起指数递增、单次封顶 1s（最坏总等待约 0.7s + 请求耗时）；
+    429/503 带 `Retry-After` 时优先采纳，封顶 5s。预算耗尽才向上报错。
+  - 整文件下载（`download_to_file`）：仅对「尚未开始传字节」的失败重试（可重试状态码与连接层错误），
+    最多 3 次，等待 500ms 起指数递增、封顶 8s，`Retry-After` 封顶 15s；响应体半路断开**不**在此重连
+    （无 Range 续传），由 `AudioCache` 的字节数校验丢弃临时文件。
+  - 队列自动切歌（`queue_watcher_loop`）：底层播放失败不再以 250ms 循环节奏重放同一首——
+    退避 1s 起指数递增、封顶 15s，且**只在连续失败的第一次**发 `playback-error` 事件，
+    恢复正常播放即清零。
+  - 退避计算集中在 `services/backoff.rs`（纯函数，含单测），其余模块不再各自散落 sleep 常数。
+- **未纳入退避的**：`probe_connection` / PROPFIND / MKCOL / DELETE / PUT 快照 / 元数据与歌词侧请求仍为
+  单次尝试（失败即按各自口径提示）。歌词侧「每次切歌可能重发」的负缓存缺失依旧存在，登记在 §2A 与 I4 候选。
 - **降级**：`root_uri` 为空时连接探测退化到 `http://localhost`（`probe_connection`），属本机探针行为，不外发用户数据。
 - **TLS**：使用 rustls + `danger` 之外的默认校验，全仓无 `danger_accept_invalid_certs`，因此自签证书会连接失败（不做静默放行）。服务端差异与降级口径见 I3 的 `WEBDAV_COMPATIBILITY.md`。
 

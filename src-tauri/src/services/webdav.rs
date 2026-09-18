@@ -1,3 +1,4 @@
+use crate::services::backoff::{exp_backoff, is_retryable_status, retry_after_delay};
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use reqwest::blocking::Client;
@@ -334,13 +335,53 @@ impl WebdavClient {
     /// 用于云端文件透明缓存与「服务器不支持 Range」时的整文件降级：
     /// 播放 WebDAV 歌曲时后台异步拉取完整文件，
     /// 下次播放同一首歌即可命中本地缓存，实现「零网络请求」秒开。
-    /// 走 bulk_client（无总超时，仅 120s 读空闲超时），大文件不会被 60s 掐断。
+    /// 走 bulk_client（不设总超时，靠 TCP keepalive 探测死连接），大文件不会被 60s 掐断。
     /// 返回写入的字节数。
     pub fn download_to_file(&self, file_url: &str, dest: &Path) -> Result<u64, String> {
-        let req = self.apply_auth(self.bulk_client.get(file_url));
-        let mut resp = req
-            .send()
-            .map_err(|e| WebdavClient::describe_reqwest_error(&e))?;
+        // 只重试"还没开始传字节"的失败：状态码 429/5xx 与连接层错误。
+        // 半路断开的响应体不能在这里重连（没有 Range 续传），交给上层的临时文件校验兜底。
+        const DL_BASE: Duration = Duration::from_millis(500);
+        const DL_MAX: Duration = Duration::from_secs(8);
+        const DL_RETRY_AFTER_CAP: Duration = Duration::from_secs(15);
+        let mut retries: u32 = 0;
+        let mut resp = loop {
+            let req = self.apply_auth(self.bulk_client.get(file_url));
+            match req.send() {
+                Ok(r) => {
+                    let status = r.status();
+                    if !is_retryable_status(status) {
+                        break r;
+                    }
+                    if retries >= DOWNLOAD_MAX_RETRIES {
+                        break r;
+                    }
+                    retries += 1;
+                    let delay = retry_after_delay(r.headers(), DL_RETRY_AFTER_CAP)
+                        .unwrap_or_else(|| exp_backoff(retries, DL_BASE, DL_MAX));
+                    // 不打告警级日志：整首下载失败由调用方统一记录，这里只是常规重试
+                    tracing::debug!(
+                        "下载遇到 HTTP {}，{}ms 后第 {}/{} 次重试",
+                        status,
+                        delay.as_millis(),
+                        retries,
+                        DOWNLOAD_MAX_RETRIES
+                    );
+                    std::thread::sleep(delay);
+                }
+                Err(e) if (e.is_connect() || e.is_timeout()) && retries < DOWNLOAD_MAX_RETRIES => {
+                    retries += 1;
+                    let delay = exp_backoff(retries, DL_BASE, DL_MAX);
+                    tracing::debug!(
+                        "下载连接失败，{}ms 后第 {}/{} 次重试",
+                        delay.as_millis(),
+                        retries,
+                        DOWNLOAD_MAX_RETRIES
+                    );
+                    std::thread::sleep(delay);
+                }
+                Err(e) => return Err(WebdavClient::describe_reqwest_error(&e)),
+            }
+        };
         if !resp.status().is_success() {
             let s = resp.status().as_u16();
             let msg = match s {
@@ -449,6 +490,16 @@ impl WebdavClient {
     }
 }
 
+/// 分段读取的重试预算：最多 3 次、单次等待 100ms 起指数递增、封顶 1s（总等待约 0.7s）。
+/// `read` 跑在解码线程上，等太久等于把播放卡死——宁可让这一首失败并由上层提示。
+const RANGE_MAX_RETRIES: u32 = 3;
+const RANGE_RETRY_BASE: Duration = Duration::from_millis(100);
+const RANGE_RETRY_MAX: Duration = Duration::from_millis(1_000);
+/// 采纳服务端 `Retry-After` 的上限：超过它只等到该秒数再重试，分钟级等待按失败处理。
+const RANGE_RETRY_AFTER_CAP: Duration = Duration::from_secs(5);
+/// 整文件下载的重试次数（只覆盖状态码与连接层失败，不覆盖断流续传）。
+const DOWNLOAD_MAX_RETRIES: u32 = 3;
+
 pub struct HttpRangeReader {
     client: Client,
     pub url: String,
@@ -484,6 +535,33 @@ impl HttpRangeReader {
             req
         }
     }
+
+    /// 消耗一次重试预算并等待。返回 false 表示预算已耗尽，调用方应当放弃。
+    /// `delay_override` 用于服务端明确要求的等待（Retry-After），否则走指数退避。
+    fn wait_before_retry(
+        &mut self,
+        retries: &mut u32,
+        reason: &str,
+        delay_override: Option<Duration>,
+    ) -> bool {
+        if *retries >= RANGE_MAX_RETRIES {
+            return false;
+        }
+        *retries += 1;
+        let delay = delay_override
+            .unwrap_or_else(|| exp_backoff(*retries, RANGE_RETRY_BASE, RANGE_RETRY_MAX));
+        tracing::warn!(
+            "HttpRangeReader {} ({}), {}ms 后第 {}/{} 次重试",
+            reason,
+            self.url,
+            delay.as_millis(),
+            *retries,
+            RANGE_MAX_RETRIES
+        );
+        self.current_resp = None;
+        std::thread::sleep(delay);
+        true
+    }
 }
 
 impl Read for HttpRangeReader {
@@ -495,7 +573,7 @@ impl Read for HttpRangeReader {
             return Ok(0);
         }
 
-        let mut retries = 0;
+        let mut retries: u32 = 0;
         loop {
             // Forward seek optimization (up to 256KB)
             if self.current_resp.is_some()
@@ -540,6 +618,13 @@ impl Read for HttpRangeReader {
                 let resp = match req.send() {
                     Ok(r) => r,
                     Err(e) => {
+                        // 连接层失败（DNS/TLS 握手/超时）通常是瞬时的：在同一 read() 内
+                        // 退避重试，预算耗尽后沿用原有的错误文案向上抛。
+                        if (e.is_connect() || e.is_timeout())
+                            && self.wait_before_retry(&mut retries, "连接失败", None)
+                        {
+                            continue;
+                        }
                         tracing::error!("HttpRangeReader fetch failed for url: {}", self.url);
                         return Err(io::Error::other(WebdavClient::describe_reqwest_error(&e)));
                     }
@@ -579,6 +664,26 @@ impl Read for HttpRangeReader {
                     );
                     self.current_resp = Some(resp);
                     self.resp_offset = 0;
+                } else if is_retryable_status(status)
+                    && self.wait_before_retry(
+                        &mut retries,
+                        &format!("服务器繁忙 (HTTP {})", status.as_u16()),
+                        retry_after_delay(resp.headers(), RANGE_RETRY_AFTER_CAP),
+                    )
+                {
+                    continue;
+                } else if is_retryable_status(status) {
+                    // 重试预算已耗尽：这是服务端瞬时故障/限流，不是"不支持分段读取"
+                    tracing::error!(
+                        "HttpRangeReader giving up on {} after {} retries (HTTP {})",
+                        self.url,
+                        RANGE_MAX_RETRIES,
+                        status
+                    );
+                    return Err(io::Error::other(format!(
+                        "WebDAV 服务器暂时不可用 (HTTP {})，已重试仍未恢复",
+                        status
+                    )));
                 } else {
                     tracing::error!(
                         "HttpRangeReader fetch failed for url: {} with status: {}",
@@ -592,37 +697,37 @@ impl Read for HttpRangeReader {
                 }
             }
 
-            if let Some(resp) = self.current_resp.as_mut() {
-                match resp.read(buf) {
-                    Ok(0) => {
-                        if self.offset < self.length {
-                            self.current_resp = None;
-                            retries += 1;
-                            if retries > 3 {
-                                return Err(io::Error::new(
-                                    io::ErrorKind::UnexpectedEof,
-                                    "Premature EOF from server",
-                                ));
-                            }
-                            continue;
-                        } else {
-                            return Ok(0);
-                        }
+            // 先取结果再处理：wait_before_retry 需要 &mut self 丢弃当前响应，
+            // 不能在一个仍借用 current_resp 的 if-let 作用域里调用。
+            let stream_result = match self.current_resp.as_mut() {
+                Some(resp) => resp.read(buf),
+                None => continue,
+            };
+            match stream_result {
+                Ok(0) => {
+                    if self.offset >= self.length {
+                        return Ok(0);
                     }
-                    Ok(n) => {
-                        self.offset += n as u64;
-                        self.resp_offset += n as u64;
-                        return Ok(n);
+                    // 服务端提前断流：带退避地在同一 offset 重连，预算耗尽才报 EOF
+                    if !self.wait_before_retry(&mut retries, "响应提前结束", None) {
+                        return Err(io::Error::new(
+                            io::ErrorKind::UnexpectedEof,
+                            "Premature EOF from server",
+                        ));
                     }
-                    Err(e) => {
-                        tracing::warn!("HTTP stream read error: {}, reconnecting...", e);
-                        self.current_resp = None;
-                        retries += 1;
-                        if retries > 3 {
-                            return Err(e);
-                        }
-                        continue;
+                    continue;
+                }
+                Ok(n) => {
+                    self.offset += n as u64;
+                    self.resp_offset += n as u64;
+                    return Ok(n);
+                }
+                Err(e) => {
+                    if !self.wait_before_retry(&mut retries, "数据流读取失败", None) {
+                        tracing::error!("HTTP stream read error: {}", e);
+                        return Err(e);
                     }
+                    continue;
                 }
             }
         }

@@ -1,4 +1,5 @@
 pub mod ai;
+pub mod backoff;
 pub mod cache;
 pub mod cover;
 pub mod file_priority;

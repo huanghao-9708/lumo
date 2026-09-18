@@ -3,11 +3,16 @@ use crate::commands::playback::{
 };
 use crate::db::DbState;
 use crate::error::AppError;
+use crate::services::backoff::FailureBackoff;
 use crate::services::cache::AudioCacheState;
 use crate::services::queue::{PlayMode, PlaybackQueueStateDto, QueueItem, QueueState};
 use std::path::PathBuf;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
+
+/// 自动切歌失败的退避参数：第 1 次失败等 1 秒，翻倍递增，封顶 15 秒。
+const ADVANCE_RETRY_BASE: Duration = Duration::from_secs(1);
+const ADVANCE_RETRY_MAX: Duration = Duration::from_secs(15);
 
 #[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -313,6 +318,11 @@ pub fn queue_watcher_loop(app: AppHandle) {
     let mut next_enqueued_index: Option<usize> = None;
     let mut last_progress_ms = 0u64;
     let mut last_save_time = std::time::Instant::now();
+    // 自动切歌连续失败的退避状态。观察者循环本身 250ms 一跳，而切歌失败的常见原因是
+    // 网络侧（WebDAV 分段读取），不节流就等于以 4Hz 重放同一首、每次都重发错误事件、
+    // 每次都可能再挂一个后台缓存下载线程。
+    let mut advance_backoff = FailureBackoff::new(ADVANCE_RETRY_BASE, ADVANCE_RETRY_MAX);
+    let mut next_attempt_at: Option<std::time::Instant> = None;
     let app_dir = app
         .path()
         .app_data_dir()
@@ -388,6 +398,11 @@ pub fn queue_watcher_loop(app: AppHandle) {
 
         // 2. 切歌事件判定（底层队列从 2->1 变为下一首开始播放，或当前曲目播完）
         let just_finished = is_empty || (queue_len == 1 && next_enqueued_index.is_some());
+        if !just_finished {
+            // 已经正常播起来了：解除退避，避免上一次故障拖慢之后的正常切歌
+            advance_backoff.reset();
+            next_attempt_at = None;
+        }
 
         if just_finished {
             if let Some(next_idx) = next_enqueued_index.take() {
@@ -415,24 +430,40 @@ pub fn queue_watcher_loop(app: AppHandle) {
             } else {
                 // 非 gapless 切换或者最后一曲
                 if let Some(next_idx) = q.next_index() {
+                    if let Some(at) = next_attempt_at {
+                        if std::time::Instant::now() < at {
+                            // 退避窗口内：不打网络、不发错误事件，等下一跳再看
+                            continue;
+                        }
+                        next_attempt_at = None;
+                    }
                     drop(q);
-                    if let Err(e) =
-                        internal_play_item(&app, &queue_state, &playback_state, next_idx, false)
-                    {
-                        tracing::error!(
-                            "[队列推进] 自动切歌下一首失败（next_idx={}）: {}",
-                            next_idx,
-                            e
-                        );
-                        let _ = app.emit(
-                            "playback-error",
-                            serde_json::json!({
-                                "index": next_idx,
-                                "message": e.to_string(),
-                            }),
-                        );
-                        let _ =
-                            crate::services::platform::update_foreground("", "", "", false, 0, 0);
+                    match internal_play_item(&app, &queue_state, &playback_state, next_idx, false) {
+                        Ok(()) => advance_backoff.reset(),
+                        Err(e) => {
+                            let delay = advance_backoff.record_failure();
+                            next_attempt_at = Some(std::time::Instant::now() + delay);
+                            tracing::error!(
+                                "[队列推进] 自动切歌下一首失败（next_idx={}，连续第 {} 次），{}ms 后重试: {}",
+                                next_idx,
+                                advance_backoff.failures(),
+                                delay.as_millis(),
+                                e
+                            );
+                            // 只在连续失败的第一次通知前端：否则一次网络抖动会刷出一串 toast
+                            if advance_backoff.failures() == 1 {
+                                let _ = app.emit(
+                                    "playback-error",
+                                    serde_json::json!({
+                                        "index": next_idx,
+                                        "message": e.to_string(),
+                                    }),
+                                );
+                            }
+                            let _ = crate::services::platform::update_foreground(
+                                "", "", "", false, 0, 0,
+                            );
+                        }
                     }
                 } else {
                     // Normal 模式播到队尾，停止
