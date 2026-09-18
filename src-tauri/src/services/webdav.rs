@@ -495,7 +495,7 @@ impl WebdavClient {
 const RANGE_MAX_RETRIES: u32 = 3;
 const RANGE_RETRY_BASE: Duration = Duration::from_millis(100);
 const RANGE_RETRY_MAX: Duration = Duration::from_millis(1_000);
-/// 采纳服务端 `Retry-After` 的上限：超过它只等到该秒数再重试，分钟级等待按失败处理。
+/// 采纳服务端 `Retry-After` 的上限：不超过它原样等待，超过它只等满该时长再重试。
 const RANGE_RETRY_AFTER_CAP: Duration = Duration::from_secs(5);
 /// 整文件下载的重试次数（只覆盖状态码与连接层失败，不覆盖断流续传）。
 const DOWNLOAD_MAX_RETRIES: u32 = 3;

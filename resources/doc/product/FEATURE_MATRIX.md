@@ -103,7 +103,9 @@
 1. **不使用"同步"描述备份恢复**（决策 D-02）。当前实现为整库快照覆盖，无冲突处理与实体合并；"同步"保留给未来具备合并能力的实现。
 2. **不以底层库 features 代替产品支持**，格式一律以 §3 白名单为准。
 3. **不使用"原生支持 Linux/macOS""全平台"表述**；macOS/Linux 统一称「技术预览，未经真实验证」。
-4. **不使用"20 万曲库不劣化"**。唯一实测为 6000 曲库级别扫描，其余为设计目标；体积/内存声明须待 I3 `PERFORMANCE_BASELINE.md` 实测区间。
+4. **不使用"20 万曲库不劣化"**。I3 已建立 `PERFORMANCE_BASELINE.md`，但**只覆盖数据库/查询层**：
+   实测 30k 首内可用，且首屏列表在 1 万首以上已可感知（127.6 ms，缺口 G-15）→ 连"3 万曲库无感"都不得声明。
+   启动/首播/切歌/内存/安装包体积**无实测**，相应数字一律不出笼（该文件 §4 为禁止声明清单）。
 5. **AI 电台为可选增强（Beta）**，不得写入核心功能栏（决策 D-01）。
 6. **Android 在真机冒烟矩阵完成前不得称"已发布正式版"**；当前对外应表述为「预览版」。
 7. 任何对外功能声明必须能在本表找到对应「平台 + 状态 + 验证证据」三元组，否则不予发布。
@@ -118,13 +120,15 @@
 | G-04 | 恢复失败时回滚错误被 `let _ =` 丢弃，随后**无条件删除唯一回退副本**（`commands/sync.rs`） | **P0（不可恢复）** | **已修** `e650de1`：`rollback()` 保留副本，双重失败时告知副本路径 |
 | G-05 | 备份恢复后用户凭据丢失（快照剔除 `credential_ref`/密码）；上传无远端 temp+rename，断流即覆盖上一份好快照；非 Lumo 库/更高版本库可被直接恢复 | **P0（数据损失）** | **已修** `e650de1`：PUT `tmp-*` → sha256 sidecar → MOVE 原子替换；恢复前 `assert_lumo_snapshot` 甄别魔数/归属/版本区间；脱敏失败中止上传。凭据按设计不入快照，属既定策略非缺陷 |
 | G-06 | 隐私开关存 localStorage，可被直连 IPC 绕过（`stores/ui.ts:126` 自称"双保险"） | P1 | I2 |
-| G-07 | 扫描无 job id/generation、无取消机制；`ScanGuard` 创建前的 `?` 早退会让来源永久标记为扫描中（`commands/scanner.rs`） | P1 | I3 未闭合 |
-| G-08 | `last_scan_at` 在失败路径也无条件刷新，无 `last_success_at`；前端一律显示"刚刚扫描"，`last_error` 无任何组件渲染 | P1 | I3 未闭合 |
+| G-07 | 扫描无 job id/generation、无取消机制；`ScanGuard` 创建前的 `?` 早退会让来源永久标记为扫描中（`commands/scanner.rs`） | P1 | **部分已修** `e0386fa`：扫描权改为 `ScanGuard` 抢占（RAII），任何早退/panic/线程启动失败都会解除标记，同一来源并发扫描直接拒绝。残余：**无 job id/generation、无取消**（需要扫描任务模型，属产品设计而非缺陷修补）→ 移交 I4 |
+| G-08 | `last_scan_at` 在失败路径也无条件刷新，无 `last_success_at`；前端一律显示"刚刚扫描"，`last_error` 无任何组件渲染 | P1 | **已修** `e0386fa`：`record_scan_result` 只在完整成功时推进 `last_scan_at` 并清 `last_error`，失败只写原因；前端改为读真实 `last_scan_at`（"从未扫描成功"/"上次成功：…"）并在桌面与移动来源列表渲染 `last_error` |
 | G-09 | 缓存下载与快照 PUT 共用 60s 总超时 client → 大文件必被掐断；builder 失败静默回退 `Client::new()`（零超时） | P1 | **已修** `8e033c1`：`bulk_client`（连接超时 + TCP keepalive，无总超时），构建失败 `tracing::error!` 留痕 |
 | G-10 | 截断下载被当作有效缓存（rename 前只判 `bytes != 0`，不比对 DB `file_size`；`is_cached` 只看 `len>0`）→ 永久损坏播放 | P1 | **已修**：三处重复下载逻辑收敛到 `AudioCache::store_from_webdav` + 期望大小校验，命中即删坏缓存并重下；`playback_is_cached` 与批量可播性查询同口径；回归 `cache.rs` 6 项测试 |
 | G-11 | 缓存淘汰按 mtime 会删写入中的 `.tmp`；下载标记非 RAII，panic/提前返回后永久卡"正在缓存中"；`clear()` 把删除失败也计入释放量 | P1 | **已修**：`DownloadGuard` RAII；prune 跳过 `.tmp` 且命中即 touch mtime（按最近使用淘汰，正在播放的文件排在最后）；`clear()` 只计实际删除。残余：跨平台"正在播放"是 mtime 近似而非硬锁 |
-| G-12 | 429/5xx 无退避；`HttpRangeReader` 3 次重试无 sleep；队列表自动切歌失败时以 250ms 节奏打全队列 | P2 | I3 |
+| G-12 | 429/5xx 无退避；`HttpRangeReader` 3 次重试无 sleep；队列表自动切歌失败时以 250ms 节奏打全队列 | P2 | **已修** `f7887a9`：新增 `services/backoff.rs`（指数退避 + `Retry-After` 解析，纯函数含 5 项单测）。Range 读：连接失败/可重试状态码/提前断流/流读错误共用 3 次预算，100ms 起封顶 1s，`Retry-After` 封顶 5s，预算耗尽报"暂时不可用"而非"不支持分段读取"；整文件下载：仅对未开始传字节的失败重试（500ms 起封顶 8s）；队列自动切歌：1s 起封顶 15s 退避，`playback-error` 只在连续失败第一次发出。未纳入退避：PROPFIND/MKCOL/DELETE/PUT 快照与元数据、歌词侧请求仍单次尝试（见 `NETWORK_BEHAVIOR.md` §2E） |
 | G-13 | 扫描无拼音搜索、无音频输出设备选择、无系统托盘（VISION 承诺但未实现） | P3 | 范围外，入 Post-Stable Backlog |
+| G-14 | 崩溃/断电遗留的 `audio_cache/*.tmp` 永不被淘汰（prune 跳过 `.tmp`），但计入 `size_bytes()` → 缓存体积只涨不清 | P3 | I4（新增于 I3 收尾；启动时按 mtime 清理过期 `.tmp`） |
+| G-15 | 首屏列表随曲库线性变慢：30k 首时取 200 条要 127.6 ms，约 95% 成本来自 SELECT 相关子查询在全表求值（同排序裸取 200 id 仅 6.4 ms） | P2 | B-20（性能基线已建立，见 `PERFORMANCE_BASELINE.md` §3.1） |
 
 ## 6. 复核待办
 
