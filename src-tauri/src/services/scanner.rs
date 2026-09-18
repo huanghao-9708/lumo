@@ -473,27 +473,16 @@ pub fn scan_local_directory(app: AppHandle, source_id: i64, path: &Path, app_dat
                 }
             }
 
-            // Update the last_scan_at timestamp
-            let _ = conn.execute(
-                "UPDATE sources SET last_scan_at = datetime('now') WHERE id = ?1",
-                rusqlite::params![source_id],
-            );
-
             // Also update last_seen_at for all scanned paths to keep them 'available'
             let _ = conn.execute(
                 "UPDATE media_files SET last_seen_at = datetime('now') WHERE source_id = ?1 AND availability = 'available'",
                 rusqlite::params![source_id]
             );
-            let _ = conn.execute(
-                "UPDATE sources SET last_scan_at = datetime('now'), last_error = ?1 WHERE id = ?2",
-                rusqlite::params![
-                    if scan_failed {
-                        Some("扫描未完成，已跳过缺失文件清理")
-                    } else {
-                        None
-                    },
-                    source_id
-                ],
+            record_scan_result(
+                &conn,
+                source_id,
+                scan_failed,
+                "扫描未完成，已跳过缺失文件清理",
             );
         }
     }
@@ -733,16 +722,11 @@ pub fn scan_webdav_directory(
             "UPDATE media_files SET last_seen_at = datetime('now') WHERE source_id = ?1 AND availability = 'available'",
             rusqlite::params![source_id],
         );
-        let _ = conn.execute(
-            "UPDATE sources SET last_scan_at = datetime('now'), last_error = ?1 WHERE id = ?2",
-            rusqlite::params![
-                if scan_failed {
-                    Some("WebDAV 扫描未完成，已跳过缺失文件清理")
-                } else {
-                    None
-                },
-                source_id
-            ],
+        record_scan_result(
+            conn,
+            source_id,
+            scan_failed,
+            "WebDAV 扫描未完成，已跳过缺失文件清理",
         );
     }
 
@@ -800,14 +784,45 @@ fn mark_scan_error(conn: &Connection, source_id: i64, source_root: &Path, path: 
     );
 }
 
+/// 扫描状态记账（G-08）。
+///
+/// `last_scan_at` 从此只代表「上一次**成功**扫描」：失败路径不再推进它，只写 `last_error`。
+/// 此前两者一起刷新，一个每次都失败的来源在界面上仍显示"刚刚扫描"，
+/// 用户完全看不出它其实一直没成功过。
+fn record_scan_result(
+    conn: &rusqlite::Connection,
+    source_id: i64,
+    failed: bool,
+    failure_note: &str,
+) {
+    let result = if failed {
+        conn.execute(
+            "UPDATE sources SET last_error = ?1 WHERE id = ?2",
+            rusqlite::params![failure_note, source_id],
+        )
+    } else {
+        conn.execute(
+            "UPDATE sources SET last_scan_at = datetime('now'), last_error = NULL WHERE id = ?1",
+            rusqlite::params![source_id],
+        )
+    };
+    if let Err(e) = result {
+        warn!("更新来源 {} 扫描状态失败: {}", source_id, e);
+    }
+}
+
 fn update_scan_status(app: &AppHandle, source_id: i64, success: bool, error_message: Option<&str>) {
     let Some(db_state) = app.try_state::<DbState>() else {
         return;
     };
-    let Ok(conn) = db_state.db.get() else { return };
-    let message = if success { None } else { error_message };
-    let _ = conn.execute(
-        "UPDATE sources SET last_scan_at = datetime('now'), last_error = ?1 WHERE id = ?2",
-        rusqlite::params![message, source_id],
+    let Ok(conn) = db_state.db.get() else {
+        warn!("无法记录来源 {} 的扫描状态：取不到数据库连接", source_id);
+        return;
+    };
+    record_scan_result(
+        &conn,
+        source_id,
+        !success,
+        error_message.unwrap_or("扫描未完成"),
     );
 }

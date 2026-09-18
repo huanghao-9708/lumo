@@ -92,6 +92,8 @@ export interface MusicSource {
   path: string;
   isEnabled: boolean;
   lastScanned: string;
+  /** 上次扫描的错误说明；为空表示上次扫描成功 */
+  lastError?: string;
   username?: string;
 }
 
@@ -1949,6 +1951,8 @@ const albums = shallowRef<Album[]>([]);
         path: s.root_uri,
         isEnabled: s.enabled,
         lastScanned: s.last_scan_at ? new Date(s.last_scan_at).toLocaleString() : 'Never',
+        // 后端只在扫描成功时推进 last_scan_at，失败信息全在这里（I3/G-08）
+        lastError: s.last_error ?? undefined,
         username: s.username ?? undefined
       }));
     } catch (e) {
@@ -2021,12 +2025,10 @@ const albums = shallowRef<Album[]>([]);
       }
     });
 
-    unlistenScanComplete = await listen('scan-complete', async (event: any) => {
-      const sourceId = event.payload as number;
-      const source = sources.value.find(s => s.id === sourceId);
-      if (source) {
-        source.lastScanned = "刚刚扫描";
-      }
+    unlistenScanComplete = await listen('scan-complete', async () => {
+      // 扫描结果一律以重新拉取为准：写死"刚刚扫描"会把失败的扫描报成成功
+      // （后端 last_scan_at 只在成功时推进，失败原因在 last_error）。
+      await fetchSources();
       await fetchTracks(true);
       await fetchAlbums(true);
       await fetchArtists(true);

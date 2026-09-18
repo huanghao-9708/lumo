@@ -48,9 +48,10 @@ function isScanning(s: MusicSource) {
 }
 
 function lastScannedText(s: MusicSource): string {
-  if (s.lastScanned === 'Never') return '未扫描';
+  if (s.lastScanned === 'Never') return s.lastError ? '从未扫描成功' : '未扫描';
   if (s.lastScanned === 'Error') return '上次扫描失败';
-  return s.lastScanned;
+  // 后端只在扫描成功时推进 last_scan_at，所以这个时间就是"上次成功"
+  return s.lastError ? `上次成功：${s.lastScanned}` : s.lastScanned;
 }
 
 function startAdd() {
@@ -174,6 +175,10 @@ async function confirmDelete() {
           <div class="min-w-0 flex-1">
             <p class="text-[13px] text-text-primary truncate leading-tight">{{ s.name }}</p>
             <p class="text-[11px] text-text-muted truncate mt-0.5">{{ s.path }}</p>
+            <!-- 扫描失败原因此前只存在 DB 里，没有任何组件渲染（I3/G-08） -->
+            <p v-if="s.lastError && !isScanning(s)" class="text-[11px] text-status-error truncate mt-0.5">
+              {{ s.lastError }}
+            </p>
           </div>
           <span v-if="!isScanning(s)" class="text-[10px] text-text-disabled shrink-0">{{ lastScannedText(s) }}</span>
           <Loader2 v-if="isScanning(s)" class="w-4 h-4 text-brand-orange animate-spin shrink-0" />

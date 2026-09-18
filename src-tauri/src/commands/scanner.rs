@@ -11,24 +11,29 @@ use tauri::{Manager, State};
 static SCANNING_SOURCES: LazyLock<Mutex<HashSet<i64>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
 
-fn mark_scanning(source_id: i64) -> bool {
-    SCANNING_SOURCES
-        .lock()
-        .map(|mut set| set.insert(source_id))
-        .unwrap_or(false)
-}
+/// RAII 守卫：占用某来源的扫描权，Drop 时解除标记。
+///
+/// 关键点是**在 `source_scan` 取得数据库连接之前**就构造，并随闭包移入扫描线程。
+/// 若在 mark 与守卫构造之间存在 `?` 早退（取连接失败、来源已被删除），
+/// 该来源会永久停在"扫描中"，之后每次点击都被幂等守卫拒绝，只能重启进程。
+struct ScanGuard(i64);
 
-fn unmark_scanning(source_id: i64) {
-    if let Ok(mut set) = SCANNING_SOURCES.lock() {
-        set.remove(&source_id);
+impl ScanGuard {
+    /// 抢占扫描权；该来源已有扫描在进行时返回 None。
+    fn try_new(source_id: i64) -> Option<Self> {
+        SCANNING_SOURCES
+            .lock()
+            .map(|mut set| set.insert(source_id))
+            .unwrap_or(false)
+            .then_some(Self(source_id))
     }
 }
 
-/// RAII 守卫：扫描线程无论正常结束还是 panic 都会解除标记。
-struct ScanGuard(i64);
 impl Drop for ScanGuard {
     fn drop(&mut self) {
-        unmark_scanning(self.0);
+        if let Ok(mut set) = SCANNING_SOURCES.lock() {
+            set.remove(&self.0);
+        }
     }
 }
 
@@ -273,12 +278,10 @@ pub fn source_scan(
     source_id: i64,
 ) -> Result<(), AppError> {
     let _trace = ipc_trace!("source_scan");
-    // P1-10 幂等守卫：同一来源重复触发扫描直接拒绝（前端 UI 有软守卫，这里是硬防线）
-    if !mark_scanning(source_id) {
-        return Err(AppError::Internal(
-            "该来源正在扫描中，请等待本次扫描完成".to_string(),
-        ));
-    }
+    // P1-10 幂等守卫：同一来源重复触发扫描直接拒绝（前端 UI 有软守卫，这里是硬防线）。
+    // 守卫必须在下面任何 `?` 之前取得，早退时才会自动释放扫描权。
+    let scan_guard = ScanGuard::try_new(source_id)
+        .ok_or_else(|| AppError::Internal("该来源正在扫描中，请等待本次扫描完成".to_string()))?;
     let (kind, path, credential) = {
         let conn = db_state.db.get()?;
         let (k, r, c): (String, String, Option<String>) = conn.query_row(
@@ -295,45 +298,52 @@ pub fn source_scan(
         .unwrap_or_else(|_| PathBuf::from("."));
     let key = derive_credential_key(&app_dir);
 
-    std::thread::spawn(move || {
-        // RAII：正常结束 / 提前 return / panic 都会解除扫描标记
-        let _scan_guard = ScanGuard(source_id);
-        if kind == "local" {
-            crate::services::scanner::scan_local_directory(
-                app,
-                source_id,
-                &PathBuf::from(path),
-                &app_dir,
-            );
-        } else if kind == "webdav" {
-            // 凭据解析（P1-08 统一入口）：支持钥匙串引用 / V6 加密 / V5 明文；
-            // 桌面端解析成功后懒迁移进系统钥匙串。解析失败中止扫描并发出 scan-complete。
-            let (username, password) = match credential.as_deref() {
-                Some(cred) => {
-                    let conn = match app.state::<DbState>().db.get() {
-                        Ok(c) => c,
-                        Err(_) => {
-                            tracing::error!("扫描中止：来源 {} 无法获取数据库连接", source_id);
-                            let _ = tauri::Emitter::emit(&app, "scan-complete", source_id);
-                            return;
-                        }
-                    };
-                    match resolve_source_credential(&conn, source_id, cred, &key) {
-                        Ok((u, p)) => (Some(u), p),
-                        Err(e) => {
-                            tracing::error!("扫描中止：来源 {} 凭据解析失败: {}", source_id, e);
-                            let _ = tauri::Emitter::emit(&app, "scan-complete", source_id);
-                            return;
+    let _handle = std::thread::Builder::new()
+        .name(format!("lumo-scan-{}", source_id))
+        .spawn(move || {
+            // 守卫随闭包进入线程：正常结束 / 提前 return / panic 都会解除标记
+            let _scan_guard = scan_guard;
+            if kind == "local" {
+                crate::services::scanner::scan_local_directory(
+                    app,
+                    source_id,
+                    &PathBuf::from(path),
+                    &app_dir,
+                );
+            } else if kind == "webdav" {
+                // 凭据解析（P1-08 统一入口）：支持钥匙串引用 / V6 加密 / V5 明文；
+                // 桌面端解析成功后懒迁移进系统钥匙串。解析失败中止扫描并发出 scan-complete。
+                let (username, password) = match credential.as_deref() {
+                    Some(cred) => {
+                        let conn = match app.state::<DbState>().db.get() {
+                            Ok(c) => c,
+                            Err(_) => {
+                                tracing::error!("扫描中止：来源 {} 无法获取数据库连接", source_id);
+                                let _ = tauri::Emitter::emit(&app, "scan-complete", source_id);
+                                return;
+                            }
+                        };
+                        match resolve_source_credential(&conn, source_id, cred, &key) {
+                            Ok((u, p)) => (Some(u), p),
+                            Err(e) => {
+                                tracing::error!("扫描中止：来源 {} 凭据解析失败: {}", source_id, e);
+                                let _ = tauri::Emitter::emit(&app, "scan-complete", source_id);
+                                return;
+                            }
                         }
                     }
-                }
-                None => (None, None),
-            };
-            crate::services::scanner::scan_webdav_directory(
-                app, source_id, path, username, password, &app_dir,
-            );
-        }
-    });
+                    None => (None, None),
+                };
+                crate::services::scanner::scan_webdav_directory(
+                    app, source_id, path, username, password, &app_dir,
+                );
+            }
+        })
+        .map_err(|e| {
+            // 起不了线程时闭包被丢弃，守卫随之释放；必须把失败告知用户，
+            // 否则前端以为扫描已启动，进度条会一直挂着。
+            AppError::Internal(format!("无法启动扫描任务: {}", e))
+        })?;
 
     Ok(())
 }

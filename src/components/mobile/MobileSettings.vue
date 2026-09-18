@@ -412,6 +412,10 @@ async function runProbe() {
             <p class="text-text-muted font-mono uppercase truncate" style="font-size: var(--text-11);">
               {{ source.kind === 'webdav' ? 'WebDAV' : '本地' }} · {{ source.lastScanned }}
             </p>
+            <!-- 扫描失败原因（I3/G-08）：last_scan_at 只在成功时推进，失败只看这行 -->
+            <p v-if="source.lastError" class="text-status-error truncate" style="font-size: var(--text-11);">
+              {{ source.lastError }}
+            </p>
           </div>
           <button
             class="flex-shrink-0 px-3 py-1 rounded-[6px] border border-border-solid text-[13px] font-medium text-text-secondary active:bg-list-hover transition-colors-smooth flex items-center gap-1"
