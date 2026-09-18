@@ -9,6 +9,10 @@ use std::sync::Mutex;
 use tauri::{Manager, State};
 // For storing PlaybackManager state
 
+/// lrclib 在线歌词请求超时（秒）。
+/// 这个调用挂在切歌路径上，没有超时时慢速/黑洞化的第三方会把 IPC 卡死。
+const LRCLIB_TIMEOUT_SECS: u64 = 15;
+
 #[tauri::command(async)]
 pub fn library_get_tracks(
     db_state: State<'_, DbState>,
@@ -413,7 +417,9 @@ pub async fn library_get_lyrics(
             .append_pair("duration", &d.to_string());
     }
 
+    // 必须设超时：这是播放路径上的同步 IPC，慢速/黑洞化的 lrclib 会让切歌卡住
     let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(LRCLIB_TIMEOUT_SECS))
         .user_agent("LumoMusicPlayer/1.0.0")
         .build()
         .map_err(|e| AppError::Io(std::io::Error::other(e.to_string())))?;

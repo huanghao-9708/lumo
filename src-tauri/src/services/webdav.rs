@@ -30,7 +30,8 @@ pub struct WebdavClient {
     pub client: Client,
     /// 大体积传输专用客户端（整文件下载、DB 快照上传）：保留连接超时，但**不设总超时**——
     /// reqwest 的总超时覆盖整个响应体，大文件传输会被 60s 掐断。
-    /// 取而代之用 `read_timeout` 兜住「连接挂着不动」：只要还在持续收/发字节就允许继续。
+    /// 挂死的连接改由 TCP keepalive 探测（blocking 客户端没有 read_timeout，只有这一层能兜住
+    /// "连上了但不再传字节"）。
     pub bulk_client: Client,
     pub base_url: String,
     pub username: Option<String>,
@@ -51,7 +52,10 @@ impl WebdavClient {
             });
         let bulk_client = Client::builder()
             .connect_timeout(Duration::from_secs(10))
-            .read_timeout(Duration::from_secs(120))
+            // 不用 timeout()：它覆盖整个响应体，GB 级快照/曲库文件会被掐断。
+            // keepalive 让"连上后对端不再发字节"的死连接由 OS 探测出来。
+            .tcp_keepalive(Duration::from_secs(30))
+            .tcp_keepalive_interval(Duration::from_secs(10))
             .build()
             .unwrap_or_else(|e| {
                 tracing::error!("无法构建大文件传输 HTTP 客户端，退回默认客户端: {}", e);
