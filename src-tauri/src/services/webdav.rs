@@ -420,8 +420,16 @@ impl WebdavClient {
 
     /// PUT：上传文件内容到指定 URL（上传 DB 快照用）。
     /// 走 bulk_client：快照可能有上百 MB，60s 总超时会把慢速上传掐断在半程。
-    pub fn put_file(&self, file_url: &str, data: Vec<u8>) -> Result<(), String> {
-        let req = self.apply_auth(self.bulk_client.put(file_url).body(data));
+    ///
+    /// body 收 `Into<Body>` 而不是 `Vec<u8>`：上百 MB 至 GiB 级的快照读进内存再克隆一份，
+    /// 峰值内存就是「两份完整数据库」，低内存设备上进程会被系统直接杀掉（CR-004）。
+    /// 传 `File` 时 reqwest 按 metadata 推出 content-length 并边读边发。
+    pub fn put_file<B: Into<reqwest::blocking::Body>>(
+        &self,
+        file_url: &str,
+        body: B,
+    ) -> Result<(), String> {
+        let req = self.apply_auth(self.bulk_client.put(file_url).body(body.into()));
         let resp = req
             .send()
             .map_err(|e| format!("PUT request failed: {}", e))?;

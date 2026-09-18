@@ -1,5 +1,6 @@
 use crate::models::{SyncConfigDTO, SyncResult};
 use crate::services::webdav::{WebdavClient, WebdavFile};
+use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection};
 use std::fs::File;
 use std::io::Read;
@@ -18,6 +19,13 @@ const REMOTE_CHECKSUM_NAME: &str = "lumo.sqlite.sha256";
 
 /// 恢复前副本（救援副本）的文件名后缀，见 [`SyncService::rescue_backup_path`]。
 const RESCUE_BACKUP_SUFFIX: &str = "restore_bak";
+
+/// 远端暂存对象的最短存活期（24 小时），见 [`is_stale_staging`]。
+///
+/// 暂存名后缀是设备本地的「进程号+纳秒」，一台设备无从判断远端那份 `tmp-*` 是不是
+/// 另一台设备正在上传的半成品，所以只能按 mtime 划界。24 小时远大于一次备份
+/// （即便 2 GiB 走慢速链路）的合理耗时，超过它就可以认定是残留。
+const STALE_STAGING_MIN_AGE_SECS: i64 = 24 * 3600;
 
 /// SQLite 文件头魔数（前 16 字节）。合法数据库必然以它开头。
 const SQLITE_HEADER_MAGIC: &[u8; 16] = b"SQLite format 3\0";
@@ -446,7 +454,6 @@ impl SyncService {
             .map_err(|e| e.to_string())?
             .len();
         let checksum = sha256_of_file(&snapshot)?;
-        let data = std::fs::read(&snapshot).map_err(|e| format!("读取快照失败: {}", e))?;
 
         // 确保远程目录存在
         let remote_dir = config.remote_path.as_deref().unwrap_or("/");
@@ -454,32 +461,50 @@ impl SyncService {
             let dir_url = Self::remote_file_url(config, "")?;
             let _ = client.mkcol(&dir_url); // 忽略 405 已存在
         }
+        // 上一版本 / 其它设备半途失败留下的暂存名，开工前先收掉（CR-003）
+        Self::cleanup_stale_staging(&client, remote_dir);
 
         let upload_url = Self::remote_file_url(config, REMOTE_SNAPSHOT_NAME)?;
         let checksum_url = Self::remote_file_url(config, REMOTE_CHECKSUM_NAME)?;
-        let staging_name = format!("{}.tmp-{}", REMOTE_SNAPSHOT_NAME, staging_suffix());
+        let staging_name = remote_staging_name(&staging_suffix());
         let staging_url = Self::remote_file_url(config, &staging_name)?;
 
+        // 暂存名的清理不写在失败分支里，而是交给守卫：校验和 PUT 失败、MOVE 之后的
+        // 降级 PUT 失败、甚至 panic，都不该在用户配额里永久留下一份完整数据库副本（CR-003）。
+        let mut staging =
+            RemoteStagingGuard::new(|url| client.delete(url), staging_url.clone(), staging_name);
+
         let upload_result = (|| -> Result<(), String> {
-            client.put_file(&staging_url, data.clone())?;
+            // 每次 PUT 各自重新打开快照文件流式上传：内存里不同时存在两份整库字节（CR-004）
+            client.put_file(&staging_url, open_snapshot(&snapshot)?)?;
             // 校验和先于正式名就位：任何时刻远端的 `lumo.sqlite` 都不会配上更新的校验和，
             // 最坏情况是校验和比库新（恢复侧按「不匹配」拒绝，重新备份一次即可自愈），
             // 而不是校验和比库旧（会放过损坏数据）。
             client.put_file(&checksum_url, checksum.as_bytes().to_vec())?;
-            if let Err(e) = client.move_file(&staging_url, &upload_url) {
-                tracing::warn!("WebDAV MOVE 不可用，退回直接 PUT 覆盖：{}", e);
-                let _ = client.delete(&staging_url);
-                client.put_file(&upload_url, data)?;
+            match client.move_file(&staging_url, &upload_url) {
+                Ok(()) => staging.disarm(),
+                Err(e) => {
+                    tracing::warn!("WebDAV MOVE 不可用，退回直接 PUT 覆盖：{}", e);
+                    // 显式删暂存名（守卫随之解除），降级路径不留第二份
+                    if let Some(detail) = staging.cleanup() {
+                        tracing::warn!("远端暂存文件 {} 清理失败：{}", staging.name(), detail);
+                    }
+                    client.put_file(&upload_url, open_snapshot(&snapshot)?)?;
+                }
             }
             Ok(())
         })();
+        // 成功与降级路径都会走到这里：守卫已解除时返回 None，不会多发一次 DELETE
+        let residue = staging.cleanup();
 
         // 本地快照无论成败都清掉：它是完整库的副本，留在数据目录里只会被误读
         let _ = std::fs::remove_file(&snapshot);
         Self::remove_sidecar_files(&snapshot);
-        upload_result?;
+        upload_result.map_err(|e| match residue {
+            Some(detail) => staging_residue_message(&e, staging.name(), &detail),
+            None => e,
+        })?;
 
-        use chrono::Utc;
         let timestamp = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
         // 更新 last_sync_at
@@ -493,6 +518,42 @@ impl SyncService {
             bytes_uploaded: file_size,
             timestamp,
         })
+    }
+
+    /// 尽力清理远端目录里**本应用**的陈旧暂存对象（`lumo.sqlite.tmp-*`，见 CR-003）。
+    ///
+    /// 为什么只清「旧到一定年纪」的：暂存名里带的是设备本地的 pid+纳秒，跨设备无从判断
+    /// 是不是别人正在传的那一份；用 mtime 划界才能保证不会误删另一台设备进行中的上传。
+    /// PROPFIND 失败、删除失败都只记日志——清理不该把一次正常备份变成失败。
+    fn cleanup_stale_staging(client: &WebdavClient, remote_dir: &str) {
+        let files = match client.propfind(remote_dir) {
+            Ok(files) => files,
+            Err(e) => {
+                tracing::debug!("清理远端暂存文件前 PROPFIND 失败，跳过清理：{}", e);
+                return;
+            }
+        };
+        let now = Utc::now();
+        for file in files {
+            if file.is_dir {
+                continue;
+            }
+            let name = file_basename(&file.path);
+            if !is_stale_staging(&name, &file.last_modified, now, STALE_STAGING_MIN_AGE_SECS) {
+                continue;
+            }
+            let url = match client.build_url(&file.path) {
+                Ok(url) => url,
+                Err(e) => {
+                    tracing::warn!("远端暂存文件地址无法解析，跳过 {}：{}", name, e);
+                    continue;
+                }
+            };
+            match client.delete(&url) {
+                Ok(()) => tracing::info!("已清理陈旧的远端暂存文件 {}", name),
+                Err(e) => tracing::warn!("远端暂存文件 {} 清理失败：{}", name, e),
+            }
+        }
     }
 
     /// 下载云端快照到本地唯一临时文件，返回文件路径。
@@ -618,6 +679,152 @@ fn staging_suffix() -> String {
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     format!("{}-{}", std::process::id(), nanos)
+}
+
+/// 远端暂存对象名：正式快照名 + `tmp-` + 设备本地唯一后缀。
+fn remote_staging_name(suffix: &str) -> String {
+    format!("{}.tmp-{}", REMOTE_SNAPSHOT_NAME, suffix)
+}
+
+/// 本应用暂存对象的共同前缀，用于在远端目录里认出「这是我们遗留的半成品」。
+fn staging_prefix() -> String {
+    format!("{}.tmp-", REMOTE_SNAPSHOT_NAME)
+}
+
+/// 以只读方式打开快照，交给 reqwest 流式 PUT（CR-004）。
+///
+/// 每次调用都新开一个句柄：暂存 PUT 与降级 PUT 各自独立读盘，
+/// 内存里因此不会同时存在两份完整数据库的字节。
+fn open_snapshot(path: &Path) -> Result<File, String> {
+    File::open(path).map_err(|e| format!("读取快照失败: {}", e))
+}
+
+/// 从 PROPFIND 返回的路径（可能是相对子路径，也可能是完整 URL）中取出对象名。
+fn file_basename(path: &str) -> String {
+    path.trim_end_matches('/')
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(path)
+        .to_string()
+}
+
+/// 判断远端对象是否是本应用可以安全清理的陈旧暂存文件（CR-003）。
+///
+/// 三个条件缺一不可：名字符合本应用的暂存格式、服务器给出了时间、且已超过最短存活期。
+/// 时间缺失、格式无法解析、或落在未来（服务器时钟不准）一律返回 false——
+/// 误删另一台设备进行中的上传，代价远大于多在配额里留一个残留。
+fn is_stale_staging(
+    name: &str,
+    last_modified: &str,
+    now: DateTime<Utc>,
+    min_age_secs: i64,
+) -> bool {
+    let Some(suffix) = name.strip_prefix(&staging_prefix()) else {
+        return false;
+    };
+    if suffix.is_empty() || !suffix.bytes().all(|b| b.is_ascii_digit() || b == b'-') {
+        return false;
+    }
+    let Some(mtime) = parse_remote_timestamp(last_modified) else {
+        return false;
+    };
+    // 未来时间（时钟漂移）走的是有符号减法，结果为负，自然落在「不删」一侧
+    now.signed_duration_since(mtime).num_seconds() > min_age_secs
+}
+
+/// 解析 WebDAV `getlastmodified`：规范值是 HTTP-date（RFC 1123），
+/// 但不少服务器返回 RFC 3339 或裸时间戳，逐个尝试，解析不出就当作没有时间信息。
+fn parse_remote_timestamp(text: &str) -> Option<DateTime<Utc>> {
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    if let Ok(parsed) = DateTime::parse_from_rfc2822(text) {
+        return Some(parsed.with_timezone(&Utc));
+    }
+    if let Ok(parsed) = DateTime::parse_from_rfc3339(text) {
+        return Some(parsed.with_timezone(&Utc));
+    }
+    chrono::NaiveDateTime::parse_from_str(text, "%a, %d %b %Y %H:%M:%S %Z")
+        .ok()
+        .map(|naive| naive.and_utc())
+}
+
+/// 上传失败、且远端暂存对象没能一起删掉时的用户可见文案（CR-003 验收：错误里要有对象名）。
+///
+/// 暂存名是随机生成的，用户无法从别处得知它叫什么；没有这个名字，服务器上那条残留
+/// 就成了一堆 `tmp-*` 里认不出来的孤儿，只能整目录删。
+fn staging_residue_message(cause: &str, name: &str, detail: &str) -> String {
+    format!(
+        "{}（远端暂存文件 {} 也未能删除，请在服务器上手动清理：{}）",
+        cause, name, detail
+    )
+}
+
+/// 远端暂存对象的作用域清理守卫（CR-003）。
+///
+/// 上传链路上任何一步失败——校验和 PUT 失败、MOVE 后的降级 PUT 失败、甚至中途 panic——
+/// 都必须消掉已经写上去的那份完整数据库副本：它白占用户的 WebDAV 配额，里面还是可恢复的私人数据。
+/// 只有 MOVE 成功（暂存名已改名成正式名）才解除守卫，那时再 DELETE 会把刚备份好的库删掉。
+struct RemoteStagingGuard<D>
+where
+    D: FnMut(&str) -> Result<(), String>,
+{
+    delete: D,
+    url: String,
+    name: String,
+    armed: bool,
+}
+
+impl<D> RemoteStagingGuard<D>
+where
+    D: FnMut(&str) -> Result<(), String>,
+{
+    fn new(delete: D, url: String, name: String) -> Self {
+        Self {
+            delete,
+            url,
+            name,
+            armed: true,
+        }
+    }
+
+    /// 暂存名已成功替换为正式名，后续不得再删除。
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+
+    /// 尽力删除暂存对象；已解除或已清理过则什么都不做（幂等）。
+    /// 返回删除失败的原因，调用方把对象名拼进用户可见文案。
+    fn cleanup(&mut self) -> Option<String> {
+        if !self.armed {
+            return None;
+        }
+        self.armed = false;
+        let url = self.url.clone();
+        (self.delete)(&url).err()
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+impl<D> Drop for RemoteStagingGuard<D>
+where
+    D: FnMut(&str) -> Result<(), String>,
+{
+    fn drop(&mut self) {
+        // 走到这里说明调用方没能走到显式清理那一步（提前 return 或 panic）：
+        // 尽力删除，失败只记日志——正在掉栈的路径上再抛错误只会盖掉真正的原因。
+        if let Some(detail) = self.cleanup() {
+            tracing::warn!(
+                "远端暂存文件 {} 未能自动清理，请到服务器上手动删除：{}",
+                self.name,
+                detail
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -781,5 +988,238 @@ mod tests {
                 super::sha256_of_file(&dir.path().join("copy")).unwrap()
             );
         }
+    }
+
+    /// CR-003：远端暂存对象必须在上传链路的**任何**失败分支上被收掉。
+    /// 用假 delete 记录调用，不依赖真实 WebDAV 服务；断言的是「发了几次 DELETE、
+    /// 在什么状态下不发」，正好对应报告验收标准里的三条。
+    mod remote_staging_cleanup {
+        use super::super::{
+            file_basename, is_stale_staging, parse_remote_timestamp, remote_staging_name,
+            staging_prefix, staging_residue_message, staging_suffix, RemoteStagingGuard,
+        };
+        use chrono::{DateTime, TimeZone, Utc};
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        const STAGING_URL: &str = "https://dav.example/backup/lumo.sqlite.tmp-7-8";
+        const STAGING_NAME: &str = "lumo.sqlite.tmp-7-8";
+
+        /// 记录每次 DELETE 的假客户端；`fail` 模拟服务器拒绝删除（403 / 网络断开）。
+        fn fake_delete(
+            calls: Rc<RefCell<Vec<String>>>,
+            fail: bool,
+        ) -> impl FnMut(&str) -> Result<(), String> {
+            move |url: &str| {
+                calls.borrow_mut().push(url.to_string());
+                if fail {
+                    Err("服务器拒绝删除 (403)".to_string())
+                } else {
+                    Ok(())
+                }
+            }
+        }
+
+        fn guard(
+            calls: Rc<RefCell<Vec<String>>>,
+            fail: bool,
+        ) -> RemoteStagingGuard<impl FnMut(&str) -> Result<(), String>> {
+            RemoteStagingGuard::new(
+                fake_delete(calls, fail),
+                STAGING_URL.to_string(),
+                STAGING_NAME.to_string(),
+            )
+        }
+
+        /// 校验和 PUT 失败（上传半途中止）：已经传上去的整库副本必须被删掉，且只删一次。
+        #[test]
+        fn cleanup_deletes_the_staged_snapshot_exactly_once() {
+            let calls = Rc::new(RefCell::new(Vec::new()));
+            let mut staging = guard(calls.clone(), false);
+            assert_eq!(staging.cleanup(), None, "删除成功时不该有残留详情");
+            // 收尾清理 + Drop 都会再问一次：幂等，不得重复发 DELETE
+            assert_eq!(staging.cleanup(), None);
+            drop(staging);
+            assert_eq!(calls.borrow().as_slice(), [STAGING_URL.to_string()]);
+        }
+
+        /// MOVE 成功后暂存名已经变成正式快照：此时再 DELETE 等于把刚备份好的库删了。
+        #[test]
+        fn disarming_after_move_forbids_every_later_delete() {
+            let calls = Rc::new(RefCell::new(Vec::new()));
+            let mut staging = guard(calls.clone(), false);
+            staging.disarm();
+            assert_eq!(staging.cleanup(), None);
+            drop(staging);
+            assert!(calls.borrow().is_empty(), "已解除的守卫不得发出 DELETE");
+        }
+
+        /// MOVE 不可用时的降级路径：显式清理一次，收尾与 Drop 都不该再来一次。
+        #[test]
+        fn fallback_path_cleanup_happens_once() {
+            let calls = Rc::new(RefCell::new(Vec::new()));
+            let mut staging = guard(calls.clone(), false);
+            if let Some(detail) = staging.cleanup() {
+                panic!("删除不该失败：{}", detail);
+            }
+            let residue = staging.cleanup();
+            assert!(residue.is_none());
+            drop(staging);
+            assert_eq!(calls.borrow().len(), 1);
+        }
+
+        /// 提前 return / panic 兜底：没走到显式清理时，Drop 仍要把远端半成品收掉。
+        #[test]
+        fn drop_alone_still_removes_the_staged_snapshot() {
+            let calls = Rc::new(RefCell::new(Vec::new()));
+            {
+                let _staging = guard(calls.clone(), false);
+                // 模拟上传中途 `?` 直接返回，守卫未参与收尾
+            }
+            assert_eq!(calls.borrow().as_slice(), [STAGING_URL.to_string()]);
+        }
+
+        /// 删除也失败时，守卫要把原因交回调用方，由用户可见文案带上对象名。
+        #[test]
+        fn delete_failure_surfaces_the_object_name_to_the_user() {
+            let calls = Rc::new(RefCell::new(Vec::new()));
+            let mut staging = guard(calls.clone(), true);
+            let detail = staging
+                .cleanup()
+                .expect("删除失败必须返回原因，否则用户无从手工清理");
+            assert!(detail.contains("403"), "原因要能看出为何失败：{}", detail);
+            let message = staging_residue_message("上传失败：连接断开", staging.name(), &detail);
+            assert!(message.contains(STAGING_NAME), "文案必须点名远端对象");
+            assert!(message.contains("403"));
+            assert!(calls.borrow().len() == 1);
+        }
+
+        /// 上传成功但清理失败时不得把成功说成失败：residue 只在上传本身失败时才拼进文案。
+        #[test]
+        fn residue_message_is_only_for_failed_uploads() {
+            let ok: Result<(), String> = Ok(());
+            let mapped = ok.map_err(|e| staging_residue_message(&e, STAGING_NAME, "ignored"));
+            assert!(mapped.is_ok());
+        }
+
+        fn http_date(dt: DateTime<Utc>) -> String {
+            dt.format("%a, %d %b %Y %H:%M:%S GMT").to_string()
+        }
+
+        fn now() -> DateTime<Utc> {
+            Utc.with_ymd_and_hms(2026, 9, 19, 12, 0, 0).unwrap()
+        }
+
+        /// 只有「本应用暂存名 + 有可信时间 + 超过最短存活期」三者齐备才允许自动删除。
+        #[test]
+        fn only_our_own_stale_staging_names_are_swept() {
+            let stale = http_date(now() - chrono::Duration::seconds(25 * 3600));
+            let fresh = http_date(now() - chrono::Duration::seconds(60));
+            assert!(is_stale_staging(STAGING_NAME, &stale, now(), 24 * 3600));
+            // 另一台设备正在上传的那一份绝不能碰
+            assert!(!is_stale_staging(STAGING_NAME, &fresh, now(), 24 * 3600));
+            // 正式快照名与校验和 sidecar 都不属于暂存对象
+            assert!(!is_stale_staging("lumo.sqlite", &stale, now(), 24 * 3600));
+            assert!(!is_stale_staging(
+                "lumo.sqlite.sha256",
+                &stale,
+                now(),
+                24 * 3600
+            ));
+            // 别的客户端恰好也用了 tmp- 命名
+            assert!(!is_stale_staging(
+                "other-app.sqlite.tmp-1",
+                &stale,
+                now(),
+                24 * 3600
+            ));
+            // 后缀形状不对（不是 pid-nanos）也一律不认
+            assert!(!is_stale_staging(
+                "lumo.sqlite.tmp-",
+                &stale,
+                now(),
+                24 * 3600
+            ));
+            assert!(!is_stale_staging(
+                "lumo.sqlite.tmp-notes",
+                &stale,
+                now(),
+                24 * 3600
+            ));
+        }
+
+        /// 时间信息缺失、乱码或落在未来（服务器时钟不准）时一律不删：宁可留残留。
+        #[test]
+        fn untrusted_timestamps_never_trigger_deletion() {
+            let stale = 25 * 3600;
+            assert!(!is_stale_staging(STAGING_NAME, "", now(), stale));
+            assert!(!is_stale_staging(STAGING_NAME, "not-a-date", now(), stale));
+            assert!(!is_stale_staging(STAGING_NAME, "0", now(), stale));
+            let future = http_date(now() + chrono::Duration::seconds(stale));
+            assert!(!is_stale_staging(STAGING_NAME, &future, now(), stale));
+        }
+
+        #[test]
+        fn remote_timestamps_accept_http_and_iso_formats() {
+            assert_eq!(
+                parse_remote_timestamp("Sat, 19 Sep 2026 11:00:00 GMT"),
+                Some(now() - chrono::Duration::seconds(3600))
+            );
+            assert_eq!(
+                parse_remote_timestamp("2026-09-19T12:00:00+00:00"),
+                Some(now())
+            );
+            assert_eq!(parse_remote_timestamp("  "), None);
+        }
+
+        /// 上传侧与清理侧必须用同一个名字格式：格式漂了就等于永远清不掉残留。
+        #[test]
+        fn staging_name_format_stays_recognizable() {
+            let name = remote_staging_name(&staging_suffix());
+            assert!(name.starts_with(&staging_prefix()));
+            let stale = http_date(now() - chrono::Duration::seconds(25 * 3600));
+            assert!(is_stale_staging(&name, &stale, now(), 24 * 3600));
+        }
+
+        #[test]
+        fn basename_handles_relative_paths_urls_and_trailing_slashes() {
+            assert_eq!(
+                file_basename("/backup/lumo.sqlite.tmp-1-2"),
+                "lumo.sqlite.tmp-1-2"
+            );
+            assert_eq!(
+                file_basename("https://dav.example/backup/lumo.sqlite.tmp-1-2"),
+                "lumo.sqlite.tmp-1-2"
+            );
+            assert_eq!(file_basename("lumo.sqlite.tmp-1-2"), "lumo.sqlite.tmp-1-2");
+            assert_eq!(file_basename("/backup/snapshots/"), "snapshots");
+        }
+    }
+
+    /// CR-004：快照上传的内存峰值不得随库大小线性翻倍。
+    /// 落地方式是把 `File` 直接交给 reqwest（`Body: From<File>`，按 metadata 推 content-length），
+    /// 因此这里能自动化验证的关键事实是：请求体是文件句柄、长度来自文件系统，
+    /// 而不是进程里的一份 `Vec<u8>`。真实 1 GiB 峰值内存仍需人工基线。
+    #[test]
+    fn snapshot_body_is_file_backed_and_carries_its_length() {
+        use crate::db::test_util::TempDir;
+        let dir = TempDir::new("upload_stream");
+        let path = dir.path().join("lumo.sqlite.tmp");
+        let bytes = vec![0x5a_u8; 4 * 1024 * 1024];
+        let len = bytes.len() as u64;
+        std::fs::write(&path, &bytes).unwrap();
+
+        let file = super::open_snapshot(&path).expect("快照应能只读打开");
+        assert_eq!(
+            file.metadata().unwrap().len(),
+            len,
+            "交给请求体的必须是磁盘上的完整快照"
+        );
+        let body: reqwest::blocking::Body = file.into();
+        drop(body);
+        // 请求体只是句柄：读盘动作发生在发送时，转换本身既不占用也不消耗本地快照
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), len);
+        let again = super::open_snapshot(&path).unwrap();
+        assert_eq!(again.metadata().unwrap().len(), len);
     }
 }

@@ -120,18 +120,25 @@
 - **上传（一次点击的请求序列）**：`services/sync.rs::sync_upload`
   1. `VACUUM INTO` 本地临时快照 → 清空凭据 → `PRAGMA integrity_check`（任一步失败即中止，不发请求）；
   2. `MKCOL` 确保远程目录存在（已存在返回 405，视为成功）；
-  3. `PUT <remote_path>/lumo.sqlite.tmp-<pid>-<nanos>`：完整库快照（不含凭据）；
-  4. `PUT <remote_path>/lumo.sqlite.sha256`：上一步文件的 SHA-256（64 位十六进制纯文本）；
-  5. `MOVE` 临时名 → `lumo.sqlite`（原子替换正式名）。服务器不支持 MOVE 时退回
-     `DELETE` 临时名 + 直接 `PUT lumo.sqlite`，并 `tracing::warn!` 留痕。
+  3. `PROPFIND <remote_path>/`：只为清理**本应用**遗留的旧暂存对象（`lumo.sqlite.tmp-*` 且 mtime 超过 24 小时）
+     再 `DELETE` 之；PROPFIND 失败或名字不符合本应用格式一律跳过，绝不删别的客户端正在传的文件（CR-003）；
+  4. `PUT <remote_path>/lumo.sqlite.tmp-<pid>-<nanos>`：完整库快照（不含凭据），从磁盘 `File` 流式发送，
+     进程内不保留整库字节（CR-004）；
+  5. `PUT <remote_path>/lumo.sqlite.sha256`：上一步文件的 SHA-256（64 位十六进制纯文本）；
+  6. `MOVE` 临时名 → `lumo.sqlite`（原子替换正式名）。服务器不支持 MOVE 时退回
+     `DELETE` 临时名 + 直接 `PUT lumo.sqlite`（同样从磁盘重新打开流式发送），并 `tracing::warn!` 留痕。
+  任一步失败都会 best-effort `DELETE` 本次的暂存对象（作用域守卫，含 panic 路径）；删除也失败时
+  错误文案会带上该对象的完整名字，用户据此能在服务器上手工清理（CR-003 验收）。
 - **恢复**：`GET lumo.sqlite` → 落**唯一名**本地临时文件（`lumo.sqlite.<pid>-<nanos>.download`，
   并在开始前清理 1 小时前的陈旧残留）→ `GET lumo.sqlite.sha256` 比对（无 sidecar 则跳过）→
   迁移前甄别（SQLite 文件头、大小、schema 版本 ∈ [V8, 本机版本]）→ 迁移 →
   `integrity_check` + `foreign_key_check` + 必要表 → 才 `Backup::restore` 进 live 库。
-  **恢复失败时保留回滚副本并把路径告知用户**（I3/G-04）。
+  **每轮恢复都用唯一文件名保存恢复前副本**；只有恢复成功、或失败但回滚成功时才删除本轮副本，
+  回滚同样失败则一律保留并把真实路径写进提示，历史遗留副本永不自动删除（CR-001 / I3/G-04）。
 - **语义**：整库替换，不做实体级合并、无冲突处理，因此本计划统一称「备份恢复」而非「同步」。
 - **远端新增产物**：除 `lumo.sqlite` 外，本版本起还会写入 `lumo.sqlite.sha256`，
-  以及 MOVE 失败时可能短暂残留的 `lumo.sqlite.tmp-*`。对外披露时必须算作两个文件。
+  以及 MOVE 失败时可能短暂残留的 `lumo.sqlite.tmp-*`（下次备份起会自动回收超过 24 小时的这类残留）。
+  对外披露时必须算作两个文件。
 - **凭据剔除**：快照在上传前清空 `sync_config.password_encrypted` 与 `sources.credential_ref`
   ——**远端快照不含任何口令/密钥**；恢复后需重新填写凭据。该剔除现在在事务内完成，
   **失败即中止上传**（此前是 `let _ =`，脱敏失败会把带口令的快照照常发出）。
