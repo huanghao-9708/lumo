@@ -1,9 +1,7 @@
 use crate::db::DbState;
 use crate::error::AppError;
 use crate::ipc_trace;
-use crate::services::cache::{
-    is_downloading, mark_downloading, unmark_downloading, AudioCache, AudioCacheState,
-};
+use crate::services::cache::{AudioCache, AudioCacheState, DownloadGuard, DEFAULT_MAX_BYTES};
 use crate::services::playback::PlaybackManager;
 use crate::services::webdav::WebdavClient;
 use rusqlite::OptionalExtension;
@@ -58,7 +56,7 @@ pub fn resolve_media_file(
         if let Some(id) = local_fallback_id {
             media_file_id = id;
             tracing::info!("Offline auto-degraded to local media_file_id={}", id);
-        } else if !audio_cache.is_cached(media_file_id) {
+        } else if !audio_cache.is_cached(media_file_id, None) {
             return Err(AppError::Internal(
                 "离线模式下没有可用的本地文件或音频缓存".to_string(),
             ));
@@ -89,9 +87,12 @@ pub fn resolve_media_file(
         },
     )?;
 
-    // ===== 缓存优先：WebDAV 文件已缓存则直接走本地路径 =====
+    // ===== 缓存优先：WebDAV 文件已缓存且大小与 DB 记录一致才走本地路径 =====
+    // 比对 file_size 是 G-10 的修法：一次截断下载若被当成有效缓存，之后每次播放都会坏。
+    // file_size <= 0 表示部分服务端不回 getcontentlength，此时无期望值可校验。
     if kind == "webdav" {
-        if let Some(cached) = audio_cache.get_cached_path(media_file_id) {
+        let expected_size = (size > 0).then_some(size as u64);
+        if let Some(cached) = audio_cache.get_cached_path(media_file_id, expected_size) {
             tracing::info!("Audio cache hit for media_file_id={}", media_file_id);
             return Ok((Some(cached), None, WebdavResolveInfo::default()));
         }
@@ -141,12 +142,19 @@ pub fn resolve_media_file(
                 WebdavResolveInfo {
                     webdav_client: Some(webdav),
                     file_url: Some(file_url),
+                    expected_size: (size > 0).then_some(size as u64),
                 },
             ))
         } else {
             // 服务器不支持分段读取：整文件下载进缓存后按本地文件播放。
             // 同步等待期间前端停留在 isBuffering，失败按分类文案报错。
-            let path = download_full_to_cache(audio_cache, &webdav, media_file_id, &file_url)?;
+            let path = download_full_to_cache(
+                audio_cache,
+                &webdav,
+                media_file_id,
+                &file_url,
+                (size > 0).then_some(size as u64),
+            )?;
             Ok((Some(path), None, WebdavResolveInfo::default()))
         }
     } else {
@@ -200,51 +208,22 @@ fn probe_and_persist_range_support(
 }
 
 /// 整文件同步下载进音频缓存（服务器不支持 Range 时的播放降级路径）。
-/// 复用全局 DOWNLOADING 标记防止与后台缓存下载互相踩踏。
+/// 与后台缓存下载共用 [`DownloadGuard`]，防止两条路径同时写同一个 media_file_id。
 fn download_full_to_cache(
     audio_cache: &AudioCache,
     webdav: &WebdavClient,
     media_file_id: i64,
     file_url: &str,
+    expected_size: Option<u64>,
 ) -> Result<PathBuf, AppError> {
-    if is_downloading(media_file_id) {
+    let Some(_guard) = DownloadGuard::try_new(media_file_id) else {
         return Err(AppError::Internal(
             "该歌曲正在缓存中，请稍后再试".to_string(),
         ));
-    }
-    if !mark_downloading(media_file_id) {
-        return Err(AppError::Internal(
-            "该歌曲正在缓存中，请稍后再试".to_string(),
-        ));
-    }
-
-    let result = (|| -> Result<PathBuf, AppError> {
-        let cache_dir = audio_cache
-            .cache_path(media_file_id)
-            .parent()
-            .ok_or_else(|| AppError::Internal("缓存目录无效".to_string()))?
-            .to_path_buf();
-        let tmp_path = cache_dir.join(format!("{}.tmp", media_file_id));
-        let bytes = webdav
-            .download_to_file(file_url, &tmp_path)
-            .map_err(AppError::Internal)?;
-        if bytes == 0 {
-            let _ = std::fs::remove_file(&tmp_path);
-            return Err(AppError::Internal("缓存下载内容为空".to_string()));
-        }
-        let final_path = cache_dir.join(format!("{}", media_file_id));
-        std::fs::rename(&tmp_path, &final_path)
-            .map_err(|e| AppError::Internal(format!("缓存写入失败: {}", e)))?;
-        tracing::info!(
-            "Full-file degradation download done media_file_id={} ({} bytes)",
-            media_file_id,
-            bytes
-        );
-        Ok(final_path)
-    })();
-
-    unmark_downloading(media_file_id);
-    result
+    };
+    audio_cache
+        .store_from_webdav(media_file_id, file_url, webdav, expected_size)
+        .map_err(AppError::Internal)
 }
 
 /// WebDAV 解析附加信息：用于流播失败后后台缓存下载。
@@ -253,6 +232,8 @@ fn download_full_to_cache(
 pub struct WebdavResolveInfo {
     pub webdav_client: Option<WebdavClient>,
     pub file_url: Option<String>,
+    /// DB 记录的文件大小，用于校验下载完整性；服务端未上报时为 None。
+    pub expected_size: Option<u64>,
 }
 
 /// 在后台线程异步下载 WebDAV 文件到缓存（播放同时进行，不阻塞音频）。
@@ -262,63 +243,31 @@ pub fn spawn_background_cache_download(
     media_file_id: i64,
     webdav_client: WebdavClient,
     file_url: String,
+    expected_size: Option<u64>,
 ) {
+    // 先抢下载权再查缓存：两个动作之间没有窗口，也不会出现
+    // "检查通过但抢权失败" 时把别人的下载标记顺手清掉的情况。
+    let Some(guard) = DownloadGuard::try_new(media_file_id) else {
+        return;
+    };
     let cache_guard = match audio_cache_state.cache.lock() {
         Ok(g) => g,
         Err(_) => return,
     };
-
-    // 已在下载或已缓存，跳过
-    if is_downloading(media_file_id) || cache_guard.is_cached(media_file_id) {
+    if cache_guard.is_cached(media_file_id, expected_size) {
         return;
     }
-    if !mark_downloading(media_file_id) {
-        return;
-    }
-
-    // 克隆缓存目录路径后释放锁，不阻塞后台线程
-    let cache_dir = cache_guard
-        .cache_path(media_file_id)
-        .parent()
-        .map(|p| p.to_path_buf());
+    // 缓存对象常驻，后台线程只需要目录路径
+    let cache_dir = cache_guard.cache_dir().to_path_buf();
     drop(cache_guard);
 
-    let Some(cache_dir) = cache_dir else {
-        unmark_downloading(media_file_id);
-        return;
-    };
-
     std::thread::spawn(move || {
-        let tmp_path = cache_dir.join(format!("{}.tmp", media_file_id));
-        let result = webdav_client.download_to_file(&file_url, &tmp_path);
-        match result {
-            Ok(bytes) => {
-                if bytes == 0 {
-                    tracing::warn!(
-                        "Audio cache download empty for media_file_id={}",
-                        media_file_id
-                    );
-                    let _ = std::fs::remove_file(&tmp_path);
-                } else {
-                    let final_path = cache_dir.join(format!("{}", media_file_id));
-                    match std::fs::rename(&tmp_path, &final_path) {
-                        Ok(_) => {
-                            tracing::info!(
-                                "Audio cache stored media_file_id={} ({} bytes)",
-                                media_file_id,
-                                bytes
-                            );
-                            if let Some(parent) = cache_dir.parent() {
-                                let cache_obj = crate::services::cache::AudioCache::new(parent);
-                                cache_obj.prune_to_max_bytes(2 * 1024 * 1024 * 1024);
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!("Audio cache rename failed: {}", e);
-                            let _ = std::fs::remove_file(&tmp_path);
-                        }
-                    }
-                }
+        // guard 随线程结束释放：包括 panic 展开，不会再出现永久"正在缓存中"
+        let _guard = guard;
+        let cache = AudioCache::from_cache_dir(cache_dir);
+        match cache.store_from_webdav(media_file_id, &file_url, &webdav_client, expected_size) {
+            Ok(_) => {
+                cache.prune_to_max_bytes(DEFAULT_MAX_BYTES);
             }
             Err(e) => {
                 tracing::warn!(
@@ -326,10 +275,8 @@ pub fn spawn_background_cache_download(
                     media_file_id,
                     e
                 );
-                let _ = std::fs::remove_file(&tmp_path);
             }
         }
-        unmark_downloading(media_file_id);
     });
 }
 
@@ -373,8 +320,15 @@ pub fn playback_play(
 
         // 后台异步下载缓存（不影响当前播放）
         if let (Some(client), Some(url)) = (webdav_info.webdav_client, webdav_info.file_url) {
+            let expected_size = webdav_info.expected_size;
             drop(manager); // 释放播放锁再 spawn
-            spawn_background_cache_download(&cache_state, media_file_id, client, url);
+            spawn_background_cache_download(
+                &cache_state,
+                media_file_id,
+                client,
+                url,
+                expected_size,
+            );
         }
         dur
     } else if let Some(path) = path_buf {
@@ -427,8 +381,15 @@ pub fn playback_enqueue_next(
 
         // 后台异步下载缓存
         if let (Some(client), Some(url)) = (webdav_info.webdav_client, webdav_info.file_url) {
+            let expected_size = webdav_info.expected_size;
             drop(manager);
-            spawn_background_cache_download(&cache_state, media_file_id, client, url);
+            spawn_background_cache_download(
+                &cache_state,
+                media_file_id,
+                client,
+                url,
+                expected_size,
+            );
         }
     } else if let Some(path) = path_buf {
         // 本地文件或缓存命中 → 标准 gapless
@@ -577,16 +538,29 @@ pub fn playback_is_finished(playback_state: State<'_, PlaybackState>) -> Result<
 }
 
 /// 查询某首曲目是否已缓存到本地（前端用于离线置灰判断）。
+/// 与播放路径同口径校验文件大小：只判存在会把截断缓存报成"已缓存"，
+/// 用户离线时才发现放不出来。
 #[tauri::command]
 pub fn playback_is_cached(
+    db_state: State<'_, DbState>,
     cache_state: State<'_, AudioCacheState>,
     media_file_id: i64,
 ) -> Result<bool, AppError> {
+    let size: Option<i64> = db_state
+        .db
+        .get()?
+        .query_row(
+            "SELECT file_size FROM media_files WHERE id = ?1",
+            rusqlite::params![media_file_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let expected_size = size.unwrap_or(0).max(0) as u64;
     let cache = cache_state
         .cache
         .lock()
         .map_err(|e| AppError::Internal(e.to_string()))?;
-    Ok(cache.is_cached(media_file_id))
+    Ok(cache.is_cached(media_file_id, (expected_size > 0).then_some(expected_size)))
 }
 
 /// 清空全部音频缓存，返回释放的字节数。

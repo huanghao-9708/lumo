@@ -87,8 +87,15 @@ pub fn internal_play_item(
         let buffered_reader = std::io::BufReader::with_capacity(64 * 1024, reader);
         let dur = manager.play_stream(buffered_reader)?;
         if let (Some(client), Some(url)) = (webdav_info.webdav_client, webdav_info.file_url) {
+            let expected_size = webdav_info.expected_size;
             drop(manager);
-            spawn_background_cache_download(&cache_state, effective_media_file_id, client, url);
+            spawn_background_cache_download(
+                &cache_state,
+                effective_media_file_id,
+                client,
+                url,
+                expected_size,
+            );
         }
         dur
     } else if let Some(path) = path_buf {
@@ -180,8 +187,15 @@ pub fn internal_enqueue_next(
         let buffered_reader = std::io::BufReader::with_capacity(64 * 1024, reader);
         manager.enqueue_next_stream(buffered_reader)?;
         if let (Some(client), Some(url)) = (webdav_info.webdav_client, webdav_info.file_url) {
+            let expected_size = webdav_info.expected_size;
             drop(manager);
-            spawn_background_cache_download(&cache_state, effective_media_file_id, client, url);
+            spawn_background_cache_download(
+                &cache_state,
+                effective_media_file_id,
+                client,
+                url,
+                expected_size,
+            );
         }
     } else if let Some(path) = path_buf {
         manager

@@ -1410,7 +1410,7 @@ pub fn library_get_playability(
         // library_get_track_file_info 等命令的拼接口径一致），下游 Path::join(p) 的
         // p 即相对路径。
         let sql = format!(
-            "SELECT t.id, m.id, s.kind, s.root_uri, m.relative_path
+            "SELECT t.id, m.id, s.kind, s.root_uri, m.relative_path, m.file_size
              FROM tracks t
              LEFT JOIN media_files m ON m.id = COALESCE(t.primary_file_id, (SELECT mf.id FROM media_files mf WHERE mf.track_id = t.id ORDER BY mf.id LIMIT 1))
              LEFT JOIN sources s ON s.id = m.source_id
@@ -1425,11 +1425,12 @@ pub fn library_get_playability(
             let kind: Option<String> = row.get(2)?;
             let root_uri: Option<String> = row.get(3)?;
             let path: Option<String> = row.get(4)?;
-            Ok((track_id, media_file_id, kind, root_uri, path))
+            let file_size: Option<i64> = row.get(5)?;
+            Ok((track_id, media_file_id, kind, root_uri, path, file_size))
         })?;
 
         for r in rows {
-            let (track_id, media_file_id, kind, root_uri, path) = r?;
+            let (track_id, media_file_id, kind, root_uri, path, file_size) = r?;
             let status = match (kind.as_deref(), media_file_id, root_uri, path) {
                 (Some("local"), _, Some(root), Some(p)) => {
                     let full_path = std::path::Path::new(&root).join(p);
@@ -1440,7 +1441,9 @@ pub fn library_get_playability(
                     }
                 }
                 (Some("webdav"), Some(mf_id), _, _) => {
-                    if cache.is_cached(mf_id) {
+                    // 带 file_size 校验：否则截断缓存会被标成"已缓存"，离线时才发现放不出来
+                    let expected_size = file_size.unwrap_or(0).max(0) as u64;
+                    if cache.is_cached(mf_id, (expected_size > 0).then_some(expected_size)) {
                         Playability::Cached
                     } else {
                         Playability::Remote

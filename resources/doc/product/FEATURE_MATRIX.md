@@ -57,7 +57,7 @@
 |---|---|---|---|---|
 | 播放/暂停/Seek/音量 | ✅ | ✅ | Beta | rodio 0.19 → cpal；Android 由 cpal 内部走 oboe，**Rust 侧无后端选择、无 cfg 分支** |
 | 队列 + 四种播放模式 | ✅ | ✅ | **Stable 候选** | `services/queue.rs`，全仓唯一有单测的模块（5 个） |
-| WebDAV 流播 + Range + 透明缓存 | ✅ | ⚠️ | Beta | 缓存路径 `{app_data_dir}/audio_cache/{id}`（`cache.rs:45,60`，**非硬编码外部存储**）；Android 该目录随应用卸载、私有目录可能空间不足 → 需真机复核 |
+| WebDAV 流播 + Range + 透明缓存 | ✅ | ⚠️ | Beta | 缓存路径 `{app_data_dir}/audio_cache/{media_file_id}`（`AudioCache::new`，**非硬编码外部存储**）；上限 `DEFAULT_MAX_BYTES` 2GB，按最近使用淘汰；Android 该目录随应用卸载、私有目录可能空间不足 → 需真机复核 |
 | 后台播放（灭屏续播） | — | ⚠️ | **Experimental** | Kotlin 前台服务 `MediaPlaybackService.kt`，**≥30min 灭屏续播仅模拟器观察，无真机证据** |
 | 通知栏五键 / 锁屏控制 | — | ⚠️ | **Experimental** | `MediaPlaybackService.kt`（使用平台 `MediaSession`，非 `MediaSessionCompat`）；真机通知栏行为未验证 |
 | 音频焦点抢占 / 拔耳机暂停 / 来电暂停 | — | ⚠️ | **Experimental** | 同上，仅模拟器；`BECOMING_NOISY` 真机行为未验证 |
@@ -113,16 +113,16 @@
 | ID | 缺口 | 严重度 | 归属 |
 |---|---|---|---|
 | G-01 | Android **零真机验证**，但 README 宣称 MA0–MA5 完成、CI 已能产出签名 Release APK | **P0（产品承诺失真）** | I0 修文案；真机矩阵在 I6 Beta 前完成 |
-| G-02 | 迁移无事务，崩溃后重启触发 `duplicate column` → `init_db` 失败 → `lib.rs:243` `.expect()` panic，**应用无法启动且曲库半迁移** | **P0（数据损坏）** | I3 |
-| G-03 | WebDAV XML 解析错误被静默吞掉（`webdav.rs:287` `Err(_) => break`）→ `scan_failed` 仍为 false → **整个来源记录被批量误标 missing** | **P0（数据丢失）** | I3 |
-| G-04 | 恢复失败时回滚错误被 `let _ =` 丢弃，随后**无条件删除唯一回退副本**（`commands/sync.rs:117,133-134`） | **P0（不可恢复）** | I3 |
-| G-05 | 备份恢复后用户凭据丢失（快照剔除 `credential_ref`/密码，`services/sync.rs:167-172`）；上传无远端 temp+rename，断流即覆盖上一份好快照 | **P0（数据损失）** | I3 |
+| G-02 | 迁移无事务，崩溃后重启触发 `duplicate column` → `init_db` 失败 → **应用无法启动且曲库半迁移** | **P0（数据损坏）** | **已修** `e650de1`：V1–V10 逐版事务化 + 幂等加列 + 版本上界；回归 `db.rs` DATA-001 |
+| G-03 | WebDAV XML 解析错误被静默吞掉（`propfind` 的 `Err(_) => break`）→ `scan_failed` 仍为 false → **整个来源记录被批量误标 missing** | **P0（数据丢失）** | **已修** `e650de1`：`parse_propfind` 返回 `Result`，解析失败即中止扫描 |
+| G-04 | 恢复失败时回滚错误被 `let _ =` 丢弃，随后**无条件删除唯一回退副本**（`commands/sync.rs`） | **P0（不可恢复）** | **已修** `e650de1`：`rollback()` 保留副本，双重失败时告知副本路径 |
+| G-05 | 备份恢复后用户凭据丢失（快照剔除 `credential_ref`/密码）；上传无远端 temp+rename，断流即覆盖上一份好快照；非 Lumo 库/更高版本库可被直接恢复 | **P0（数据损失）** | **已修** `e650de1`：PUT `tmp-*` → sha256 sidecar → MOVE 原子替换；恢复前 `assert_lumo_snapshot` 甄别魔数/归属/版本区间；脱敏失败中止上传。凭据按设计不入快照，属既定策略非缺陷 |
 | G-06 | 隐私开关存 localStorage，可被直连 IPC 绕过（`stores/ui.ts:126` 自称"双保险"） | P1 | I2 |
-| G-07 | 扫描无 job id/generation、无取消机制；`ScanGuard` 创建前的 `?` 早退会让来源永久标记为扫描中（`commands/scanner.rs:242-260`） | P1 | I3 |
-| G-08 | `last_scan_at` 在失败路径也无条件刷新，无 `last_success_at`；前端一律显示"刚刚扫描"，`last_error` 无任何组件渲染 | P1 | I3 |
-| G-09 | 缓存下载 client **无总超时**（`webdav.rs:46-49`）；builder 失败回退 `Client::new()` 为零超时；快照上传被 60s 总超时掐断 | P1 | I3 |
-| G-10 | 截断下载被当作有效缓存（rename 前只判 `bytes != 0`，不比对 DB `file_size`；`is_cached` 只看 `len>0`）→ 永久损坏播放 | P1 | I3 |
-| G-11 | 缓存淘汰按 mtime 无正在播放保护，`clear()` 会删正在播放文件；`mark_downloading` 非 RAII，panic 后永久卡"正在缓存中" | P1 | I3 |
+| G-07 | 扫描无 job id/generation、无取消机制；`ScanGuard` 创建前的 `?` 早退会让来源永久标记为扫描中（`commands/scanner.rs`） | P1 | I3 未闭合 |
+| G-08 | `last_scan_at` 在失败路径也无条件刷新，无 `last_success_at`；前端一律显示"刚刚扫描"，`last_error` 无任何组件渲染 | P1 | I3 未闭合 |
+| G-09 | 缓存下载与快照 PUT 共用 60s 总超时 client → 大文件必被掐断；builder 失败静默回退 `Client::new()`（零超时） | P1 | **已修** `8e033c1`：`bulk_client`（连接超时 + TCP keepalive，无总超时），构建失败 `tracing::error!` 留痕 |
+| G-10 | 截断下载被当作有效缓存（rename 前只判 `bytes != 0`，不比对 DB `file_size`；`is_cached` 只看 `len>0`）→ 永久损坏播放 | P1 | **已修**：三处重复下载逻辑收敛到 `AudioCache::store_from_webdav` + 期望大小校验，命中即删坏缓存并重下；`playback_is_cached` 与批量可播性查询同口径；回归 `cache.rs` 6 项测试 |
+| G-11 | 缓存淘汰按 mtime 会删写入中的 `.tmp`；下载标记非 RAII，panic/提前返回后永久卡"正在缓存中"；`clear()` 把删除失败也计入释放量 | P1 | **已修**：`DownloadGuard` RAII；prune 跳过 `.tmp` 且命中即 touch mtime（按最近使用淘汰，正在播放的文件排在最后）；`clear()` 只计实际删除。残余：跨平台"正在播放"是 mtime 近似而非硬锁 |
 | G-12 | 429/5xx 无退避；`HttpRangeReader` 3 次重试无 sleep；队列表自动切歌失败时以 250ms 节奏打全队列 | P2 | I3 |
 | G-13 | 扫描无拼音搜索、无音频输出设备选择、无系统托盘（VISION 承诺但未实现） | P3 | 范围外，入 Post-Stable Backlog |
 
