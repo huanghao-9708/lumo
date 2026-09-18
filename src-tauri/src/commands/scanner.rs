@@ -1,14 +1,15 @@
-use tauri::{State, Manager};
 use crate::db::DbState;
 use crate::error::AppError;
 use crate::ipc_trace;
-use std::path::PathBuf;
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::{LazyLock, Mutex};
+use tauri::{Manager, State};
 
 /// 全局扫描中集合：同一来源同一时刻只允许一个扫描任务（P1-10 幂等守卫）。
 /// 用全局 static 是因为扫描线程拿不到 Tauri State，需要在任意线程标记/解除。
-static SCANNING_SOURCES: LazyLock<Mutex<HashSet<i64>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+static SCANNING_SOURCES: LazyLock<Mutex<HashSet<i64>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
 
 fn mark_scanning(source_id: i64) -> bool {
     SCANNING_SOURCES
@@ -60,7 +61,8 @@ pub(crate) fn derive_credential_key(app_dir: &std::path::Path) -> [u8; 32] {
 /// 对密码做加密（防止明文暴露，结合设备专属随机私钥）。
 pub(crate) fn encrypt_password(key: &[u8; 32], password: &str) -> String {
     use base64::Engine;
-    let bytes: Vec<u8> = password.bytes()
+    let bytes: Vec<u8> = password
+        .bytes()
         .enumerate()
         .map(|(i, b)| b ^ key[i % 32])
         .collect();
@@ -72,16 +74,22 @@ pub(crate) fn encrypt_password(key: &[u8; 32], password: &str) -> String {
 pub(crate) fn decrypt_password(key: &[u8; 32], encoded: &str) -> Option<String> {
     use base64::Engine;
     if let Some(payload) = encoded.strip_prefix("v2:seal:") {
-        let bytes = base64::engine::general_purpose::STANDARD.decode(payload).ok()?;
-        let decrypted: Vec<u8> = bytes.iter()
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(payload)
+            .ok()?;
+        let decrypted: Vec<u8> = bytes
+            .iter()
             .enumerate()
             .map(|(i, b)| b ^ key[i % 32])
             .collect();
         return String::from_utf8(decrypted).ok();
     }
     // 旧格式兼容
-    let bytes = base64::engine::general_purpose::STANDARD.decode(encoded).ok()?;
-    let decrypted: Vec<u8> = bytes.iter()
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .ok()?;
+    let decrypted: Vec<u8> = bytes
+        .iter()
         .enumerate()
         .map(|(i, b)| b ^ key[i % 32])
         .collect();
@@ -139,7 +147,12 @@ pub(crate) fn resolve_source_credential(
 
 /// 桌面端把解析出的明文密码升级进系统钥匙串，并把 credential_ref 改写为 kr 引用。
 /// best-effort：钥匙串写入失败（如无可用后端）保留原格式，不影响功能。
-fn lazy_migrate_to_keyring(conn: &rusqlite::Connection, source_id: i64, username: &str, password: &str) {
+fn lazy_migrate_to_keyring(
+    conn: &rusqlite::Connection,
+    source_id: i64,
+    username: &str,
+    password: &str,
+) {
     #[cfg(not(target_os = "android"))]
     {
         let uuid = hex::encode(rand::random::<[u8; 16]>());
@@ -168,30 +181,47 @@ pub(crate) fn username_from_credential_ref(cred: Option<&String>) -> Option<Stri
 }
 
 #[tauri::command]
-pub fn source_add_local(db_state: State<'_, DbState>, path: String, name: String) -> Result<i64, AppError> {
+pub fn source_add_local(
+    db_state: State<'_, DbState>,
+    path: String,
+    name: String,
+) -> Result<i64, AppError> {
     let _trace = ipc_trace!("source_add_local");
     let conn = db_state.db.get()?;
     conn.execute(
         "INSERT INTO sources (name, kind, root_uri) VALUES (?1, 'local', ?2)",
         rusqlite::params![name, path],
     )?;
-    
+
     let id = conn.last_insert_rowid();
     Ok(id)
 }
 
 #[tauri::command]
-pub fn source_add_webdav(app: tauri::AppHandle, db_state: State<'_, DbState>, url: String, name: String, username: Option<String>, password: Option<String>) -> Result<i64, AppError> {
+pub fn source_add_webdav(
+    app: tauri::AppHandle,
+    db_state: State<'_, DbState>,
+    url: String,
+    name: String,
+    username: Option<String>,
+    password: Option<String>,
+) -> Result<i64, AppError> {
     let _trace = ipc_trace!("source_add_webdav");
     let conn = db_state.db.get()?;
 
     // Test connection (use empty subpath so PROPFIND hits the exact base URL, not the server root)
-    let webdav = crate::services::webdav::WebdavClient::new(url.clone(), username.clone(), password.clone());
-    webdav.propfind("").map_err(|e| AppError::Internal(format!("Failed to connect to WebDAV: {}", e)))?;
+    let webdav =
+        crate::services::webdav::WebdavClient::new(url.clone(), username.clone(), password.clone());
+    webdav
+        .propfind("")
+        .map_err(|e| AppError::Internal(format!("Failed to connect to WebDAV: {}", e)))?;
 
     // credential_ref 格式（P1-08）：桌面端优先存系统钥匙串引用 "username##kr:<uuid>"；
     // 钥匙串不可用时回退机器绑定加密 "username##v2:seal:…"。Android 始终用机器绑定加密。
-    let app_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let app_dir = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("."));
     let key = derive_credential_key(&app_dir);
     let cred = match (&username, &password) {
         (Some(u), Some(p)) => {
@@ -236,11 +266,17 @@ pub fn scanner_test_webdav(
 }
 
 #[tauri::command]
-pub fn source_scan(app: tauri::AppHandle, db_state: State<'_, DbState>, source_id: i64) -> Result<(), AppError> {
+pub fn source_scan(
+    app: tauri::AppHandle,
+    db_state: State<'_, DbState>,
+    source_id: i64,
+) -> Result<(), AppError> {
     let _trace = ipc_trace!("source_scan");
     // P1-10 幂等守卫：同一来源重复触发扫描直接拒绝（前端 UI 有软守卫，这里是硬防线）
     if !mark_scanning(source_id) {
-        return Err(AppError::Internal("该来源正在扫描中，请等待本次扫描完成".to_string()));
+        return Err(AppError::Internal(
+            "该来源正在扫描中，请等待本次扫描完成".to_string(),
+        ));
     }
     let (kind, path, credential) = {
         let conn = db_state.db.get()?;
@@ -252,14 +288,22 @@ pub fn source_scan(app: tauri::AppHandle, db_state: State<'_, DbState>, source_i
         (k, r, c)
     };
 
-    let app_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let app_dir = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("."));
     let key = derive_credential_key(&app_dir);
 
     std::thread::spawn(move || {
         // RAII：正常结束 / 提前 return / panic 都会解除扫描标记
         let _scan_guard = ScanGuard(source_id);
         if kind == "local" {
-            crate::services::scanner::scan_local_directory(app, source_id, &PathBuf::from(path), &app_dir);
+            crate::services::scanner::scan_local_directory(
+                app,
+                source_id,
+                &PathBuf::from(path),
+                &app_dir,
+            );
         } else if kind == "webdav" {
             // 凭据解析（P1-08 统一入口）：支持钥匙串引用 / V6 加密 / V5 明文；
             // 桌面端解析成功后懒迁移进系统钥匙串。解析失败中止扫描并发出 scan-complete。
@@ -284,10 +328,12 @@ pub fn source_scan(app: tauri::AppHandle, db_state: State<'_, DbState>, source_i
                 }
                 None => (None, None),
             };
-            crate::services::scanner::scan_webdav_directory(app, source_id, path, username, password, &app_dir);
+            crate::services::scanner::scan_webdav_directory(
+                app, source_id, path, username, password, &app_dir,
+            );
         }
     });
-    
+
     Ok(())
 }
 
@@ -300,26 +346,28 @@ pub fn source_list(db_state: State<'_, DbState>) -> Result<Vec<crate::models::So
         FROM sources 
         ORDER BY created_at DESC
     ")?;
-    
-    let sources = stmt.query_map([], |row| {
-        let credential_ref: Option<String> = row.get(5)?;
-        let username = username_from_credential_ref(credential_ref.as_ref());
-        Ok(crate::models::Source {
-            id: row.get(0)?,
-            name: row.get(1)?,
-            kind: row.get(2)?,
-            root_uri: row.get(3)?,
-            config_json: row.get(4)?,
-            credential_ref,
-            username,
-            enabled: row.get::<_, i64>(6)? != 0,
-            last_scan_at: row.get(7)?,
-            last_error: row.get(8)?,
-            created_at: row.get(9)?,
-            updated_at: row.get(10)?,
-        })
-    })?.collect::<Result<Vec<_>, _>>()?;
-    
+
+    let sources = stmt
+        .query_map([], |row| {
+            let credential_ref: Option<String> = row.get(5)?;
+            let username = username_from_credential_ref(credential_ref.as_ref());
+            Ok(crate::models::Source {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                kind: row.get(2)?,
+                root_uri: row.get(3)?,
+                config_json: row.get(4)?,
+                credential_ref,
+                username,
+                enabled: row.get::<_, i64>(6)? != 0,
+                last_scan_at: row.get(7)?,
+                last_error: row.get(8)?,
+                created_at: row.get(9)?,
+                updated_at: row.get(10)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
     Ok(sources)
 }
 
@@ -346,7 +394,10 @@ pub fn source_remove(db_state: State<'_, DbState>, source_id: i64) -> Result<(),
 
     let tx = conn.transaction()?;
 
-    tx.execute("DELETE FROM sources WHERE id = ?1", rusqlite::params![source_id])?;
+    tx.execute(
+        "DELETE FROM sources WHERE id = ?1",
+        rusqlite::params![source_id],
+    )?;
 
     // primary_file_id is intentionally not a hard foreign key because it is a
     // denormalised preference. Re-point it before orphan cleanup so removing one
@@ -401,7 +452,7 @@ pub fn source_remove(db_state: State<'_, DbState>, source_id: i64) -> Result<(),
                 "SELECT a.id, a.cache_path FROM artwork a
                  WHERE a.id NOT IN (
                      SELECT cover_artwork_id FROM albums WHERE cover_artwork_id IS NOT NULL
-                 )"
+                 )",
             )?;
             let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
             let collected: Vec<(i64, Option<String>)> = rows.filter_map(|r| r.ok()).collect();
@@ -409,7 +460,10 @@ pub fn source_remove(db_state: State<'_, DbState>, source_id: i64) -> Result<(),
         };
 
         for (art_id, cache_path) in &orphan_artworks {
-            tx.execute("DELETE FROM artwork WHERE id = ?1", rusqlite::params![art_id])?;
+            tx.execute(
+                "DELETE FROM artwork WHERE id = ?1",
+                rusqlite::params![art_id],
+            )?;
             if let Some(path) = cache_path {
                 let _ = std::fs::remove_file(path);
             }
@@ -425,7 +479,7 @@ pub fn source_remove(db_state: State<'_, DbState>, source_id: i64) -> Result<(),
         );
         UPDATE artists SET album_count = (
             SELECT COUNT(*) FROM albums al WHERE al.album_artist_id = artists.id
-        );"
+        );",
     )?;
 
     tx.commit()?;

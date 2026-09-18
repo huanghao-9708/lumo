@@ -1,10 +1,10 @@
-use reqwest::blocking::Client;
-use reqwest::header::RANGE;
-use std::io::{self, Read, Seek, SeekFrom};
-use std::fs::File;
-use std::path::Path;
 use quick_xml::events::Event;
 use quick_xml::Reader;
+use reqwest::blocking::Client;
+use reqwest::header::RANGE;
+use std::fs::File;
+use std::io::{self, Read, Seek, SeekFrom};
+use std::path::Path;
 use std::time::Duration;
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -80,9 +80,12 @@ impl WebdavClient {
             .map_err(|e| format!("无效的 WebDAV 文件路径 \"{}\": {}", subpath, e))?;
         Ok(joined.to_string())
     }
-    
+
     // helper to add auth
-    fn apply_auth(&self, req: reqwest::blocking::RequestBuilder) -> reqwest::blocking::RequestBuilder {
+    fn apply_auth(
+        &self,
+        req: reqwest::blocking::RequestBuilder,
+    ) -> reqwest::blocking::RequestBuilder {
         if let (Some(u), Some(p)) = (&self.username, &self.password) {
             req.basic_auth(u, Some(p))
         } else {
@@ -99,17 +102,22 @@ impl WebdavClient {
             format!("{}/", self.base_url)
         };
 
-        let req = self.client.request(
-            reqwest::Method::from_bytes(b"PROPFIND").unwrap_or(reqwest::Method::GET),
-            &url,
-        ).header("Depth", "0");
+        let req = self
+            .client
+            .request(
+                reqwest::Method::from_bytes(b"PROPFIND").unwrap_or(reqwest::Method::GET),
+                &url,
+            )
+            .header("Depth", "0");
         let req = self.apply_auth(req);
 
         match req.send() {
             Ok(resp) => {
                 let latency_ms = start.elapsed().as_millis() as u64;
                 let status = resp.status();
-                let server = resp.headers().get("server")
+                let server = resp
+                    .headers()
+                    .get("server")
                     .and_then(|h| h.to_str().ok())
                     .map(|s| s.to_string());
 
@@ -161,12 +169,19 @@ impl WebdavClient {
     pub fn propfind(&self, subpath: &str) -> Result<Vec<WebdavFile>, String> {
         let url = self.build_url(subpath)?;
 
-        let req = self.client.request(reqwest::Method::from_bytes(b"PROPFIND").unwrap_or(reqwest::Method::GET), &url)
+        let req = self
+            .client
+            .request(
+                reqwest::Method::from_bytes(b"PROPFIND").unwrap_or(reqwest::Method::GET),
+                &url,
+            )
             .header("Depth", "1");
 
         let req = self.apply_auth(req);
 
-        let resp = req.send().map_err(|e| WebdavClient::describe_reqwest_error(&e))?;
+        let resp = req
+            .send()
+            .map_err(|e| WebdavClient::describe_reqwest_error(&e))?;
         if !resp.status().is_success() {
             let s = resp.status().as_u16();
             let msg = match s {
@@ -193,7 +208,9 @@ impl WebdavClient {
                 Ok(u) => u,
                 Err(_) => continue,
             };
-            let Ok(file_url) = reqwest::Url::parse(&file_url_path) else { continue };
+            let Ok(file_url) = reqwest::Url::parse(&file_url_path) else {
+                continue;
+            };
 
             if file_url.path().trim_end_matches('/') == req_url_path.trim_end_matches('/') {
                 continue;
@@ -234,7 +251,7 @@ impl WebdavClient {
         let mut current_len: u64 = 0;
         let mut current_is_dir = false;
         let mut current_mtime = String::new();
-        
+
         let mut inside_tag = String::new();
 
         loop {
@@ -243,7 +260,7 @@ impl WebdavClient {
                     let tag_name = String::from_utf8_lossy(e.name().as_ref()).to_lowercase();
                     let local_name = tag_name.split(':').last().unwrap_or(&tag_name);
                     inside_tag = local_name.to_string();
-                    
+
                     if inside_tag == "response" {
                         current_href = String::new();
                         current_len = 0;
@@ -272,7 +289,7 @@ impl WebdavClient {
                 Ok(Event::End(ref e)) => {
                     let tag_name = String::from_utf8_lossy(e.name().as_ref()).to_lowercase();
                     let local_name = tag_name.split(':').last().unwrap_or(&tag_name);
-                    
+
                     if local_name == "response" {
                         files.push(WebdavFile {
                             path: current_href.clone(),
@@ -301,7 +318,9 @@ impl WebdavClient {
     /// 返回写入的字节数。
     pub fn download_to_file(&self, file_url: &str, dest: &Path) -> Result<u64, String> {
         let req = self.apply_auth(self.download_client.get(file_url));
-        let mut resp = req.send().map_err(|e| WebdavClient::describe_reqwest_error(&e))?;
+        let mut resp = req
+            .send()
+            .map_err(|e| WebdavClient::describe_reqwest_error(&e))?;
         if !resp.status().is_success() {
             let s = resp.status().as_u16();
             let msg = match s {
@@ -311,8 +330,11 @@ impl WebdavClient {
             };
             return Err(msg);
         }
-        let mut file = File::create(dest).map_err(|e| format!("Failed to create cache file: {}", e))?;
-        let bytes = resp.copy_to(&mut file).map_err(|e| format!("Download write failed: {}", e))?;
+        let mut file =
+            File::create(dest).map_err(|e| format!("Failed to create cache file: {}", e))?;
+        let bytes = resp
+            .copy_to(&mut file)
+            .map_err(|e| format!("Download write failed: {}", e))?;
         Ok(bytes)
     }
 
@@ -320,9 +342,12 @@ impl WebdavClient {
     /// 对已存在的目录返回 405，视为成功（幂等）。
     pub fn mkcol(&self, path_url: &str) -> Result<(), String> {
         let req = self.apply_auth(
-            self.client.request(reqwest::Method::from_bytes(b"MKCOL").unwrap(), path_url)
+            self.client
+                .request(reqwest::Method::from_bytes(b"MKCOL").unwrap(), path_url),
         );
-        let resp = req.send().map_err(|e| format!("MKCOL request failed: {}", e))?;
+        let resp = req
+            .send()
+            .map_err(|e| format!("MKCOL request failed: {}", e))?;
         let status = resp.status();
         // 201 Created 或 405 Method Not Allowed（目录已存在）都视为成功
         if status.is_success() || status.as_u16() == 405 {
@@ -335,7 +360,9 @@ impl WebdavClient {
     /// PUT：上传文件内容到指定 URL（上传 DB 快照用）。
     pub fn put_file(&self, file_url: &str, data: Vec<u8>) -> Result<(), String> {
         let req = self.apply_auth(self.client.put(file_url).body(data));
-        let resp = req.send().map_err(|e| format!("PUT request failed: {}", e))?;
+        let resp = req
+            .send()
+            .map_err(|e| format!("PUT request failed: {}", e))?;
         if resp.status().is_success() {
             Ok(())
         } else {
@@ -346,7 +373,9 @@ impl WebdavClient {
     /// DELETE：删除远程文件（清理旧快照用）。
     pub fn delete(&self, file_url: &str) -> Result<(), String> {
         let req = self.apply_auth(self.client.delete(file_url));
-        let resp = req.send().map_err(|e| format!("DELETE request failed: {}", e))?;
+        let resp = req
+            .send()
+            .map_err(|e| format!("DELETE request failed: {}", e))?;
         // 204 No Content 或 404 Not Found 都视为成功
         let status = resp.status();
         if status.is_success() || status.as_u16() == 404 {
@@ -381,8 +410,11 @@ impl HttpRangeReader {
             resp_offset: 0,
         }
     }
-    
-    fn apply_auth(&self, req: reqwest::blocking::RequestBuilder) -> reqwest::blocking::RequestBuilder {
+
+    fn apply_auth(
+        &self,
+        req: reqwest::blocking::RequestBuilder,
+    ) -> reqwest::blocking::RequestBuilder {
         if let (Some(u), Some(p)) = (&self.username, &self.password) {
             req.basic_auth(u, Some(p))
         } else {
@@ -403,19 +435,33 @@ impl Read for HttpRangeReader {
         let mut retries = 0;
         loop {
             // Forward seek optimization (up to 256KB)
-            if self.current_resp.is_some() && self.offset > self.resp_offset && self.offset - self.resp_offset <= 256 * 1024 {
+            if self.current_resp.is_some()
+                && self.offset > self.resp_offset
+                && self.offset - self.resp_offset <= 256 * 1024
+            {
                 let mut skip = self.offset - self.resp_offset;
                 let mut dummy = [0u8; 8192];
                 let mut success = true;
                 while skip > 0 {
                     let to_read = std::cmp::min(skip, dummy.len() as u64) as usize;
-                    match self.current_resp.as_mut().unwrap().read(&mut dummy[..to_read]) {
-                        Ok(0) => { success = false; break; }
+                    match self
+                        .current_resp
+                        .as_mut()
+                        .unwrap()
+                        .read(&mut dummy[..to_read])
+                    {
+                        Ok(0) => {
+                            success = false;
+                            break;
+                        }
                         Ok(n) => {
                             skip -= n as u64;
                             self.resp_offset += n as u64;
                         }
-                        Err(_) => { success = false; break; }
+                        Err(_) => {
+                            success = false;
+                            break;
+                        }
                     }
                 }
                 if !success {
@@ -432,14 +478,18 @@ impl Read for HttpRangeReader {
                     Ok(r) => r,
                     Err(e) => {
                         tracing::error!("HttpRangeReader fetch failed for url: {}", self.url);
-                        return Err(io::Error::new(io::ErrorKind::Other, WebdavClient::describe_reqwest_error(&e)));
+                        return Err(io::Error::new(
+                            io::ErrorKind::Other,
+                            WebdavClient::describe_reqwest_error(&e),
+                        ));
                     }
                 };
 
                 let status = resp.status();
                 if status == reqwest::StatusCode::PARTIAL_CONTENT {
                     // 严格校验 Content-Range 起始偏移：服务端返回错误分段会导致解码错乱
-                    if let Some(start) = resp.headers()
+                    if let Some(start) = resp
+                        .headers()
                         .get(reqwest::header::CONTENT_RANGE)
                         .and_then(|v| v.to_str().ok())
                         .and_then(parse_content_range_start)
@@ -451,7 +501,10 @@ impl Read for HttpRangeReader {
                             );
                             return Err(io::Error::new(
                                 io::ErrorKind::InvalidData,
-                                format!("WebDAV 服务器返回的分段起始位置不匹配 (期望 {}, 实际 {})", self.offset, start),
+                                format!(
+                                    "WebDAV 服务器返回的分段起始位置不匹配 (期望 {}, 实际 {})",
+                                    self.offset, start
+                                ),
                             ));
                         }
                     }
@@ -460,11 +513,18 @@ impl Read for HttpRangeReader {
                 } else if status.as_u16() == 200 && self.offset == 0 {
                     // 服务器忽略 Range 但请求起点本来就是 0：整条 200 响应可当作全量流使用，
                     // 不再直接报错（不支持 Range 的来源会在能力探测后改走整文件下载，这里是兜底）
-                    tracing::warn!("WebDAV server ignored Range (HTTP 200); using full stream for {}", self.url);
+                    tracing::warn!(
+                        "WebDAV server ignored Range (HTTP 200); using full stream for {}",
+                        self.url
+                    );
                     self.current_resp = Some(resp);
                     self.resp_offset = 0;
                 } else {
-                    tracing::error!("HttpRangeReader fetch failed for url: {} with status: {}", self.url, status);
+                    tracing::error!(
+                        "HttpRangeReader fetch failed for url: {} with status: {}",
+                        self.url,
+                        status
+                    );
                     return Err(io::Error::new(
                         io::ErrorKind::Unsupported,
                         format!("WebDAV 服务器不支持分段读取 (HTTP {})", status),
@@ -479,7 +539,10 @@ impl Read for HttpRangeReader {
                             self.current_resp = None;
                             retries += 1;
                             if retries > 3 {
-                                return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "Premature EOF from server"));
+                                return Err(io::Error::new(
+                                    io::ErrorKind::UnexpectedEof,
+                                    "Premature EOF from server",
+                                ));
                             }
                             continue;
                         } else {
@@ -515,7 +578,10 @@ impl Seek for HttpRangeReader {
         };
 
         if new_offset < 0 {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid seek to negative offset"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid seek to negative offset",
+            ));
         }
 
         self.offset = new_offset as u64;
@@ -538,7 +604,10 @@ mod tests {
     #[test]
     fn content_range_start_parses_standard_header() {
         assert_eq!(parse_content_range_start("bytes 0-1023/1465152"), Some(0));
-        assert_eq!(parse_content_range_start("bytes 1024-2047/1465152"), Some(1024));
+        assert_eq!(
+            parse_content_range_start("bytes 1024-2047/1465152"),
+            Some(1024)
+        );
     }
 
     #[test]

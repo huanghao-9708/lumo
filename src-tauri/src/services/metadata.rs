@@ -1,5 +1,5 @@
-use lofty::probe::Probe;
 use lofty::file::{AudioFile, TaggedFileExt};
+use lofty::probe::Probe;
 use lofty::tag::Accessor;
 use lofty::tag::ItemKey;
 use std::path::Path;
@@ -33,7 +33,9 @@ pub fn extract_metadata<P: AsRef<Path>>(path: P) -> Result<AudioMetadata, String
     extract_metadata_inner(tagged_file)
 }
 
-pub fn extract_metadata_from_reader<R: std::io::Read + std::io::Seek>(reader: R) -> Result<AudioMetadata, String> {
+pub fn extract_metadata_from_reader<R: std::io::Read + std::io::Seek>(
+    reader: R,
+) -> Result<AudioMetadata, String> {
     let tagged_file = match Probe::new(reader).guess_file_type() {
         Ok(probe) => match probe.read() {
             Ok(file) => file,
@@ -54,7 +56,10 @@ fn extract_metadata_inner(tagged_file: lofty::file::TaggedFile) -> Result<AudioM
     metadata.sample_rate = properties.sample_rate().map(|s| s as i64);
     metadata.channels = properties.channels().map(|c| c as i64);
 
-    if let Some(tag) = tagged_file.primary_tag().or_else(|| tagged_file.first_tag()) {
+    if let Some(tag) = tagged_file
+        .primary_tag()
+        .or_else(|| tagged_file.first_tag())
+    {
         metadata.title = tag.title().map(|s| s.into_owned());
         metadata.artist = tag.artist().map(|s| s.into_owned());
         // lofty 0.21 的 Accessor trait 未提供 album_artist 访问器，

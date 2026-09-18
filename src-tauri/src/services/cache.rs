@@ -184,7 +184,11 @@ impl AudioCache {
                 freed += size;
             }
         }
-        info!("Audio cache pruned, freed {} bytes, remaining ~{} bytes", freed, total_size.saturating_sub(freed));
+        info!(
+            "Audio cache pruned, freed {} bytes, remaining ~{} bytes",
+            freed,
+            total_size.saturating_sub(freed)
+        );
         freed
     }
 }

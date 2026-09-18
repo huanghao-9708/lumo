@@ -1,12 +1,17 @@
-use rusqlite::{Connection, params};
 use crate::models::*;
+use rusqlite::{params, Connection};
 
 pub struct ArtistRepo;
 
 impl ArtistRepo {
-    pub fn get_artists_paginated(conn: &Connection, limit: u32, offset: u32, search_keyword: Option<String>) -> rusqlite::Result<ArtistListResult> {
-            // 直接读 artists.track_count 冗余字段（迁移 V2 维护），去掉子查询。
-            let mut sql = "
+    pub fn get_artists_paginated(
+        conn: &Connection,
+        limit: u32,
+        offset: u32,
+        search_keyword: Option<String>,
+    ) -> rusqlite::Result<ArtistListResult> {
+        // 直接读 artists.track_count 冗余字段（迁移 V2 维护），去掉子查询。
+        let mut sql = "
                 SELECT
                     ar.id,
                     ar.name,
@@ -14,60 +19,73 @@ impl ArtistRepo {
                     ar.avatar_artwork_id
                 FROM artists ar
                 WHERE 1=1
-            ".to_string();
+            "
+        .to_string();
 
-            let mut count_sql = "
+        let mut count_sql = "
                 SELECT COUNT(*) FROM artists ar WHERE 1=1
-            ".to_string();
+            "
+        .to_string();
 
-            let keyword_pattern = if let Some(keyword) = search_keyword {
-                let kw = keyword.trim();
-                if !kw.is_empty() {
-                    let clause = " AND ar.name LIKE ?";
-                    sql.push_str(clause);
-                    count_sql.push_str(clause);
-                    Some(format!("%{}%", kw))
-                } else { None }
-            } else { None };
-
-            // 用 normalized_name（已有索引）代替 COLLATE NOCASE，避免函数排序
-            // 加 ar.id 作 tiebreaker，避免相同 normalized_name 时分页结果重叠
-            sql.push_str(" ORDER BY ar.normalized_name ASC, ar.id ASC LIMIT ? OFFSET ?");
-
-            let total: i64 = if let Some(pattern) = &keyword_pattern {
-                let mut stmt = conn.prepare(&count_sql)?;
-                stmt.query_row(params![pattern], |row| row.get(0))?
+        let keyword_pattern = if let Some(keyword) = search_keyword {
+            let kw = keyword.trim();
+            if !kw.is_empty() {
+                let clause = " AND ar.name LIKE ?";
+                sql.push_str(clause);
+                count_sql.push_str(clause);
+                Some(format!("%{}%", kw))
             } else {
-                let mut stmt = conn.prepare(&count_sql)?;
-                stmt.query_row([], |row| row.get(0))?
-            };
-
-            let mut result = Vec::new();
-            if let Some(pattern) = keyword_pattern {
-                let mut stmt = conn.prepare(&sql)?;
-                let rows = stmt.query_map(params![pattern, limit, offset], |row| {
-                    Ok(ArtistDTO {
-                        id: row.get(0)?,
-                        name: row.get(1)?,
-                        track_count: row.get(2)?,
-                        avatar_artwork_id: row.get(3)?,
-                    })
-                })?;
-                for r in rows { result.push(r?); }
-            } else {
-                let mut stmt = conn.prepare(&sql)?;
-                let rows = stmt.query_map(params![limit, offset], |row| {
-                    Ok(ArtistDTO {
-                        id: row.get(0)?,
-                        name: row.get(1)?,
-                        track_count: row.get(2)?,
-                        avatar_artwork_id: row.get(3)?,
-                    })
-                })?;
-                for r in rows { result.push(r?); }
+                None
             }
-            Ok(ArtistListResult { artists: result, total })
+        } else {
+            None
+        };
+
+        // 用 normalized_name（已有索引）代替 COLLATE NOCASE，避免函数排序
+        // 加 ar.id 作 tiebreaker，避免相同 normalized_name 时分页结果重叠
+        sql.push_str(" ORDER BY ar.normalized_name ASC, ar.id ASC LIMIT ? OFFSET ?");
+
+        let total: i64 = if let Some(pattern) = &keyword_pattern {
+            let mut stmt = conn.prepare(&count_sql)?;
+            stmt.query_row(params![pattern], |row| row.get(0))?
+        } else {
+            let mut stmt = conn.prepare(&count_sql)?;
+            stmt.query_row([], |row| row.get(0))?
+        };
+
+        let mut result = Vec::new();
+        if let Some(pattern) = keyword_pattern {
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(params![pattern, limit, offset], |row| {
+                Ok(ArtistDTO {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    track_count: row.get(2)?,
+                    avatar_artwork_id: row.get(3)?,
+                })
+            })?;
+            for r in rows {
+                result.push(r?);
+            }
+        } else {
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(params![limit, offset], |row| {
+                Ok(ArtistDTO {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    track_count: row.get(2)?,
+                    avatar_artwork_id: row.get(3)?,
+                })
+            })?;
+            for r in rows {
+                result.push(r?);
+            }
         }
+        Ok(ArtistListResult {
+            artists: result,
+            total,
+        })
+    }
 
     pub fn get_artist_album_count(conn: &Connection, artist_id: i64) -> rusqlite::Result<i64> {
         let mut stmt = conn.prepare("
@@ -87,11 +105,16 @@ impl ArtistRepo {
         Ok(count)
     }
 
-    pub fn get_artist_albums(conn: &Connection, artist_id: i64, limit: u32, offset: u32) -> rusqlite::Result<Vec<AlbumDTO>> {
-            // 直接读 albums.track_count 冗余字段，去掉子查询和 GROUP BY。
-            // 注意 DISTINCT + JOIN track_artists 会让同一专辑出现多次，仍需 GROUP BY al.id 去重，
-            // 但因为不再 COUNT(t.id)，分组本身极快（不需扫描 track_artists 的全部行）。
-            let mut stmt = conn.prepare("
+    pub fn get_artist_albums(
+        conn: &Connection,
+        artist_id: i64,
+        limit: u32,
+        offset: u32,
+    ) -> rusqlite::Result<Vec<AlbumDTO>> {
+        // 直接读 albums.track_count 冗余字段，去掉子查询和 GROUP BY。
+        // 注意 DISTINCT + JOIN track_artists 会让同一专辑出现多次，仍需 GROUP BY al.id 去重，
+        // 但因为不再 COUNT(t.id)，分组本身极快（不需扫描 track_artists 的全部行）。
+        let mut stmt = conn.prepare("
                 SELECT
                     al.id, al.title,
                     (SELECT GROUP_CONCAT(aa2.name, ', ') FROM album_artists aa1 JOIN artists aa2 ON aa1.artist_id = aa2.id WHERE aa1.album_id = al.id ORDER BY aa1.position) AS artist_name,
@@ -108,28 +131,38 @@ impl ArtistRepo {
                 ORDER BY al.release_year DESC, al.title ASC
                 LIMIT ?2 OFFSET ?3
             ")?;
-            let rows = stmt.query_map(rusqlite::params![artist_id, limit, offset], |row| {
-                let thumb: Option<Vec<u8>> = row.get(5)?;
-                let cover_thumbnail_base64 = thumb.map(|b| {
-                    use base64::{engine::general_purpose, Engine as _};
-                    format!("data:image/jpeg;base64,{}", general_purpose::STANDARD.encode(&b))
-                });
-                Ok(AlbumDTO {
-                    id: row.get(0)?,
-                    title: row.get(1)?,
-                    artist_name: row.get(2)?,
-                    cover_artwork_id: row.get(3)?,
-                    track_count: row.get(4)?,
-                    cover_thumbnail_base64,
-                })
-            })?;
-            let mut result = Vec::new();
-            for r in rows { result.push(r?); }
-            Ok(result)
+        let rows = stmt.query_map(rusqlite::params![artist_id, limit, offset], |row| {
+            let thumb: Option<Vec<u8>> = row.get(5)?;
+            let cover_thumbnail_base64 = thumb.map(|b| {
+                use base64::{engine::general_purpose, Engine as _};
+                format!(
+                    "data:image/jpeg;base64,{}",
+                    general_purpose::STANDARD.encode(&b)
+                )
+            });
+            Ok(AlbumDTO {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                artist_name: row.get(2)?,
+                cover_artwork_id: row.get(3)?,
+                track_count: row.get(4)?,
+                cover_thumbnail_base64,
+            })
+        })?;
+        let mut result = Vec::new();
+        for r in rows {
+            result.push(r?);
         }
+        Ok(result)
+    }
 
-    pub fn get_artist_tracks(conn: &Connection, artist_id: i64, limit: u32, offset: u32) -> rusqlite::Result<Vec<TrackDTO>> {
-            let mut stmt = conn.prepare("
+    pub fn get_artist_tracks(
+        conn: &Connection,
+        artist_id: i64,
+        limit: u32,
+        offset: u32,
+    ) -> rusqlite::Result<Vec<TrackDTO>> {
+        let mut stmt = conn.prepare("
                 SELECT 
                     t.id, t.title, 
                     (SELECT artist_id FROM track_artists WHERE track_id = t.id ORDER BY position LIMIT 1) AS artist_id,
@@ -146,81 +179,103 @@ impl ArtistRepo {
                 ORDER BY t.play_count DESC, t.title ASC
                 LIMIT ?2 OFFSET ?3
             ")?;
-            let rows = stmt.query_map(rusqlite::params![artist_id, limit, offset], crate::repositories::map_track_row)?;
-            let mut result = Vec::new();
-            for r in rows { result.push(r?); }
-            Ok(result)
+        let rows = stmt.query_map(
+            rusqlite::params![artist_id, limit, offset],
+            crate::repositories::map_track_row,
+        )?;
+        let mut result = Vec::new();
+        for r in rows {
+            result.push(r?);
         }
+        Ok(result)
+    }
 
     pub fn get_artist_stats(conn: &Connection, artist_id: i64) -> rusqlite::Result<ArtistStatsDTO> {
-            // track_count 直接读冗余字段（O(1)）。
-            // album_count 由于语义包含"参与的"专辑（不只是作为 album_artist），
-            // 与 artists.album_count 冗余字段定义不同，仍需一次查询。但单艺人涉及的专辑
-            // 通常只有几十张，配合 idx_track_artists_artist 索引，耗时几毫秒可接受。
-            let track_count: i64 = conn.query_row(
+        // track_count 直接读冗余字段（O(1)）。
+        // album_count 由于语义包含"参与的"专辑（不只是作为 album_artist），
+        // 与 artists.album_count 冗余字段定义不同，仍需一次查询。但单艺人涉及的专辑
+        // 通常只有几十张，配合 idx_track_artists_artist 索引，耗时几毫秒可接受。
+        let track_count: i64 = conn
+            .query_row(
                 "SELECT track_count FROM artists WHERE id = ?1",
                 [artist_id],
-                |row| row.get(0)
-            ).unwrap_or(0);
-    
-            let album_count: i64 = conn.query_row(
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+
+        let album_count: i64 = conn
+            .query_row(
                 "SELECT COUNT(DISTINCT al.id) FROM albums al
                  LEFT JOIN tracks t ON t.album_id = al.id
                  LEFT JOIN track_artists ta ON ta.track_id = t.id
                  WHERE al.album_artist_id = ?1 OR ta.artist_id = ?1",
                 [artist_id],
-                |row| row.get(0)
-            ).unwrap_or(0);
-    
-            Ok(ArtistStatsDTO {
-                track_count,
-                album_count
-            })
-        }
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+
+        Ok(ArtistStatsDTO {
+            track_count,
+            album_count,
+        })
+    }
 
     pub fn get_favorite_artists(conn: &Connection) -> rusqlite::Result<Vec<ArtistDTO>> {
-            let mut stmt = conn.prepare("
+        let mut stmt = conn.prepare(
+            "
                 SELECT
                     ar.id, ar.name, ar.track_count, ar.avatar_artwork_id
                 FROM favorite_artists fa
                 JOIN artists ar ON fa.artist_id = ar.id
                 ORDER BY fa.favorited_at DESC
-            ")?;
-            let rows = stmt.query_map([], |row| {
-                Ok(ArtistDTO {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    track_count: row.get(2)?,
-                    avatar_artwork_id: row.get(3)?,
-                })
-            })?;
-            let mut result = Vec::new();
-            for r in rows { result.push(r?); }
-            Ok(result)
+            ",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(ArtistDTO {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                track_count: row.get(2)?,
+                avatar_artwork_id: row.get(3)?,
+            })
+        })?;
+        let mut result = Vec::new();
+        for r in rows {
+            result.push(r?);
         }
+        Ok(result)
+    }
 
-    pub fn toggle_favorite_artist(conn: &Connection, artist_id: i64, is_favorite: bool) -> rusqlite::Result<()> {
-            if is_favorite {
-                conn.execute(
-                    "INSERT OR IGNORE INTO favorite_artists (artist_id) VALUES (?1)",
-                    params![artist_id],
-                )?;
-            } else {
-                conn.execute(
-                    "DELETE FROM favorite_artists WHERE artist_id = ?1",
-                    params![artist_id],
-                )?;
-            }
-            Ok(())
+    pub fn toggle_favorite_artist(
+        conn: &Connection,
+        artist_id: i64,
+        is_favorite: bool,
+    ) -> rusqlite::Result<()> {
+        if is_favorite {
+            conn.execute(
+                "INSERT OR IGNORE INTO favorite_artists (artist_id) VALUES (?1)",
+                params![artist_id],
+            )?;
+        } else {
+            conn.execute(
+                "DELETE FROM favorite_artists WHERE artist_id = ?1",
+                params![artist_id],
+            )?;
         }
+        Ok(())
+    }
 
-    pub fn get_artist_by_id(conn: &Connection, artist_id: i64) -> rusqlite::Result<Option<ArtistDTO>> {
-        let mut stmt = conn.prepare("
+    pub fn get_artist_by_id(
+        conn: &Connection,
+        artist_id: i64,
+    ) -> rusqlite::Result<Option<ArtistDTO>> {
+        let mut stmt = conn.prepare(
+            "
             SELECT
                 ar.id, ar.name, ar.track_count, ar.avatar_artwork_id
             FROM artists ar
             WHERE ar.id = ?1
-        ")?;
+        ",
+        )?;
         let mut rows = stmt.query_map(params![artist_id], |row| {
             Ok(ArtistDTO {
                 id: row.get(0)?,
@@ -241,9 +296,13 @@ impl ArtistRepo {
     /// 第一步只聚合出 Top N 的 artist_id（SUM 是聚合键，毫秒级）；
     /// 第二步逐 ID 补齐展示列并重算累计播放次数——只对 LIMIT 个 ID 求和
     /// （走 idx_track_artists_artist 索引），数学上与第一步聚合值等价。
-    pub fn get_top_played_artists(conn: &Connection, limit: i64) -> rusqlite::Result<Vec<RankedArtistDTO>> {
+    pub fn get_top_played_artists(
+        conn: &Connection,
+        limit: i64,
+    ) -> rusqlite::Result<Vec<RankedArtistDTO>> {
         let ids: Vec<i64> = {
-            let mut stmt = conn.prepare("
+            let mut stmt = conn.prepare(
+                "
                 SELECT ta.artist_id
                 FROM track_artists ta
                 JOIN tracks t ON t.id = ta.track_id
@@ -251,7 +310,8 @@ impl ArtistRepo {
                 GROUP BY ta.artist_id
                 ORDER BY SUM(t.play_count) DESC, ta.artist_id ASC
                 LIMIT ?1
-            ")?;
+            ",
+            )?;
             let rows = stmt.query_map([limit], |row| row.get(0))?;
             rows.collect::<rusqlite::Result<Vec<_>>>()?
         };
@@ -260,7 +320,8 @@ impl ArtistRepo {
         }
 
         let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-        let sql = format!("
+        let sql = format!(
+            "
             SELECT
                 ar.id,
                 ar.name,
@@ -272,7 +333,8 @@ impl ArtistRepo {
             FROM artists ar
             WHERE ar.id IN ({placeholders})
             ORDER BY play_count DESC, ar.id ASC
-        ");
+        "
+        );
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(rusqlite::params_from_iter(ids.iter()), |row| {
             Ok(RankedArtistDTO {
@@ -284,8 +346,9 @@ impl ArtistRepo {
             })
         })?;
         let mut result = Vec::new();
-        for r in rows { result.push(r?); }
+        for r in rows {
+            result.push(r?);
+        }
         Ok(result)
     }
-
 }

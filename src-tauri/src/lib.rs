@@ -1,20 +1,20 @@
-pub mod models;
-pub mod db;
-pub mod services;
-pub mod repositories;
 pub mod commands;
-pub mod ipc_trace;
+pub mod db;
 pub mod error;
-use db::{init_db, DbState};
-use services::playback::PlaybackManager;
-use services::cache::AudioCache;
+pub mod ipc_trace;
+pub mod models;
+pub mod repositories;
+pub mod services;
 use crate::commands::playback::PlaybackState;
-use tracing_subscriber;
+use crate::db::DbPool;
+use db::{init_db, DbState};
+use services::cache::AudioCache;
+use services::playback::PlaybackManager;
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::{Condvar, Mutex as StdMutex};
-use std::path::PathBuf;
 use tauri::Manager;
-use crate::db::DbPool;
+use tracing_subscriber;
 
 /// 简易计数信号量:限制 `lumo://artwork` 协议的并发处理数。
 ///
@@ -89,13 +89,14 @@ fn backfill_artwork_thumbnails(app: tauri::AppHandle, pool: &DbPool) {
                 return;
             }
         };
-        let mut stmt = match conn.prepare("SELECT id, cache_path FROM artwork WHERE thumbnail_blob IS NULL") {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::error!("[回填] 准备查询失败: {}", e);
-                return;
-            }
-        };
+        let mut stmt =
+            match conn.prepare("SELECT id, cache_path FROM artwork WHERE thumbnail_blob IS NULL") {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::error!("[回填] 准备查询失败: {}", e);
+                    return;
+                }
+            };
         let rows = stmt.query_map([], |row| {
             Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
         });
@@ -114,7 +115,10 @@ fn backfill_artwork_thumbnails(app: tauri::AppHandle, pool: &DbPool) {
         let _ = app.emit("artwork-backfill-complete", ());
         return;
     }
-    tracing::info!("[回填] 发现 {} 条 artwork 记录待生成缩略图，后台异步执行中...", total);
+    tracing::info!(
+        "[回填] 发现 {} 条 artwork 记录待生成缩略图，后台异步执行中...",
+        total
+    );
 
     let batch_size = 50;
     let mut done = 0usize;
@@ -138,9 +142,9 @@ fn backfill_artwork_thumbnails(app: tauri::AppHandle, pool: &DbPool) {
         };
 
         for (id, cache_path) in chunk {
-            let thumb = std::fs::read(cache_path)
-                .ok()
-                .and_then(|data| crate::services::library::LibraryService::generate_thumbnail(&data));
+            let thumb = std::fs::read(cache_path).ok().and_then(|data| {
+                crate::services::library::LibraryService::generate_thumbnail(&data)
+            });
 
             if let Some(blob) = thumb {
                 let _ = tx.execute(
@@ -150,7 +154,11 @@ fn backfill_artwork_thumbnails(app: tauri::AppHandle, pool: &DbPool) {
                 done += 1;
             } else {
                 failed += 1;
-                tracing::warn!("[回填] artwork id={} 无法生成缩略图（路径={}）", id, cache_path);
+                tracing::warn!(
+                    "[回填] artwork id={} 无法生成缩略图（路径={}）",
+                    id,
+                    cache_path
+                );
             }
         }
 
@@ -162,11 +170,22 @@ fn backfill_artwork_thumbnails(app: tauri::AppHandle, pool: &DbPool) {
         std::thread::sleep(std::time::Duration::from_millis(50));
 
         if (done + failed) % 100 == 0 {
-            tracing::info!("[回填] 进度：{}/{}（成功 {}，失败 {}）", done + failed, total, done, failed);
+            tracing::info!(
+                "[回填] 进度：{}/{}（成功 {}，失败 {}）",
+                done + failed,
+                total,
+                done,
+                failed
+            );
         }
     }
 
-    tracing::info!("[回填] 完成：成功 {}，失败 {}，总计 {}", done, failed, total);
+    tracing::info!(
+        "[回填] 完成：成功 {}，失败 {}，总计 {}",
+        done,
+        failed,
+        total
+    );
     let _ = app.emit("artwork-backfill-complete", ());
 }
 
@@ -236,7 +255,10 @@ pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             services::platform::set_app_handle(app.handle().clone());
-            let app_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
+            let app_dir = app
+                .path()
+                .app_data_dir()
+                .unwrap_or_else(|_| PathBuf::from("."));
             std::fs::create_dir_all(&app_dir).unwrap();
             let db_path = app_dir.join("lumo.sqlite");
 
@@ -256,9 +278,7 @@ pub fn run() {
                 });
             }
 
-            app.manage(DbState {
-                db: pool,
-            });
+            app.manage(DbState { db: pool });
 
             let playback_manager = PlaybackManager::new().expect("Failed to init playback");
             app.manage(PlaybackState {
@@ -267,7 +287,11 @@ pub fn run() {
 
             let mut playback_queue = crate::services::queue::PlaybackQueue::new();
             if let Some(persisted) = crate::services::queue::load_state_from_disk(&app_dir) {
-                tracing::info!("Restored persisted playback queue with {} items, index={}", persisted.items.len(), persisted.index);
+                tracing::info!(
+                    "Restored persisted playback queue with {} items, index={}",
+                    persisted.items.len(),
+                    persisted.index
+                );
                 playback_queue.set_queue(persisted.items, persisted.index, persisted.mode);
             }
             app.manage(crate::services::queue::QueueState {
@@ -298,7 +322,13 @@ pub fn run() {
             let uri = request.uri().to_string();
             // 兼容 Windows WebView2 (`http://lumo.localhost/artwork/1`) 和 标准 (`lumo://artwork/1`)
             let uri_without_query = uri.split('?').next().unwrap_or(&uri);
-            let artwork_id = uri_without_query.trim_end_matches('/').split('/').last().unwrap_or("").parse::<i64>().unwrap_or(0);
+            let artwork_id = uri_without_query
+                .trim_end_matches('/')
+                .split('/')
+                .last()
+                .unwrap_or("")
+                .parse::<i64>()
+                .unwrap_or(0);
 
             if artwork_id > 0 {
                 // 限流:最多 4 个封面请求同时处理,其余排队等待。

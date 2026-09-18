@@ -52,15 +52,18 @@ impl PlaybackManager {
         self.play_stream(file)
     }
 
-    pub fn play_stream<R: std::io::Read + std::io::Seek + Send + Sync + 'static>(&self, reader: R) -> Result<Option<u64>, String> {
+    pub fn play_stream<R: std::io::Read + std::io::Seek + Send + Sync + 'static>(
+        &self,
+        reader: R,
+    ) -> Result<Option<u64>, String> {
         let decoder = Decoder::new(BufReader::new(reader))
             .map_err(|e| format!("Failed to decode stream: {}", e))?;
 
         let duration = decoder.total_duration().map(|d| d.as_millis() as u64);
 
         self.sink.stop(); // 清掉旧队列，避免叠加
-        // convert_samples 把解码器的 i16 样本统一成 f32（LevelSource 按 f32 度量能量）；
-        // 该转换器由 rodio 实现，会把 try_seek 原样透传给解码器，因此拖拽进度条语义不变。
+                          // convert_samples 把解码器的 i16 样本统一成 f32（LevelSource 按 f32 度量能量）；
+                          // 该转换器由 rodio 实现，会把 try_seek 原样透传给解码器，因此拖拽进度条语义不变。
         self.sink.append(LevelSource::new(
             decoder.convert_samples::<f32>(),
             self.level.clone(),
@@ -75,11 +78,14 @@ impl PlaybackManager {
     /// rodio 的 Sink 会在当前曲目播放完毕后，立刻无缝开始播放这首曲目。
     pub fn enqueue_next_file(&self, path: &std::path::Path) -> Result<(), String> {
         info!("Enqueuing next file for gapless playback: {:?}", path);
-        let file = File::open(path).map_err(|e| format!("Failed to open file for enqueuing: {}", e))?;
+        let file =
+            File::open(path).map_err(|e| format!("Failed to open file for enqueuing: {}", e))?;
         let decoder = Decoder::new(BufReader::new(file))
             .map_err(|e| format!("Failed to decode stream for enqueuing: {}", e))?;
-        self.sink
-            .append(LevelSource::new(decoder.convert_samples::<f32>(), self.level.clone()));
+        self.sink.append(LevelSource::new(
+            decoder.convert_samples::<f32>(),
+            self.level.clone(),
+        ));
         Ok(())
     }
 
@@ -87,17 +93,22 @@ impl PlaybackManager {
     ///
     /// 与 `enqueue_next_file` 对称，区别是数据源是任意 `Read+Seek` 流而非本地文件。
     /// 缓存命中时走 `enqueue_next_file`，未命中走此方法，两种情况都实现无缝切歌。
-    pub fn enqueue_next_stream<R: std::io::Read + std::io::Seek + Send + Sync + 'static>(&self, reader: R) -> Result<(), String> {
+    pub fn enqueue_next_stream<R: std::io::Read + std::io::Seek + Send + Sync + 'static>(
+        &self,
+        reader: R,
+    ) -> Result<(), String> {
         info!("Enqueuing next stream for gapless playback");
         let decoder = Decoder::new(BufReader::new(reader))
             .map_err(|e| format!("Failed to decode stream for enqueuing: {}", e))?;
-        self.sink
-            .append(LevelSource::new(decoder.convert_samples::<f32>(), self.level.clone()));
+        self.sink.append(LevelSource::new(
+            decoder.convert_samples::<f32>(),
+            self.level.clone(),
+        ));
         Ok(())
     }
 
     /// 获取当前音频队列中剩余的曲目数。
-    /// 
+    ///
     /// 前端可利用此接口轮询。当队列长度从 2 变为 1 时，意味着已经无缝切入了下一首歌。
     pub fn get_queue_len(&self) -> usize {
         self.sink.len()
@@ -128,7 +139,8 @@ impl PlaybackManager {
     }
 
     pub fn try_seek(&self, position_ms: u64) -> Result<(), String> {
-        self.sink.try_seek(std::time::Duration::from_millis(position_ms))
+        self.sink
+            .try_seek(std::time::Duration::from_millis(position_ms))
             .map_err(|e| format!("Failed to seek: {:?}", e))
     }
 

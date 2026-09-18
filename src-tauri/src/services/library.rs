@@ -1,5 +1,5 @@
 use crate::services::metadata::AudioMetadata;
-use rusqlite::{Connection, params, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension};
 
 /// 扫描 worker 预处理好的封面信息：哈希、缓存路径、缩略图全部在事务外算好，
 /// 使写库事务内只剩纯 SQL（不再有 SHA256 / 图片解码 / 磁盘写入拉长事务）。
@@ -49,7 +49,6 @@ fn normalize_artist_name(s: &str) -> String {
 /// 转义 SQLite LIKE 模式串中的特殊字符（`%` / `_` / `\`），避免路径里这些字符被当通配符。
 /// 返回 (escaped_pattern, esc)，调用方需配合 `LIKE ? ESCAPE '\'` 使用。
 
-
 /// 提供本地曲库核心交互的服务类，处理所有文件入库解析以及前端歌曲数据的拉取
 pub struct LibraryService;
 
@@ -78,11 +77,20 @@ impl LibraryService {
         let mtime = prepared.mtime;
         let file_size = prepared.size;
 
-        let file_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_string();
+        let file_name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_string();
 
         // 相对于 source_root 的归一化相对路径（小写），用于 media_files 唯一约束
-        let relative_path = path.strip_prefix(source_root)
+        let relative_path = path
+            .strip_prefix(source_root)
             .unwrap_or(path)
             .to_string_lossy()
             .to_string();
@@ -91,11 +99,14 @@ impl LibraryService {
         // 1. 处理艺人关联 (支持更多分隔符)
         // 优先使用 album_artist 标签作为整张专辑的归属艺人，
         // 否则回退到 track 级别的 artist。这样合辑会归到 "Various Artists" 而不是被切碎。
-        let album_artist_str = metadata.album_artist.as_deref()
+        let album_artist_str = metadata
+            .album_artist
+            .as_deref()
             .or(metadata.artist.as_deref())
             .unwrap_or("Unknown Artist");
         let album_artist_ids = Self::split_and_upsert_artists(conn, album_artist_str)?;
-        let album_artist_id = *album_artist_ids.first()
+        let album_artist_id = *album_artist_ids
+            .first()
             .unwrap_or(&Self::upsert_artist(conn, "Unknown Artist")?);
 
         // 用于 track_artists 多对多关联的是 track 级 artist
@@ -158,11 +169,13 @@ impl LibraryService {
 
         // 查找已有 track 的逻辑（多音源归并）
         // 1. 同一专辑内同名完全匹配
-        let exact_match: Option<i64> = conn.query_row(
-            "SELECT id FROM tracks WHERE normalized_title = ?1 AND album_id IS ?2 LIMIT 1",
-            params![normalized_track_title, album_id],
-            |row| row.get(0),
-        ).optional()?;
+        let exact_match: Option<i64> = conn
+            .query_row(
+                "SELECT id FROM tracks WHERE normalized_title = ?1 AND album_id IS ?2 LIMIT 1",
+                params![normalized_track_title, album_id],
+                |row| row.get(0),
+            )
+            .optional()?;
 
         // 2. 指纹模糊匹配（标题一致 + 主艺人一致 + 时长相差不到2秒）
         let fuzzy_match: Option<i64> = if exact_match.is_none() {
@@ -176,9 +189,14 @@ impl LibraryService {
                                  AND a.normalized_name = ?2)
                    AND ABS(COALESCE(mf.duration_ms, 0) - ?3) <= 2000
                  LIMIT 1",
-                params![normalized_track_title, main_artist_normalized, metadata.duration_ms.unwrap_or(0)],
+                params![
+                    normalized_track_title,
+                    main_artist_normalized,
+                    metadata.duration_ms.unwrap_or(0)
+                ],
                 |row| row.get(0),
-            ).optional()?
+            )
+            .optional()?
         } else {
             None
         };
@@ -262,11 +280,14 @@ impl LibraryService {
         )?;
 
         // 7. 将刚刚存储成功的最优物理文件作为此歌曲的首选音源
-        let current_primary_file_id: Option<i64> = conn.query_row(
-            "SELECT primary_file_id FROM tracks WHERE id = ?1",
-            params![track_id],
-            |row| row.get(0),
-        ).optional()?.flatten();
+        let current_primary_file_id: Option<i64> = conn
+            .query_row(
+                "SELECT primary_file_id FROM tracks WHERE id = ?1",
+                params![track_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .flatten();
 
         let should_update_primary = if let Some(current_id) = current_primary_file_id {
             if current_id == media_file_id {
@@ -282,14 +303,18 @@ impl LibraryService {
                     },
                 ).unwrap_or(-1);
 
-                let new_score: i32 = conn.query_row(
-                    "SELECT kind FROM sources WHERE id = ?1",
-                    params![source_id],
-                    |row| {
-                        let kind: String = row.get(0)?;
-                        Ok(crate::services::file_priority::file_priority_score(&kind, &ext))
-                    },
-                ).unwrap_or(0);
+                let new_score: i32 = conn
+                    .query_row(
+                        "SELECT kind FROM sources WHERE id = ?1",
+                        params![source_id],
+                        |row| {
+                            let kind: String = row.get(0)?;
+                            Ok(crate::services::file_priority::file_priority_score(
+                                &kind, &ext,
+                            ))
+                        },
+                    )
+                    .unwrap_or(0);
 
                 new_score > curr_score
             }
@@ -298,12 +323,18 @@ impl LibraryService {
         };
 
         if should_update_primary {
-            conn.execute("UPDATE tracks SET primary_file_id = ?1 WHERE id = ?2", params![media_file_id, track_id])?;
+            conn.execute(
+                "UPDATE tracks SET primary_file_id = ?1 WHERE id = ?2",
+                params![media_file_id, track_id],
+            )?;
         }
 
         // 8. 歌词入库：优先扫描 worker 预读的同目录同名 LRC 文件，没有则回退内嵌歌词
         //   （文件系统读取已在 worker 完成，写事务内不再有磁盘 I/O）
-        let lrc_content = prepared.lrc_content.clone().or_else(|| metadata.lyrics.clone());
+        let lrc_content = prepared
+            .lrc_content
+            .clone()
+            .or_else(|| metadata.lyrics.clone());
 
         if let Some(content) = lrc_content {
             let _ = conn.execute(
@@ -364,16 +395,21 @@ impl LibraryService {
         artwork: &PreparedArtwork,
         app_data_dir: &std::path::Path,
     ) -> rusqlite::Result<Option<i64>> {
-        let Some(hash) = &artwork.hash else { return Ok(None) };
+        let Some(hash) = &artwork.hash else {
+            return Ok(None);
+        };
 
         // 同一张封面若已存在，直接复用其 ID。
         // thumbnail_blob 为 NULL（老数据 / 清理缓存后）时用首见文件带来的缩略图补写，
         // 确保后续扫描能逐步修复缺失的缩略图。
-        if let Some(id) = conn.query_row(
-            "SELECT id FROM artwork WHERE content_hash = ?1",
-            params![hash],
-            |row| row.get(0),
-        ).optional()? {
+        if let Some(id) = conn
+            .query_row(
+                "SELECT id FROM artwork WHERE content_hash = ?1",
+                params![hash],
+                |row| row.get(0),
+            )
+            .optional()?
+        {
             if let Some(thumb) = &artwork.thumbnail {
                 conn.execute(
                     "UPDATE artwork SET thumbnail_blob = ?1 WHERE id = ?2 AND thumbnail_blob IS NULL",
@@ -386,8 +422,9 @@ impl LibraryService {
         // 新封面：cache_path / thumbnail 均来自 worker 的预处理产物，纯 SQL 插入。
         // 同 hash 的首见文件必带 cache_path；若结果乱序导致非首见文件先到写库，
         // 用确定性路径（hash 命名）兜底——worker 写入的是同一个路径，不会错位。
-        let cache_path = artwork.cache_path.clone()
-            .unwrap_or_else(|| Self::artwork_cache_path(app_data_dir, artwork.mime.as_deref(), hash));
+        let cache_path = artwork.cache_path.clone().unwrap_or_else(|| {
+            Self::artwork_cache_path(app_data_dir, artwork.mime.as_deref(), hash)
+        });
 
         conn.execute(
             "INSERT INTO artwork (cache_path, mime_type, content_hash, thumbnail_blob) VALUES (?1, ?2, ?3, ?4)",
@@ -410,7 +447,9 @@ impl LibraryService {
             Some("image/webp") => "webp",
             _ => "jpg",
         };
-        app_data_dir.join("artworks").join(format!("{}.{}", hash, ext))
+        app_data_dir
+            .join("artworks")
+            .join(format!("{}.{}", hash, ext))
     }
 
     /// 从原始图片字节生成 200x200 JPEG 缩略图（cover 模式：等比缩放后居中裁剪）。

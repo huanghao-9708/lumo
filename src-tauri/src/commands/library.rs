@@ -1,117 +1,186 @@
-use crate::error::AppError;
-use std::collections::HashMap;
-use std::sync::Mutex;
-use tauri::{State, Manager};
 use crate::db::DbState;
-use crate::models::{TrackDTO, AlbumDTO, ArtistDTO, PlaylistDTO, ArtistStatsDTO, ArtistListResult};
-use std::path::PathBuf;
-use rusqlite::params;
+use crate::error::AppError;
 use crate::ipc_trace;
+use crate::models::{AlbumDTO, ArtistDTO, ArtistListResult, ArtistStatsDTO, PlaylistDTO, TrackDTO};
+use rusqlite::params;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Mutex;
+use tauri::{Manager, State};
 // For storing PlaybackManager state
 
 #[tauri::command(async)]
-pub fn library_get_tracks(db_state: State<'_, DbState>, limit: u32, offset: u32, search_keyword: Option<String>) -> Result<Vec<TrackDTO>, AppError> {
+pub fn library_get_tracks(
+    db_state: State<'_, DbState>,
+    limit: u32,
+    offset: u32,
+    search_keyword: Option<String>,
+) -> Result<Vec<TrackDTO>, AppError> {
     let _trace = ipc_trace!("library_get_tracks");
     let conn = db_state.db.get()?;
-    crate::repositories::track_repo::TrackRepo::get_tracks_paginated(&conn, limit, offset, search_keyword).map_err(|e| e.into())
+    crate::repositories::track_repo::TrackRepo::get_tracks_paginated(
+        &conn,
+        limit,
+        offset,
+        search_keyword,
+    )
+    .map_err(|e| e.into())
 }
 
 #[tauri::command(async)]
-pub fn library_get_albums(db_state: State<'_, DbState>, limit: u32, offset: u32, search_keyword: Option<String>) -> Result<Vec<AlbumDTO>, AppError> {
+pub fn library_get_albums(
+    db_state: State<'_, DbState>,
+    limit: u32,
+    offset: u32,
+    search_keyword: Option<String>,
+) -> Result<Vec<AlbumDTO>, AppError> {
     let _trace = ipc_trace!("library_get_albums");
     let conn = db_state.db.get()?;
-    crate::repositories::album_repo::AlbumRepo::get_albums_paginated(&conn, limit, offset, search_keyword).map_err(|e| e.into())
+    crate::repositories::album_repo::AlbumRepo::get_albums_paginated(
+        &conn,
+        limit,
+        offset,
+        search_keyword,
+    )
+    .map_err(|e| e.into())
 }
 
 #[tauri::command(async)]
-pub fn library_get_album_count(db_state: State<'_, DbState>, search_keyword: Option<String>) -> Result<i64, AppError> {
+pub fn library_get_album_count(
+    db_state: State<'_, DbState>,
+    search_keyword: Option<String>,
+) -> Result<i64, AppError> {
     let _trace = ipc_trace!("library_get_album_count");
     let conn = db_state.db.get()?;
-    crate::repositories::album_repo::AlbumRepo::get_album_count(&conn, search_keyword).map_err(|e| e.into())
+    crate::repositories::album_repo::AlbumRepo::get_album_count(&conn, search_keyword)
+        .map_err(|e| e.into())
 }
 
 #[tauri::command(async)]
-pub fn library_get_artists(db_state: State<'_, DbState>, limit: u32, offset: u32, search_keyword: Option<String>) -> Result<ArtistListResult, AppError> {
+pub fn library_get_artists(
+    db_state: State<'_, DbState>,
+    limit: u32,
+    offset: u32,
+    search_keyword: Option<String>,
+) -> Result<ArtistListResult, AppError> {
     let _trace = ipc_trace!("library_get_artists");
     let conn = db_state.db.get()?;
-    crate::repositories::artist_repo::ArtistRepo::get_artists_paginated(&conn, limit, offset, search_keyword).map_err(|e| e.into())
+    crate::repositories::artist_repo::ArtistRepo::get_artists_paginated(
+        &conn,
+        limit,
+        offset,
+        search_keyword,
+    )
+    .map_err(|e| e.into())
 }
 
 #[tauri::command(async)]
-pub fn library_get_album_tracks(db_state: State<'_, DbState>, album_id: i64) -> Result<Vec<TrackDTO>, AppError> {
+pub fn library_get_album_tracks(
+    db_state: State<'_, DbState>,
+    album_id: i64,
+) -> Result<Vec<TrackDTO>, AppError> {
     let _trace = ipc_trace!("library_get_album_tracks");
     let conn = db_state.db.get()?;
-    crate::repositories::album_repo::AlbumRepo::get_album_tracks(&conn, album_id).map_err(|e| e.into())
+    crate::repositories::album_repo::AlbumRepo::get_album_tracks(&conn, album_id)
+        .map_err(|e| e.into())
 }
 
 #[tauri::command]
-pub fn library_get_album_by_id(db_state: State<'_, DbState>, album_id: i64) -> Result<Option<AlbumDTO>, AppError> {
+pub fn library_get_album_by_id(
+    db_state: State<'_, DbState>,
+    album_id: i64,
+) -> Result<Option<AlbumDTO>, AppError> {
     let _trace = ipc_trace!("library_get_album_by_id");
     let conn = db_state.db.get()?;
-    crate::repositories::album_repo::AlbumRepo::get_album_by_id(&conn, album_id).map_err(|e| e.into())
+    crate::repositories::album_repo::AlbumRepo::get_album_by_id(&conn, album_id)
+        .map_err(|e| e.into())
 }
 
 #[tauri::command]
-pub fn library_get_artist_by_id(db_state: State<'_, DbState>, artist_id: i64) -> Result<Option<ArtistDTO>, AppError> {
+pub fn library_get_artist_by_id(
+    db_state: State<'_, DbState>,
+    artist_id: i64,
+) -> Result<Option<ArtistDTO>, AppError> {
     let _trace = ipc_trace!("library_get_artist_by_id");
     let conn = db_state.db.get()?;
-    crate::repositories::artist_repo::ArtistRepo::get_artist_by_id(&conn, artist_id).map_err(|e| e.into())
+    crate::repositories::artist_repo::ArtistRepo::get_artist_by_id(&conn, artist_id)
+        .map_err(|e| e.into())
 }
 
 #[tauri::command(async)]
-pub fn library_get_artist_albums(db_state: State<'_, DbState>, artist_id: i64, limit: u32, offset: u32) -> Result<Vec<AlbumDTO>, AppError> {
+pub fn library_get_artist_albums(
+    db_state: State<'_, DbState>,
+    artist_id: i64,
+    limit: u32,
+    offset: u32,
+) -> Result<Vec<AlbumDTO>, AppError> {
     let _trace = ipc_trace!("library_get_artist_albums");
     let conn = db_state.db.get()?;
-    crate::repositories::artist_repo::ArtistRepo::get_artist_albums(&conn, artist_id, limit, offset).map_err(|e| e.into())
+    crate::repositories::artist_repo::ArtistRepo::get_artist_albums(&conn, artist_id, limit, offset)
+        .map_err(|e| e.into())
 }
 
 #[tauri::command(async)]
-pub fn library_get_artist_album_count(db_state: State<'_, DbState>, artist_id: i64) -> Result<i64, AppError> {
+pub fn library_get_artist_album_count(
+    db_state: State<'_, DbState>,
+    artist_id: i64,
+) -> Result<i64, AppError> {
     let _trace = ipc_trace!("library_get_artist_album_count");
     let conn = db_state.db.get()?;
-    crate::repositories::artist_repo::ArtistRepo::get_artist_album_count(&conn, artist_id).map_err(|e| e.into())
+    crate::repositories::artist_repo::ArtistRepo::get_artist_album_count(&conn, artist_id)
+        .map_err(|e| e.into())
 }
 
 #[tauri::command(async)]
-pub fn library_get_artist_tracks(db_state: State<'_, DbState>, artist_id: i64, limit: u32, offset: u32) -> Result<Vec<TrackDTO>, AppError> {
+pub fn library_get_artist_tracks(
+    db_state: State<'_, DbState>,
+    artist_id: i64,
+    limit: u32,
+    offset: u32,
+) -> Result<Vec<TrackDTO>, AppError> {
     let _trace = ipc_trace!("library_get_artist_tracks");
     let conn = db_state.db.get()?;
-    crate::repositories::artist_repo::ArtistRepo::get_artist_tracks(&conn, artist_id, limit, offset).map_err(|e| e.into())
+    crate::repositories::artist_repo::ArtistRepo::get_artist_tracks(&conn, artist_id, limit, offset)
+        .map_err(|e| e.into())
 }
 
 #[tauri::command]
-pub fn library_get_artist_stats(db_state: State<'_, DbState>, artist_id: i64) -> Result<ArtistStatsDTO, AppError> {
+pub fn library_get_artist_stats(
+    db_state: State<'_, DbState>,
+    artist_id: i64,
+) -> Result<ArtistStatsDTO, AppError> {
     let _trace = ipc_trace!("library_get_artist_stats");
     let conn = db_state.db.get()?;
-    crate::repositories::artist_repo::ArtistRepo::get_artist_stats(&conn, artist_id).map_err(|e| e.into())
+    crate::repositories::artist_repo::ArtistRepo::get_artist_stats(&conn, artist_id)
+        .map_err(|e| e.into())
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 #[tauri::command]
-pub fn library_toggle_favorite(db_state: State<'_, DbState>, track_id: i64, is_favorite: bool) -> Result<(), AppError> {
+pub fn library_toggle_favorite(
+    db_state: State<'_, DbState>,
+    track_id: i64,
+    is_favorite: bool,
+) -> Result<(), AppError> {
     let _trace = ipc_trace!("library_toggle_favorite");
     let conn = db_state.db.get()?;
-    crate::repositories::track_repo::TrackRepo::toggle_favorite(&conn, track_id, is_favorite).map_err(|e| e.into())
+    crate::repositories::track_repo::TrackRepo::toggle_favorite(&conn, track_id, is_favorite)
+        .map_err(|e| e.into())
 }
 
 #[tauri::command]
-pub fn library_create_playlist(db_state: State<'_, DbState>, name: String, description: Option<String>) -> Result<i64, AppError> {
+pub fn library_create_playlist(
+    db_state: State<'_, DbState>,
+    name: String,
+    description: Option<String>,
+) -> Result<i64, AppError> {
     let _trace = ipc_trace!("library_create_playlist");
     let conn = db_state.db.get()?;
-    crate::repositories::playlist_repo::PlaylistRepo::create_playlist(&conn, &name, description.as_deref()).map_err(|e| e.into())
+    crate::repositories::playlist_repo::PlaylistRepo::create_playlist(
+        &conn,
+        &name,
+        description.as_deref(),
+    )
+    .map_err(|e| e.into())
 }
 
 #[tauri::command]
@@ -122,17 +191,26 @@ pub fn library_get_playlists(db_state: State<'_, DbState>) -> Result<Vec<Playlis
 }
 
 #[tauri::command]
-pub fn library_add_to_playlist(db_state: State<'_, DbState>, playlist_id: i64, track_id: i64) -> Result<(), AppError> {
+pub fn library_add_to_playlist(
+    db_state: State<'_, DbState>,
+    playlist_id: i64,
+    track_id: i64,
+) -> Result<(), AppError> {
     let _trace = ipc_trace!("library_add_to_playlist");
     let conn = db_state.db.get()?;
-    crate::repositories::playlist_repo::PlaylistRepo::add_to_playlist(&conn, playlist_id, track_id).map_err(|e| e.into())
+    crate::repositories::playlist_repo::PlaylistRepo::add_to_playlist(&conn, playlist_id, track_id)
+        .map_err(|e| e.into())
 }
 
 #[tauri::command]
-pub fn library_get_playlist_tracks(db_state: State<'_, DbState>, playlist_id: i64) -> Result<Vec<TrackDTO>, AppError> {
+pub fn library_get_playlist_tracks(
+    db_state: State<'_, DbState>,
+    playlist_id: i64,
+) -> Result<Vec<TrackDTO>, AppError> {
     let _trace = ipc_trace!("library_get_playlist_tracks");
     let conn = db_state.db.get()?;
-    crate::repositories::playlist_repo::PlaylistRepo::get_playlist_tracks(&conn, playlist_id).map_err(|e| e.into())
+    crate::repositories::playlist_repo::PlaylistRepo::get_playlist_tracks(&conn, playlist_id)
+        .map_err(|e| e.into())
 }
 
 #[tauri::command]
@@ -144,55 +222,88 @@ pub fn library_record_play(
 ) -> Result<(), AppError> {
     let _trace = ipc_trace!("library_record_play");
     let conn = db_state.db.get()?;
-    crate::repositories::track_repo::TrackRepo::record_play(&conn, track_id, duration_ms, media_file_id).map_err(|e| e.into())
+    crate::repositories::track_repo::TrackRepo::record_play(
+        &conn,
+        track_id,
+        duration_ms,
+        media_file_id,
+    )
+    .map_err(|e| e.into())
 }
 
 #[tauri::command]
-pub fn library_get_recently_played(db_state: State<'_, DbState>, limit: u32) -> Result<Vec<TrackDTO>, AppError> {
+pub fn library_get_recently_played(
+    db_state: State<'_, DbState>,
+    limit: u32,
+) -> Result<Vec<TrackDTO>, AppError> {
     let _trace = ipc_trace!("library_get_recently_played");
     let conn = db_state.db.get()?;
-    crate::repositories::track_repo::TrackRepo::get_recently_played(&conn, limit).map_err(|e| e.into())
+    crate::repositories::track_repo::TrackRepo::get_recently_played(&conn, limit)
+        .map_err(|e| e.into())
 }
 
 #[tauri::command]
-pub fn library_get_favorite_tracks(db_state: State<'_, DbState>) -> Result<Vec<TrackDTO>, AppError> {
+pub fn library_get_favorite_tracks(
+    db_state: State<'_, DbState>,
+) -> Result<Vec<TrackDTO>, AppError> {
     let _trace = ipc_trace!("library_get_favorite_tracks");
     let conn = db_state.db.get()?;
     crate::repositories::track_repo::TrackRepo::get_favorite_tracks(&conn).map_err(|e| e.into())
 }
 
 #[tauri::command]
-pub fn library_get_favorite_albums(db_state: State<'_, DbState>) -> Result<Vec<AlbumDTO>, AppError> {
+pub fn library_get_favorite_albums(
+    db_state: State<'_, DbState>,
+) -> Result<Vec<AlbumDTO>, AppError> {
     let _trace = ipc_trace!("library_get_favorite_albums");
     let conn = db_state.db.get()?;
     crate::repositories::album_repo::AlbumRepo::get_favorite_albums(&conn).map_err(|e| e.into())
 }
 
 #[tauri::command]
-pub fn library_get_favorite_artists(db_state: State<'_, DbState>) -> Result<Vec<ArtistDTO>, AppError> {
+pub fn library_get_favorite_artists(
+    db_state: State<'_, DbState>,
+) -> Result<Vec<ArtistDTO>, AppError> {
     let _trace = ipc_trace!("library_get_favorite_artists");
     let conn = db_state.db.get()?;
     crate::repositories::artist_repo::ArtistRepo::get_favorite_artists(&conn).map_err(|e| e.into())
 }
 
 #[tauri::command]
-pub fn library_toggle_favorite_album(db_state: State<'_, DbState>, album_id: i64, is_favorite: bool) -> Result<(), AppError> {
+pub fn library_toggle_favorite_album(
+    db_state: State<'_, DbState>,
+    album_id: i64,
+    is_favorite: bool,
+) -> Result<(), AppError> {
     let _trace = ipc_trace!("library_toggle_favorite_album");
     let conn = db_state.db.get()?;
-    crate::repositories::album_repo::AlbumRepo::toggle_favorite_album(&conn, album_id, is_favorite).map_err(|e| e.into())
+    crate::repositories::album_repo::AlbumRepo::toggle_favorite_album(&conn, album_id, is_favorite)
+        .map_err(|e| e.into())
 }
 
 #[tauri::command]
-pub fn library_toggle_favorite_artist(db_state: State<'_, DbState>, artist_id: i64, is_favorite: bool) -> Result<(), AppError> {
+pub fn library_toggle_favorite_artist(
+    db_state: State<'_, DbState>,
+    artist_id: i64,
+    is_favorite: bool,
+) -> Result<(), AppError> {
     let _trace = ipc_trace!("library_toggle_favorite_artist");
     let conn = db_state.db.get()?;
-    crate::repositories::artist_repo::ArtistRepo::toggle_favorite_artist(&conn, artist_id, is_favorite).map_err(|e| e.into())
+    crate::repositories::artist_repo::ArtistRepo::toggle_favorite_artist(
+        &conn,
+        artist_id,
+        is_favorite,
+    )
+    .map_err(|e| e.into())
 }
 
 /// 获取曲库数据库文件总大小（含 WAL/SHM），供移动端存储占用展示。
 #[tauri::command]
 pub fn storage_get_db_size(app: tauri::AppHandle) -> Result<u64, AppError> {
-    let app_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let app_dir = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("."));
     let mut total = 0u64;
     for name in ["lumo.sqlite", "lumo.sqlite-wal", "lumo.sqlite-shm"] {
         if let Ok(md) = std::fs::metadata(app_dir.join(name)) {
@@ -203,7 +314,11 @@ pub fn storage_get_db_size(app: tauri::AppHandle) -> Result<u64, AppError> {
 }
 
 #[tauri::command]
-pub async fn library_get_lyrics(db_state: State<'_, DbState>, track_id: i64, allow_online: Option<bool>) -> Result<Option<String>, AppError> {
+pub async fn library_get_lyrics(
+    db_state: State<'_, DbState>,
+    track_id: i64,
+    allow_online: Option<bool>,
+) -> Result<Option<String>, AppError> {
     let _trace = ipc_trace!("library_get_lyrics");
 
     // 本地歌词查询（v1.8.1 重写）：同步(lrc)优先 → lrclib 来源 → 主文件版本 → 最早行。
@@ -215,21 +330,24 @@ pub async fn library_get_lyrics(db_state: State<'_, DbState>, track_id: i64, all
             "SELECT primary_file_id FROM tracks WHERE id = ?1",
             params![track_id],
             |row| row.get(0),
-        ).optional()?
+        )
+        .optional()?
     };
     // (id, content, format, synced)
     let local_lyrics: Option<(i64, String, String, i64)> = {
         let conn = db_state.db.get()?;
         let mut stmt = conn.prepare(
             "SELECT id, content, format, synced FROM lyrics WHERE track_id = ?1
-             ORDER BY (synced = 1) DESC, (media_file_id = ?2) DESC, id ASC LIMIT 1"
+             ORDER BY (synced = 1) DESC, (media_file_id = ?2) DESC, id ASC LIMIT 1",
         )?;
-        stmt.query_row(
-            params![track_id, primary_file_id],
-            |row| {
-                Ok::<(i64, String, String, i64), rusqlite::Error>((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
-            },
-        )
+        stmt.query_row(params![track_id, primary_file_id], |row| {
+            Ok::<(i64, String, String, i64), rusqlite::Error>((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+            ))
+        })
         .optional()?
     };
 
@@ -247,7 +365,12 @@ pub async fn library_get_lyrics(db_state: State<'_, DbState>, track_id: i64, all
     }
 
     // Not found in DB, try to download from LRCLIB
-    let (title, artist, album, duration_sec): (String, Option<String>, Option<String>, Option<u32>) = {
+    let (title, artist, album, duration_sec): (
+        String,
+        Option<String>,
+        Option<String>,
+        Option<u32>,
+    ) = {
         let conn = db_state.db.get()?;
         let mut stmt = conn.prepare("
             SELECT 
@@ -258,34 +381,54 @@ pub async fn library_get_lyrics(db_state: State<'_, DbState>, track_id: i64, all
             FROM tracks t WHERE t.id = ?1
         ")?;
         use rusqlite::OptionalExtension;
-        let row = stmt.query_row(params![track_id], |row| {
-            let duration_ms: Option<u32> = row.get(3)?;
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                duration_ms.map(|ms| ms / 1000)
-            ))
-        }).optional()?;
-        if let Some(r) = row { r } else { return Ok(None); }
+        let row = stmt
+            .query_row(params![track_id], |row| {
+                let duration_ms: Option<u32> = row.get(3)?;
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    duration_ms.map(|ms| ms / 1000),
+                ))
+            })
+            .optional()?;
+        if let Some(r) = row {
+            r
+        } else {
+            return Ok(None);
+        }
     };
 
     // Prepare URL
     let mut url = url::Url::parse("https://lrclib.net/api/get").unwrap();
     url.query_pairs_mut().append_pair("track_name", &title);
-    if let Some(a) = artist { url.query_pairs_mut().append_pair("artist_name", &a); }
-    if let Some(al) = album { url.query_pairs_mut().append_pair("album_name", &al); }
-    if let Some(d) = duration_sec { url.query_pairs_mut().append_pair("duration", &d.to_string()); }
+    if let Some(a) = artist {
+        url.query_pairs_mut().append_pair("artist_name", &a);
+    }
+    if let Some(al) = album {
+        url.query_pairs_mut().append_pair("album_name", &al);
+    }
+    if let Some(d) = duration_sec {
+        url.query_pairs_mut()
+            .append_pair("duration", &d.to_string());
+    }
 
     let client = reqwest::Client::builder()
         .user_agent("LumoMusicPlayer/1.0.0")
         .build()
-        .map_err(|e| AppError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+        .map_err(|e| {
+            AppError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                e.to_string(),
+            ))
+        })?;
 
-    let resp = client.get(url)
-        .send()
-        .await
-        .map_err(|e| AppError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+    let resp = client.get(url).send().await.map_err(|e| {
+        AppError::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            e.to_string(),
+        ))
+    })?;
 
     if !resp.status().is_success() {
         return Ok(None);
@@ -299,9 +442,12 @@ pub async fn library_get_lyrics(db_state: State<'_, DbState>, track_id: i64, all
         plain_lyrics: Option<String>,
     }
 
-    let result = resp.json::<LrclibResponse>()
-        .await
-        .map_err(|e| AppError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+    let result = resp.json::<LrclibResponse>().await.map_err(|e| {
+        AppError::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            e.to_string(),
+        ))
+    })?;
 
     let fetched_lyrics = result.synced_lyrics.or(result.plain_lyrics);
 
@@ -335,7 +481,10 @@ pub async fn library_get_lyrics(db_state: State<'_, DbState>, track_id: i64, all
 }
 
 #[tauri::command]
-pub fn library_get_track_file_info(db_state: State<'_, DbState>, track_id: i64) -> Result<Option<crate::models::TrackFileInfoDTO>, AppError> {
+pub fn library_get_track_file_info(
+    db_state: State<'_, DbState>,
+    track_id: i64,
+) -> Result<Option<crate::models::TrackFileInfoDTO>, AppError> {
     let _trace = ipc_trace!("library_get_track_file_info");
     use rusqlite::OptionalExtension;
     let conn = db_state.db.get()?;
@@ -356,48 +505,67 @@ pub fn library_get_track_file_info(db_state: State<'_, DbState>, track_id: i64) 
         LIMIT 1
     ")?;
 
-    let info = stmt.query_row(params![track_id], |row| {
-        Ok(crate::models::TrackFileInfoDTO {
-            id: row.get(0)?,
-            source_id: row.get(1)?,
-            track_id: row.get(2).unwrap_or(0),
-            path: row.get(3)?,
-            relative_path: row.get(4)?,
-            file_name: row.get(5)?,
-            file_ext: row.get(6)?,
-            file_size: row.get(7)?,
-            modified_at: row.get(8)?,
-            duration_ms: row.get(9)?,
-            bitrate: row.get(10)?,
-            sample_rate: row.get(11)?,
-            bit_depth: row.get(12)?,
-            channels: row.get(13)?,
-            format: row.get(14)?,
-            source_kind: row.get(15)?,
+    let info = stmt
+        .query_row(params![track_id], |row| {
+            Ok(crate::models::TrackFileInfoDTO {
+                id: row.get(0)?,
+                source_id: row.get(1)?,
+                track_id: row.get(2).unwrap_or(0),
+                path: row.get(3)?,
+                relative_path: row.get(4)?,
+                file_name: row.get(5)?,
+                file_ext: row.get(6)?,
+                file_size: row.get(7)?,
+                modified_at: row.get(8)?,
+                duration_ms: row.get(9)?,
+                bitrate: row.get(10)?,
+                sample_rate: row.get(11)?,
+                bit_depth: row.get(12)?,
+                channels: row.get(13)?,
+                format: row.get(14)?,
+                source_kind: row.get(15)?,
+            })
         })
-    }).optional()?;    
+        .optional()?;
     Ok(info)
 }
 
 #[tauri::command]
-pub fn library_delete_playlist(db_state: State<'_, DbState>, playlist_id: i64) -> Result<(), AppError> {
+pub fn library_delete_playlist(
+    db_state: State<'_, DbState>,
+    playlist_id: i64,
+) -> Result<(), AppError> {
     let _trace = ipc_trace!("library_delete_playlist");
     let conn = db_state.db.get()?;
-    crate::repositories::playlist_repo::PlaylistRepo::delete_playlist(&conn, playlist_id).map_err(|e| e.into())
+    crate::repositories::playlist_repo::PlaylistRepo::delete_playlist(&conn, playlist_id)
+        .map_err(|e| e.into())
 }
 
 #[tauri::command]
-pub fn library_remove_playlist_item(db_state: State<'_, DbState>, playlist_id: i64, track_id: i64) -> Result<(), AppError> {
+pub fn library_remove_playlist_item(
+    db_state: State<'_, DbState>,
+    playlist_id: i64,
+    track_id: i64,
+) -> Result<(), AppError> {
     let _trace = ipc_trace!("library_remove_playlist_item");
     let conn = db_state.db.get()?;
-    crate::repositories::playlist_repo::PlaylistRepo::remove_playlist_item(&conn, playlist_id, track_id).map_err(|e| e.into())
+    crate::repositories::playlist_repo::PlaylistRepo::remove_playlist_item(
+        &conn,
+        playlist_id,
+        track_id,
+    )
+    .map_err(|e| e.into())
 }
 
 #[tauri::command]
-pub fn library_save_play_queue(db_state: State<'_, DbState>, track_ids: Vec<i64>) -> Result<(), AppError> {
+pub fn library_save_play_queue(
+    db_state: State<'_, DbState>,
+    track_ids: Vec<i64>,
+) -> Result<(), AppError> {
     let _trace = ipc_trace!("library_save_play_queue");
     let conn = db_state.db.get()?;
-    crate::repositories::track_repo::TrackRepo::save_play_queue(&conn, &track_ids).map_err(|e| e.into())
+    crate::repositories::track_repo::TrackRepo::save_play_queue(&conn, &track_ids)
+        .map_err(|e| e.into())
 }
 
 #[tauri::command]
@@ -410,12 +578,15 @@ pub fn library_get_play_queue(db_state: State<'_, DbState>) -> Result<Vec<TrackD
 #[tauri::command]
 pub fn library_get_cache_size(app: tauri::AppHandle) -> Result<u64, AppError> {
     let _trace = ipc_trace!("library_get_cache_size");
-    let app_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let app_dir = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("."));
     let artworks_dir = app_dir.join("artworks");
     if !artworks_dir.exists() {
         return Ok(0);
     }
-    
+
     let mut total_size = 0;
     if let Ok(entries) = std::fs::read_dir(artworks_dir) {
         for entry in entries.flatten() {
@@ -430,15 +601,21 @@ pub fn library_get_cache_size(app: tauri::AppHandle) -> Result<u64, AppError> {
 }
 
 #[tauri::command]
-pub fn library_clear_cache(app: tauri::AppHandle, db_state: State<'_, DbState>) -> Result<(), AppError> {
+pub fn library_clear_cache(
+    app: tauri::AppHandle,
+    db_state: State<'_, DbState>,
+) -> Result<(), AppError> {
     let _trace = ipc_trace!("library_clear_cache");
-    let app_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let app_dir = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("."));
     let artworks_dir = app_dir.join("artworks");
     if artworks_dir.exists() {
         let _ = std::fs::remove_dir_all(&artworks_dir);
         let _ = std::fs::create_dir_all(&artworks_dir);
     }
-    
+
     let conn = db_state.db.get()?;
     // Keep artwork identities/references, but invalidate the materialised cache and
     // mark media for the next scan. Deleting artwork rows would make unchanged files
@@ -448,7 +625,7 @@ pub fn library_clear_cache(app: tauri::AppHandle, db_state: State<'_, DbState>) 
         "UPDATE media_files SET modified_at = NULL, availability = 'offline'",
         [],
     );
-    
+
     Ok(())
 }
 
@@ -475,15 +652,32 @@ pub fn library_get_folder_contents(
         std::path::PathBuf::from(root_uri)
     };
 
-    crate::repositories::track_repo::TrackRepo::get_folder_contents(&conn, source_id, &real_path, limit, offset.unwrap_or(0))
-        .map_err(|e| e.into())
+    crate::repositories::track_repo::TrackRepo::get_folder_contents(
+        &conn,
+        source_id,
+        &real_path,
+        limit,
+        offset.unwrap_or(0),
+    )
+    .map_err(|e| e.into())
 }
 
 #[tauri::command]
-pub fn library_add_folder_to_playlist(db_state: State<'_, DbState>, source_id: i64, folder_path: String, playlist_id: i64) -> Result<(), AppError> {
+pub fn library_add_folder_to_playlist(
+    db_state: State<'_, DbState>,
+    source_id: i64,
+    folder_path: String,
+    playlist_id: i64,
+) -> Result<(), AppError> {
     let _trace = ipc_trace!("library_add_folder_to_playlist");
     let conn = db_state.db.get()?;
-    crate::repositories::playlist_repo::PlaylistRepo::add_folder_to_playlist(&conn, playlist_id, source_id, &folder_path).map_err(|e| e.into())
+    crate::repositories::playlist_repo::PlaylistRepo::add_folder_to_playlist(
+        &conn,
+        playlist_id,
+        source_id,
+        &folder_path,
+    )
+    .map_err(|e| e.into())
 }
 
 #[tauri::command]
@@ -505,8 +699,13 @@ pub fn library_get_folder_children(
         .map(|p| source_root.join(&p))
         .unwrap_or_else(|| source_root.clone());
 
-    crate::repositories::track_repo::TrackRepo::get_folder_children(&conn, source_id, &real_path, &source_root)
-        .map_err(|e| e.into())
+    crate::repositories::track_repo::TrackRepo::get_folder_children(
+        &conn,
+        source_id,
+        &real_path,
+        &source_root,
+    )
+    .map_err(|e| e.into())
 }
 
 #[tauri::command]
@@ -528,8 +727,15 @@ pub fn library_get_folder_tracks(
     let source_root = std::path::PathBuf::from(&root_uri);
     let real_path = source_root.join(&folder_path);
 
-    crate::repositories::track_repo::TrackRepo::get_folder_tracks_recursive(&conn, source_id, &real_path, &source_root, limit, offset)
-        .map_err(|e| e.into())
+    crate::repositories::track_repo::TrackRepo::get_folder_tracks_recursive(
+        &conn,
+        source_id,
+        &real_path,
+        &source_root,
+        limit,
+        offset,
+    )
+    .map_err(|e| e.into())
 }
 
 #[tauri::command]
@@ -547,13 +753,15 @@ pub fn library_get_counts(
             (SELECT COUNT(*) FROM favorite_artists),
             (SELECT COUNT(*) FROM tracks WHERE last_played_at IS NOT NULL)",
         [],
-        |row| Ok(crate::models::LibraryCounts {
-            tracks: row.get(0)?,
-            favorite_tracks: row.get(1)?,
-            favorite_albums: row.get(2)?,
-            favorite_artists: row.get(3)?,
-            recently_played: row.get(4)?,
-        }),
+        |row| {
+            Ok(crate::models::LibraryCounts {
+                tracks: row.get(0)?,
+                favorite_tracks: row.get(1)?,
+                favorite_albums: row.get(2)?,
+                favorite_artists: row.get(3)?,
+                recently_played: row.get(4)?,
+            })
+        },
     )?;
 
     Ok(counts)
@@ -562,7 +770,9 @@ pub fn library_get_counts(
 /// 首页统计：一条 SQL 聚合曲库规模与收听行为（8 张统计卡的数据源）。
 /// 「今日/近7天」口径见 models::LibraryStats 注释。
 #[tauri::command]
-pub fn library_get_stats(db_state: State<'_, DbState>) -> Result<crate::models::LibraryStats, AppError> {
+pub fn library_get_stats(
+    db_state: State<'_, DbState>,
+) -> Result<crate::models::LibraryStats, AppError> {
     let _trace = ipc_trace!("library_get_stats");
     let conn = db_state.db.get()?;
 
@@ -610,36 +820,60 @@ pub fn library_get_stats(db_state: State<'_, DbState>) -> Result<crate::models::
 /// 即使前端 Promise.all 也会排队。`#[tauri::command(async)]`（保持 `pub fn`，
 /// 不用 `pub async fn`）把命令体移到 tokio blocking pool 并发执行，不阻塞其他 IPC。
 #[tauri::command(async)]
-pub fn library_get_insights(db_state: State<'_, DbState>) -> Result<crate::models::LibraryInsights, AppError> {
+pub fn library_get_insights(
+    db_state: State<'_, DbState>,
+) -> Result<crate::models::LibraryInsights, AppError> {
     let _trace = ipc_trace!("library_get_insights");
     let conn = db_state.db.get()?;
-    use crate::repositories::{album_repo::AlbumRepo, artist_repo::ArtistRepo, track_repo::TrackRepo};
+    use crate::repositories::{
+        album_repo::AlbumRepo, artist_repo::ArtistRepo, track_repo::TrackRepo,
+    };
 
     Ok(crate::models::LibraryInsights {
-        top_played_tracks: TrackRepo::get_top_played_ranked(&conn, 5).map_err(|e| AppError::Internal(e.to_string()))?,
-        recent_played_tracks: TrackRepo::get_recent_play_ranked(&conn, 5).map_err(|e| AppError::Internal(e.to_string()))?,
-        recent_added_tracks: TrackRepo::get_recent_added_ranked(&conn, 5).map_err(|e| AppError::Internal(e.to_string()))?,
-        favorite_tracks: TrackRepo::get_favorite_ranked(&conn, 5).map_err(|e| AppError::Internal(e.to_string()))?,
-        top_played_artists: ArtistRepo::get_top_played_artists(&conn, 5).map_err(|e| AppError::Internal(e.to_string()))?,
-        top_played_albums: AlbumRepo::get_top_played_albums(&conn, 5).map_err(|e| AppError::Internal(e.to_string()))?,
-        today_play_count: TrackRepo::get_today_play_count(&conn).map_err(|e| AppError::Internal(e.to_string()))?,
-        last_played: TrackRepo::get_last_played(&conn).map_err(|e| AppError::Internal(e.to_string()))?,
+        top_played_tracks: TrackRepo::get_top_played_ranked(&conn, 5)
+            .map_err(|e| AppError::Internal(e.to_string()))?,
+        recent_played_tracks: TrackRepo::get_recent_play_ranked(&conn, 5)
+            .map_err(|e| AppError::Internal(e.to_string()))?,
+        recent_added_tracks: TrackRepo::get_recent_added_ranked(&conn, 5)
+            .map_err(|e| AppError::Internal(e.to_string()))?,
+        favorite_tracks: TrackRepo::get_favorite_ranked(&conn, 5)
+            .map_err(|e| AppError::Internal(e.to_string()))?,
+        top_played_artists: ArtistRepo::get_top_played_artists(&conn, 5)
+            .map_err(|e| AppError::Internal(e.to_string()))?,
+        top_played_albums: AlbumRepo::get_top_played_albums(&conn, 5)
+            .map_err(|e| AppError::Internal(e.to_string()))?,
+        today_play_count: TrackRepo::get_today_play_count(&conn)
+            .map_err(|e| AppError::Internal(e.to_string()))?,
+        last_played: TrackRepo::get_last_played(&conn)
+            .map_err(|e| AppError::Internal(e.to_string()))?,
     })
 }
 
 /// 批量添加歌曲到歌单（单事务，自动跳过已在歌单中的重复曲目）。
 /// 返回 [成功添加数, 跳过的重复数]。
 #[tauri::command]
-pub fn library_add_tracks_to_playlist(db_state: State<'_, DbState>, playlist_id: i64, track_ids: Vec<i64>) -> Result<(usize, usize), AppError> {
+pub fn library_add_tracks_to_playlist(
+    db_state: State<'_, DbState>,
+    playlist_id: i64,
+    track_ids: Vec<i64>,
+) -> Result<(usize, usize), AppError> {
     let _trace = ipc_trace!("library_add_tracks_to_playlist");
     let conn = db_state.db.get()?;
-    crate::repositories::playlist_repo::PlaylistRepo::add_tracks_to_playlist(&conn, playlist_id, &track_ids)
-        .map_err(|e| e.into())
+    crate::repositories::playlist_repo::PlaylistRepo::add_tracks_to_playlist(
+        &conn,
+        playlist_id,
+        &track_ids,
+    )
+    .map_err(|e| e.into())
 }
 
 /// 批量设置/取消收藏（单事务）。
 #[tauri::command]
-pub fn library_set_favorite_batch(db_state: State<'_, DbState>, track_ids: Vec<i64>, is_favorite: bool) -> Result<(), AppError> {
+pub fn library_set_favorite_batch(
+    db_state: State<'_, DbState>,
+    track_ids: Vec<i64>,
+    is_favorite: bool,
+) -> Result<(), AppError> {
     let _trace = ipc_trace!("library_set_favorite_batch");
     let conn = db_state.db.get()?;
     crate::repositories::track_repo::TrackRepo::set_favorite_batch(&conn, &track_ids, is_favorite)
@@ -650,10 +884,15 @@ pub fn library_set_favorite_batch(db_state: State<'_, DbState>, track_ids: Vec<i
 /// 把启动 IPC 从 ~7 个降到 2 个（本命令 + source_list——凭据解析逻辑在 scanner 模块，
 /// 保持独立）。async 化理由同其他 list-load 命令。
 #[tauri::command(async)]
-pub fn library_get_startup_bundle(db_state: State<'_, DbState>) -> Result<crate::models::StartupBundle, AppError> {
+pub fn library_get_startup_bundle(
+    db_state: State<'_, DbState>,
+) -> Result<crate::models::StartupBundle, AppError> {
     let _trace = ipc_trace!("library_get_startup_bundle");
     let conn = db_state.db.get()?;
-    use crate::repositories::{album_repo::AlbumRepo, artist_repo::ArtistRepo, playlist_repo::PlaylistRepo, track_repo::TrackRepo};
+    use crate::repositories::{
+        album_repo::AlbumRepo, artist_repo::ArtistRepo, playlist_repo::PlaylistRepo,
+        track_repo::TrackRepo,
+    };
 
     // 计数（与 library_get_counts 同一条 SQL）
     let counts: crate::models::LibraryCounts = conn.query_row(
@@ -664,37 +903,47 @@ pub fn library_get_startup_bundle(db_state: State<'_, DbState>) -> Result<crate:
             (SELECT COUNT(*) FROM favorite_artists),
             (SELECT COUNT(*) FROM tracks WHERE last_played_at IS NOT NULL)",
         [],
-        |row| Ok(crate::models::LibraryCounts {
-            tracks: row.get(0)?,
-            favorite_tracks: row.get(1)?,
-            favorite_albums: row.get(2)?,
-            favorite_artists: row.get(3)?,
-            recently_played: row.get(4)?,
-        }),
+        |row| {
+            Ok(crate::models::LibraryCounts {
+                tracks: row.get(0)?,
+                favorite_tracks: row.get(1)?,
+                favorite_albums: row.get(2)?,
+                favorite_artists: row.get(3)?,
+                recently_played: row.get(4)?,
+            })
+        },
     )?;
 
     // 专辑网格第一页 30 条 / 艺人第一页 50 条——与前端 albumsPageSize / artistsLimit 一致，
     // 前端据此续接增量加载。缩略图/计数等参数与各自独立命令完全同形。
-    let albums = AlbumRepo::get_albums_paginated(&conn, 30, 0, None).map_err(|e| AppError::Internal(e.to_string()))?;
-    let album_total = AlbumRepo::get_album_count(&conn, None).map_err(|e| AppError::Internal(e.to_string()))?;
+    let albums = AlbumRepo::get_albums_paginated(&conn, 30, 0, None)
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let album_total =
+        AlbumRepo::get_album_count(&conn, None).map_err(|e| AppError::Internal(e.to_string()))?;
     let ArtistListResult { artists, total } = ArtistRepo::get_artists_paginated(&conn, 50, 0, None)
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
     Ok(crate::models::StartupBundle {
         counts,
-        playlists: PlaylistRepo::get_playlists(&conn).map_err(|e| AppError::Internal(e.to_string()))?,
+        playlists: PlaylistRepo::get_playlists(&conn)
+            .map_err(|e| AppError::Internal(e.to_string()))?,
         albums,
         album_total,
         artists,
         artist_total: total,
-        play_queue: TrackRepo::get_play_queue(&conn).map_err(|e| AppError::Internal(e.to_string()))?,
+        play_queue: TrackRepo::get_play_queue(&conn)
+            .map_err(|e| AppError::Internal(e.to_string()))?,
     })
 }
 
 /// 专辑封面的真实拉取流程（网易云 → iTunes 兜底 + 缩略图 + 写库）。
 /// 只在 tokio 后台任务中调用，不占 IPC channel（第七轮）。
 /// 返回 (artwork_id, 缩略图 base64)——缩略图随事件下发，前端即时更新网格。
-async fn fetch_album_cover_impl(app_dir: &std::path::Path, pool: &crate::db::DbPool, album_id: i64) -> Result<Option<crate::models::FetchedCover>, AppError> {
+async fn fetch_album_cover_impl(
+    app_dir: &std::path::Path,
+    pool: &crate::db::DbPool,
+    album_id: i64,
+) -> Result<Option<crate::models::FetchedCover>, AppError> {
     // 会话级负缓存：近期尝试过就不再发请求（避免每次打开详情都反复拉取未命中的目标）
     let attempt_key = format!("album:{}", album_id);
     if cover_attempt_recently(&attempt_key) {
@@ -712,19 +961,28 @@ async fn fetch_album_cover_impl(app_dir: &std::path::Path, pool: &crate::db::DbP
             WHERE al.id = ?1 LIMIT 1
         ")?;
         use rusqlite::OptionalExtension;
-        let row = stmt.query_row(params![album_id], |row| {
-            Ok((row.get(0)?, row.get(1)?))
-        }).optional()?;
-        if let Some(r) = row { r } else { return Ok(None); }
+        let row = stmt
+            .query_row(params![album_id], |row| Ok((row.get(0)?, row.get(1)?)))
+            .optional()?;
+        if let Some(r) = row {
+            r
+        } else {
+            return Ok(None);
+        }
     };
 
     // 2. 检索封面：网易云 1500x1500 → iTunes 最大分辨率（v1.8.1 换源）
-    let Some(hit) = crate::services::cover::CoverService::search_album_cover(&album_title, artist_name.as_deref()).await else {
+    let Some(hit) = crate::services::cover::CoverService::search_album_cover(
+        &album_title,
+        artist_name.as_deref(),
+    )
+    .await
+    else {
         return Ok(None);
     };
 
     // 3. Save to db
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let bytes = hit.bytes;
     let mime_type = hit.mime_type;
     let mut hasher = Sha256::new();
@@ -751,17 +1009,22 @@ async fn fetch_album_cover_impl(app_dir: &std::path::Path, pool: &crate::db::DbP
     // 缩略图随事件下发（data URL），前端立即更新专辑网格，无需等下次全量拉取
     let thumbnail_base64 = thumbnail_blob.as_ref().map(|b| {
         use base64::{engine::general_purpose, Engine as _};
-        format!("data:image/jpeg;base64,{}", general_purpose::STANDARD.encode(b))
+        format!(
+            "data:image/jpeg;base64,{}",
+            general_purpose::STANDARD.encode(b)
+        )
     });
 
     let conn = pool.get()?;
     use rusqlite::OptionalExtension;
     // Check if hash exists
-    let existing_id: Option<i64> = conn.query_row(
-        "SELECT id FROM artwork WHERE content_hash = ?1",
-        params![hash],
-        |row| row.get(0),
-    ).optional()?;
+    let existing_id: Option<i64> = conn
+        .query_row(
+            "SELECT id FROM artwork WHERE content_hash = ?1",
+            params![hash],
+            |row| row.get(0),
+        )
+        .optional()?;
 
     let artwork_id = if let Some(id) = existing_id {
         id
@@ -778,7 +1041,10 @@ async fn fetch_album_cover_impl(app_dir: &std::path::Path, pool: &crate::db::DbP
         params![artwork_id, album_id],
     )?;
 
-    Ok(Some(crate::models::FetchedCover { artwork_id, thumbnail_base64 }))
+    Ok(Some(crate::models::FetchedCover {
+        artwork_id,
+        thumbnail_base64,
+    }))
 }
 
 /// 触发专辑封面在线拉取（第七轮：后台化）。
@@ -788,7 +1054,12 @@ async fn fetch_album_cover_impl(app_dir: &std::path::Path, pool: &crate::db::DbP
 /// Stalled 5-15s。因此命令体立即返回 `Ok(None)` 不占并发坑位，真实下载在
 /// tokio 后台任务执行，完成后 emit `album-cover-fetched` 事件，由前端订阅更新 UI。
 #[tauri::command]
-pub async fn library_fetch_missing_album_cover(app: tauri::AppHandle, db_state: State<'_, DbState>, album_id: i64, allow_online: Option<bool>) -> Result<Option<i64>, AppError> {
+pub async fn library_fetch_missing_album_cover(
+    app: tauri::AppHandle,
+    db_state: State<'_, DbState>,
+    album_id: i64,
+    allow_online: Option<bool>,
+) -> Result<Option<i64>, AppError> {
     let _trace = ipc_trace!("library_fetch_missing_album_cover");
 
     // P0-07 在线元数据隐私：默认拒绝，未显式授权不向 iTunes 发送专辑/艺人名称
@@ -798,7 +1069,10 @@ pub async fn library_fetch_missing_album_cover(app: tauri::AppHandle, db_state: 
 
     // State<'_, DbState> 有生命周期，不能 move 进 spawn；DbPool 内部是 Arc，clone 后 'static。
     let app_clone = app.clone();
-    let app_dir = app.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let app_dir = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
     let pool = db_state.db.clone();
     tokio::spawn(async move {
         match fetch_album_cover_impl(&app_dir, &pool, album_id).await {
@@ -823,7 +1097,11 @@ pub async fn library_fetch_missing_album_cover(app: tauri::AppHandle, db_state: 
 
 /// 艺人头像的真实拉取流程（网易云 → iTunes 兜底 + 缩略图 + 写库）。
 /// 只在 tokio 后台任务中调用，不占 IPC channel（第七轮）。
-async fn fetch_artist_cover_impl(app_dir: &std::path::Path, pool: &crate::db::DbPool, artist_id: i64) -> Result<Option<crate::models::FetchedCover>, AppError> {
+async fn fetch_artist_cover_impl(
+    app_dir: &std::path::Path,
+    pool: &crate::db::DbPool,
+    artist_id: i64,
+) -> Result<Option<crate::models::FetchedCover>, AppError> {
     let attempt_key = format!("artist:{}", artist_id);
     if cover_attempt_recently(&attempt_key) {
         return Ok(None);
@@ -835,17 +1113,24 @@ async fn fetch_artist_cover_impl(app_dir: &std::path::Path, pool: &crate::db::Db
         let conn = pool.get()?;
         let mut stmt = conn.prepare("SELECT name FROM artists WHERE id = ?1 LIMIT 1")?;
         use rusqlite::OptionalExtension;
-        let row = stmt.query_row(params![artist_id], |row| row.get(0)).optional()?;
-        if let Some(r) = row { r } else { return Ok(None); }
+        let row = stmt
+            .query_row(params![artist_id], |row| row.get(0))
+            .optional()?;
+        if let Some(r) = row {
+            r
+        } else {
+            return Ok(None);
+        }
     };
 
     // 2. 检索头像：网易云歌手大图 1200x1200 → iTunes 兜底（最大分辨率）
-    let Some(hit) = crate::services::cover::CoverService::search_artist_cover(&artist_name).await else {
+    let Some(hit) = crate::services::cover::CoverService::search_artist_cover(&artist_name).await
+    else {
         return Ok(None);
     };
 
     // 3. Save to db
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let bytes = hit.bytes;
     let mime_type = hit.mime_type;
     let mut hasher = Sha256::new();
@@ -874,11 +1159,13 @@ async fn fetch_artist_cover_impl(app_dir: &std::path::Path, pool: &crate::db::Db
     use rusqlite::OptionalExtension;
 
     // Check if hash exists
-    let existing_id: Option<i64> = conn.query_row(
-        "SELECT id FROM artwork WHERE content_hash = ?1",
-        params![hash],
-        |row| row.get(0),
-    ).optional()?;
+    let existing_id: Option<i64> = conn
+        .query_row(
+            "SELECT id FROM artwork WHERE content_hash = ?1",
+            params![hash],
+            |row| row.get(0),
+        )
+        .optional()?;
 
     let artwork_id = if let Some(id) = existing_id {
         id
@@ -895,12 +1182,20 @@ async fn fetch_artist_cover_impl(app_dir: &std::path::Path, pool: &crate::db::Db
         params![artwork_id, artist_id],
     )?;
 
-    Ok(Some(crate::models::FetchedCover { artwork_id, thumbnail_base64: None }))
+    Ok(Some(crate::models::FetchedCover {
+        artwork_id,
+        thumbnail_base64: None,
+    }))
 }
 
 /// 触发艺人头像在线拉取（第七轮：后台化，机制同 library_fetch_missing_album_cover）。
 #[tauri::command]
-pub async fn library_fetch_missing_artist_cover(app: tauri::AppHandle, db_state: State<'_, DbState>, artist_id: i64, allow_online: Option<bool>) -> Result<Option<i64>, AppError> {
+pub async fn library_fetch_missing_artist_cover(
+    app: tauri::AppHandle,
+    db_state: State<'_, DbState>,
+    artist_id: i64,
+    allow_online: Option<bool>,
+) -> Result<Option<i64>, AppError> {
     let _trace = ipc_trace!("library_fetch_missing_artist_cover");
 
     // P0-07 在线元数据隐私：默认拒绝，未显式授权不向 iTunes 发送艺人名称
@@ -909,7 +1204,10 @@ pub async fn library_fetch_missing_artist_cover(app: tauri::AppHandle, db_state:
     }
 
     let app_clone = app.clone();
-    let app_dir = app.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let app_dir = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
     let pool = db_state.db.clone();
     tokio::spawn(async move {
         match fetch_artist_cover_impl(&app_dir, &pool, artist_id).await {
@@ -963,7 +1261,10 @@ pub fn library_get_smart_playlist(
             crate::repositories::track_repo::TrackRepo::get_never_played_tracks(&conn, limit)
                 .map_err(|e| AppError::Internal(e.to_string()))
         }
-        _ => Err(AppError::Internal(format!("Unknown smart playlist kind: {}", kind))),
+        _ => Err(AppError::Internal(format!(
+            "Unknown smart playlist kind: {}",
+            kind
+        ))),
     }
 }
 
@@ -975,7 +1276,7 @@ pub fn library_get_track_versions(
 ) -> Result<Vec<crate::models::TrackFileInfoDTO>, AppError> {
     let _trace = ipc_trace!("library_get_track_versions");
     let conn = db_state.db.get()?;
-    
+
     // 查询所有属于该 track 的 media_files，按 file_priority_score 降序排序
     let mut stmt = conn.prepare("
         SELECT 
@@ -986,7 +1287,7 @@ pub fn library_get_track_versions(
         JOIN sources s ON s.id = mf.source_id
         WHERE mf.track_id = ?1 AND mf.availability = 'available'
     ")?;
-    
+
     let rows = stmt.query_map(rusqlite::params![track_id], |row| {
         Ok(crate::models::TrackFileInfoDTO {
             id: row.get(0)?,
@@ -1007,19 +1308,25 @@ pub fn library_get_track_versions(
             source_kind: row.get(15)?,
         })
     })?;
-    
+
     let mut result = Vec::new();
     for r in rows {
         result.push(r?);
     }
-    
+
     // 在内存中排序（复用我们写好的 file_priority_score 逻辑）
     result.sort_by(|a, b| {
-        let score_a = crate::services::file_priority::file_priority_score(&a.source_kind, &a.file_ext.clone().unwrap_or_default());
-        let score_b = crate::services::file_priority::file_priority_score(&b.source_kind, &b.file_ext.clone().unwrap_or_default());
+        let score_a = crate::services::file_priority::file_priority_score(
+            &a.source_kind,
+            &a.file_ext.clone().unwrap_or_default(),
+        );
+        let score_b = crate::services::file_priority::file_priority_score(
+            &b.source_kind,
+            &b.file_ext.clone().unwrap_or_default(),
+        );
         score_b.cmp(&score_a) // 降序
     });
-    
+
     Ok(result)
 }
 
@@ -1040,7 +1347,9 @@ pub fn library_set_primary_file(
         |row| row.get(0),
     )?;
     if !belongs_to_track {
-        return Err(AppError::Internal("所选音频版本不可用或不属于该歌曲".to_string()));
+        return Err(AppError::Internal(
+            "所选音频版本不可用或不属于该歌曲".to_string(),
+        ));
     }
     conn.execute(
         "UPDATE tracks SET primary_file_id = ?1 WHERE id = ?2",
@@ -1092,7 +1401,10 @@ pub fn library_get_playability(
     }
 
     let conn = db_state.db.get()?;
-    let cache = cache_state.cache.lock().map_err(|e| AppError::Internal(e.to_string()))?;
+    let cache = cache_state
+        .cache
+        .lock()
+        .map_err(|e| AppError::Internal(e.to_string()))?;
 
     for chunk in track_ids.chunks(500) {
         let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");

@@ -42,7 +42,10 @@ pub fn ai_save_settings(
     api_key: Option<String>,
 ) -> Result<AiSettingsDTO, AppError> {
     let _trace = ipc_trace!("ai_save_settings");
-    let app_dir = app.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let app_dir = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
     let conn = db_state.db.get()?;
     crate::services::ai::AiService::save_settings(
         &conn,
@@ -64,9 +67,15 @@ pub fn ai_save_settings(
 }
 
 #[tauri::command(async)]
-pub async fn ai_test_connection(app: tauri::AppHandle, db_state: State<'_, DbState>) -> Result<AiTestConnectionResult, AppError> {
+pub async fn ai_test_connection(
+    app: tauri::AppHandle,
+    db_state: State<'_, DbState>,
+) -> Result<AiTestConnectionResult, AppError> {
     let _trace = ipc_trace!("ai_test_connection");
-    let app_dir = app.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let app_dir = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
     let settings = {
         let conn = db_state.db.get()?;
         crate::services::ai::AiService::load_settings(&conn)?
@@ -85,7 +94,10 @@ pub async fn ai_generate_playlist(
     seed_track_id: Option<i64>,
 ) -> Result<AiPlaylistResult, AppError> {
     let _trace = ipc_trace!("ai_generate_playlist");
-    let app_dir = app.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let app_dir = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
 
     let notify = Arc::new(Notify::new());
     CANCEL_MAP
@@ -94,7 +106,15 @@ pub async fn ai_generate_playlist(
         .get_or_insert_with(HashMap::new)
         .insert(request_id.clone(), notify.clone());
 
-    let result = generate_inner(&db_state, &app_dir, &notify, &mode, phrase.as_deref(), seed_track_id).await;
+    let result = generate_inner(
+        &db_state,
+        &app_dir,
+        &notify,
+        &mode,
+        phrase.as_deref(),
+        seed_track_id,
+    )
+    .await;
 
     CANCEL_MAP
         .lock()
@@ -136,20 +156,30 @@ async fn generate_inner(
         if let Some(err) = settings.validate() {
             return Err(AppError::Internal(err));
         }
-        let candidates = crate::services::ai::AiService::retrieve_candidates(&conn, mode, phrase, seed_track_id)
-            .map_err(|e| AppError::Internal(e.to_string()))?;
+        let candidates =
+            crate::services::ai::AiService::retrieve_candidates(&conn, mode, phrase, seed_track_id)
+                .map_err(|e| AppError::Internal(e.to_string()))?;
         let seed = if mode == "seed" {
-            candidates.iter().find(|c| Some(c.id) == seed_track_id).cloned()
+            candidates
+                .iter()
+                .find(|c| Some(c.id) == seed_track_id)
+                .cloned()
         } else {
             None
         };
-        let (system, user) = crate::services::ai::AiService::build_prompt(mode, phrase, seed.as_ref(), &candidates);
+        let (system, user) =
+            crate::services::ai::AiService::build_prompt(mode, phrase, seed.as_ref(), &candidates);
         (settings, candidates, system, user)
     };
     let (settings, candidates, system, user) = prepared;
 
     if candidates.is_empty() {
-        return Ok(make_fallback(db_state, mode, seed_track_id, "曲库为空，没有可推荐的候选")?);
+        return Ok(make_fallback(
+            db_state,
+            mode,
+            seed_track_id,
+            "曲库为空，没有可推荐的候选",
+        )?);
     }
 
     // ===== Phase 2（异步）：LLM 调用 + 解析校验，失败重试一次，全程可取消 =====
@@ -186,11 +216,27 @@ async fn generate_inner(
             let finalized = crate::services::ai::AiService::finalize_tracks(&conn, &tracks)
                 .map_err(|e| AppError::Internal(e.to_string()))?;
             if finalized.is_empty() {
-                return Ok(make_fallback(db_state, mode, seed_track_id, "AI 结果回表为空")?);
+                return Ok(make_fallback(
+                    db_state,
+                    mode,
+                    seed_track_id,
+                    "AI 结果回表为空",
+                )?);
             }
-            Ok(AiPlaylistResult { name, description, source: "ai".to_string(), degraded_reason: None, tracks: finalized })
+            Ok(AiPlaylistResult {
+                name,
+                description,
+                source: "ai".to_string(),
+                degraded_reason: None,
+                tracks: finalized,
+            })
         }
-        None => Ok(make_fallback(db_state, mode, seed_track_id, &format!("AI 输出未通过校验（{}），已降级为规则歌单", last_err))?),
+        None => Ok(make_fallback(
+            db_state,
+            mode,
+            seed_track_id,
+            &format!("AI 输出未通过校验（{}），已降级为规则歌单", last_err),
+        )?),
     }
 }
 
@@ -201,14 +247,21 @@ fn make_fallback(
     reason: &str,
 ) -> Result<AiPlaylistResult, AppError> {
     let conn = db_state.db.get()?;
-    let (name, description, tracks) = crate::services::ai::AiService::fallback(&conn, mode, seed_track_id)
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let (name, description, tracks) =
+        crate::services::ai::AiService::fallback(&conn, mode, seed_track_id)
+            .map_err(|e| AppError::Internal(e.to_string()))?;
     tracing::warn!("[ai] 降级为规则歌单: {}", reason);
     Ok(AiPlaylistResult {
         name,
         description,
         source: "fallback".to_string(),
         degraded_reason: Some(reason.to_string()),
-        tracks: tracks.into_iter().map(|t| AiRankedTrackDTO { track: t, reason: None }).collect(),
+        tracks: tracks
+            .into_iter()
+            .map(|t| AiRankedTrackDTO {
+                track: t,
+                reason: None,
+            })
+            .collect(),
     })
 }

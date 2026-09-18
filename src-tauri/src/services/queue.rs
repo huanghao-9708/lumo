@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::collections::HashMap;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum PlaySource {
@@ -64,7 +64,11 @@ impl PlaybackQueue {
 
     pub fn set_queue(&mut self, items: Vec<QueueItem>, index: usize, mode: PlayMode) {
         self.items = items;
-        self.index = if self.items.is_empty() { 0 } else { index.min(self.items.len() - 1) };
+        self.index = if self.items.is_empty() {
+            0
+        } else {
+            index.min(self.items.len() - 1)
+        };
         self.set_mode(mode);
     }
 

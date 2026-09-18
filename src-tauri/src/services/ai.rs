@@ -11,7 +11,7 @@
 use crate::error::AppError;
 use crate::models::{AiRankedTrackDTO, TrackDTO};
 use crate::services::secret::SecretStore;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::HashSet;
 use std::path::Path;
 use std::time::Duration;
@@ -87,7 +87,11 @@ impl AiService {
         api_key: Option<String>,
     ) -> Result<(), AppError> {
         let mut cred: Option<String> = conn
-            .query_row("SELECT credential_ref FROM ai_settings WHERE id = 1", [], |r| r.get(0))
+            .query_row(
+                "SELECT credential_ref FROM ai_settings WHERE id = 1",
+                [],
+                |r| r.get(0),
+            )
             .optional()?
             .flatten();
 
@@ -127,7 +131,9 @@ impl AiService {
         #[cfg(target_os = "android")]
         {
             let store = crate::services::secret::DefaultSecretStore::new(Some(app_dir));
-            store.seal(key).map_err(|e| AppError::Internal(format!("API Key 加密存储失败: {}", e)))
+            store
+                .seal(key)
+                .map_err(|e| AppError::Internal(format!("API Key 加密存储失败: {}", e)))
         }
     }
 
@@ -214,7 +220,11 @@ impl AiService {
                     .collect();
                 push(same_album, &mut ids, &mut seen);
                 // 种子标题关键词扩散
-                if let Ok(seed_title) = conn.query_row("SELECT title FROM tracks WHERE id = ?1", params![seed_id], |r| r.get::<_, String>(0)) {
+                if let Ok(seed_title) = conn.query_row(
+                    "SELECT title FROM tracks WHERE id = ?1",
+                    params![seed_id],
+                    |r| r.get::<_, String>(0),
+                ) {
                     let terms = extract_keywords(&seed_title);
                     if !terms.is_empty() {
                         push(like_search(conn, &terms, 100)?, &mut ids, &mut seen);
@@ -244,7 +254,9 @@ impl AiService {
         }
         if ids.len() < CANDIDATE_LIMIT {
             let favs: Vec<i64> = conn
-                .prepare("SELECT track_id FROM favorite_tracks ORDER BY favorited_at DESC LIMIT 120")?
+                .prepare(
+                    "SELECT track_id FROM favorite_tracks ORDER BY favorited_at DESC LIMIT 120",
+                )?
                 .query_map([], |r| r.get(0))?
                 .filter_map(Result::ok)
                 .collect();
@@ -281,10 +293,16 @@ impl AiService {
                     t.play_count
              FROM tracks t WHERE t.id IN ({placeholders})"
         );
-        let mut map: std::collections::HashMap<i64, (String, String, i64)> = std::collections::HashMap::new();
+        let mut map: std::collections::HashMap<i64, (String, String, i64)> =
+            std::collections::HashMap::new();
         conn.prepare(&sql)?
             .query_map(rusqlite::params_from_iter(ids.iter()), |row| {
-                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, i64>(3)?))
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
             })?
             .filter_map(Result::ok)
             .for_each(|(id, title, artist, pc)| {
@@ -306,7 +324,12 @@ impl AiService {
 
     // ================= ② prompt 组装 =================
 
-    pub fn build_prompt(mode: &str, phrase: Option<&str>, seed: Option<&Candidate>, candidates: &[Candidate]) -> (String, String) {
+    pub fn build_prompt(
+        mode: &str,
+        phrase: Option<&str>,
+        seed: Option<&Candidate>,
+        candidates: &[Candidate],
+    ) -> (String, String) {
         let system = "你是一个本地音乐库的私人 DJ 助手。用户会给你一个候选歌曲列表和生成情境，你从中挑选并编排一份歌单。\n\
 规则：\n\
 1. 只能输出候选列表中存在的 id，绝对不能编造候选之外的歌曲或 id。\n\
@@ -331,16 +354,27 @@ impl AiService {
                 user.push_str("生成情境：基于用户近期的收听口味，生成一份既有熟悉感又有新意的日常歌单；不要全选最近播过的，适当从候选其他部分补充。\n\n");
             }
         }
-        user.push_str(&format!("候选歌曲（id|标题|艺人|播放次数），共 {} 首：\n", candidates.len()));
+        user.push_str(&format!(
+            "候选歌曲（id|标题|艺人|播放次数），共 {} 首：\n",
+            candidates.len()
+        ));
         for c in candidates {
-            user.push_str(&format!("{}|{}|{}|{}\n", c.id, c.title, c.artist, c.play_count));
+            user.push_str(&format!(
+                "{}|{}|{}|{}\n",
+                c.id, c.title, c.artist, c.play_count
+            ));
         }
         (system.to_string(), user)
     }
 
     // ================= ③ LLM 调用 =================
 
-    pub async fn call_llm(settings: &AiSettings, app_dir: &Path, system: &str, user: &str) -> Result<String, String> {
+    pub async fn call_llm(
+        settings: &AiSettings,
+        app_dir: &Path,
+        system: &str,
+        user: &str,
+    ) -> Result<String, String> {
         let key = settings
             .credential_ref
             .as_deref()
@@ -385,13 +419,17 @@ impl AiService {
         .map_err(|e| format!("请求模型服务失败: {}", e))?;
 
         let status = resp.status();
-        let text = resp.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| format!("读取响应失败: {}", e))?;
         if !status.is_success() {
             let brief: String = text.chars().take(200).collect();
             return Err(format!("模型服务返回 {}：{}", status, brief));
         }
 
-        let value: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("响应不是合法 JSON: {}", e))?;
+        let value: serde_json::Value =
+            serde_json::from_str(&text).map_err(|e| format!("响应不是合法 JSON: {}", e))?;
         let content = value["choices"][0]["message"]["content"]
             .as_str()
             .ok_or_else(|| "响应缺少 choices[0].message.content".to_string())?
@@ -409,15 +447,25 @@ impl AiService {
         let json_text = extract_json(raw)?;
         let value: serde_json::Value = serde_json::from_str(&json_text).ok()?;
 
-        let name = value["name"].as_str().unwrap_or("AI 歌单").trim().to_string();
-        let description = value["description"].as_str().unwrap_or("").trim().to_string();
+        let name = value["name"]
+            .as_str()
+            .unwrap_or("AI 歌单")
+            .trim()
+            .to_string();
+        let description = value["description"]
+            .as_str()
+            .unwrap_or("")
+            .trim()
+            .to_string();
         let arr = value["tracks"].as_array()?;
 
         let valid: HashSet<i64> = candidates.iter().map(|c| c.id).collect();
         let mut picked: Vec<(i64, String)> = Vec::new();
         let mut seen: HashSet<i64> = HashSet::new();
         for item in arr {
-            let id = item["id"].as_i64().or_else(|| item["id"].as_str().and_then(|s| s.parse().ok()));
+            let id = item["id"]
+                .as_i64()
+                .or_else(|| item["id"].as_str().and_then(|s| s.parse().ok()));
             let Some(id) = id else { continue };
             if !valid.contains(&id) || !seen.insert(id) {
                 continue;
@@ -435,13 +483,21 @@ impl AiService {
         if picked.len() < MIN_TRACKS || name.is_empty() {
             return None;
         }
-        Some((truncate_str(&name, 40), truncate_str(&description, 120), picked))
+        Some((
+            truncate_str(&name, 40),
+            truncate_str(&description, 120),
+            picked,
+        ))
     }
 
     // ================= ⑤ 兜底与回表 =================
 
     /// 规则兜底歌单：AI 不可用/解析失败时仍给一份可用的结果。
-    pub fn fallback(conn: &Connection, mode: &str, seed_track_id: Option<i64>) -> rusqlite::Result<(String, String, Vec<TrackDTO>)> {
+    pub fn fallback(
+        conn: &Connection,
+        mode: &str,
+        seed_track_id: Option<i64>,
+    ) -> rusqlite::Result<(String, String, Vec<TrackDTO>)> {
         let (name, description, tracks) = match mode {
             "seed" => {
                 let artist_id: Option<i64> = conn
@@ -450,7 +506,10 @@ impl AiService {
                     .optional()?;
                 match artist_id {
                     Some(aid) => {
-                        let tracks = crate::repositories::artist_repo::ArtistRepo::get_artist_tracks(conn, aid, 30, 0)?;
+                        let tracks =
+                            crate::repositories::artist_repo::ArtistRepo::get_artist_tracks(
+                                conn, aid, 30, 0,
+                            )?;
                         (
                             "同好之声".to_string(),
                             "AI 暂不可用，已按种子歌曲艺人自动兜底".to_string(),
@@ -461,33 +520,54 @@ impl AiService {
                 }
             }
             "phrase" => {
-                let tracks = crate::repositories::track_repo::TrackRepo::get_recently_added_tracks(conn, 30)?;
-                ("最新入库".to_string(), "AI 暂不可用，已按最近添加自动兜底".to_string(), tracks)
+                let tracks = crate::repositories::track_repo::TrackRepo::get_recently_added_tracks(
+                    conn, 30,
+                )?;
+                (
+                    "最新入库".to_string(),
+                    "AI 暂不可用，已按最近添加自动兜底".to_string(),
+                    tracks,
+                )
             }
             _ => {
-                let tracks = crate::repositories::track_repo::TrackRepo::get_recently_played_tracks(conn, 30)?;
-                ("最近在听".to_string(), "AI 暂不可用，已按最近播放自动兜底".to_string(), tracks)
+                let tracks =
+                    crate::repositories::track_repo::TrackRepo::get_recently_played_tracks(
+                        conn, 30,
+                    )?;
+                (
+                    "最近在听".to_string(),
+                    "AI 暂不可用，已按最近播放自动兜底".to_string(),
+                    tracks,
+                )
             }
         };
         Ok((name, description, tracks))
     }
 
     /// 把选中的 id 按选择顺序回表为完整 TrackDTO。
-    pub fn finalize_tracks(conn: &Connection, picked: &[(i64, String)]) -> rusqlite::Result<Vec<AiRankedTrackDTO>> {
+    pub fn finalize_tracks(
+        conn: &Connection,
+        picked: &[(i64, String)],
+    ) -> rusqlite::Result<Vec<AiRankedTrackDTO>> {
         if picked.is_empty() {
             return Ok(Vec::new());
         }
         let ids: Vec<i64> = picked.iter().map(|(id, _)| *id).collect();
-        let by_id: std::collections::HashMap<i64, TrackDTO> = crate::repositories::track_repo::TrackRepo::get_tracks_by_ids(conn, &ids)?
-            .into_iter()
-            .map(|t| (t.id, t))
-            .collect();
+        let by_id: std::collections::HashMap<i64, TrackDTO> =
+            crate::repositories::track_repo::TrackRepo::get_tracks_by_ids(conn, &ids)?
+                .into_iter()
+                .map(|t| (t.id, t))
+                .collect();
         Ok(picked
             .iter()
             .filter_map(|(id, reason)| {
                 by_id.get(id).map(|t| AiRankedTrackDTO {
                     track: t.clone(),
-                    reason: if reason.is_empty() { None } else { Some(reason.clone()) },
+                    reason: if reason.is_empty() {
+                        None
+                    } else {
+                        Some(reason.clone())
+                    },
                 })
             })
             .collect())
@@ -495,20 +575,36 @@ impl AiService {
 
     // ================= 连接测试 =================
 
-    pub async fn test_connection(settings: &AiSettings, app_dir: &Path) -> crate::models::AiTestConnectionResult {
+    pub async fn test_connection(
+        settings: &AiSettings,
+        app_dir: &Path,
+    ) -> crate::models::AiTestConnectionResult {
         let started = std::time::Instant::now();
         let base = settings.base_url.trim().trim_end_matches('/');
         if base.is_empty() {
-            return crate::models::AiTestConnectionResult { ok: false, message: "请先填写 Base URL".to_string(), latency_ms: 0 };
+            return crate::models::AiTestConnectionResult {
+                ok: false,
+                message: "请先填写 Base URL".to_string(),
+                latency_ms: 0,
+            };
         }
         let key = settings
             .credential_ref
             .as_deref()
             .and_then(|cred| Self::load_key(app_dir, cred));
 
-        let client = match reqwest::Client::builder().timeout(Duration::from_secs(10)).build() {
+        let client = match reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+        {
             Ok(c) => c,
-            Err(e) => return crate::models::AiTestConnectionResult { ok: false, message: format!("HTTP 客户端创建失败: {}", e), latency_ms: 0 },
+            Err(e) => {
+                return crate::models::AiTestConnectionResult {
+                    ok: false,
+                    message: format!("HTTP 客户端创建失败: {}", e),
+                    latency_ms: 0,
+                }
+            }
         };
         let mut req = client.get(format!("{}/models", base));
         if let Some(k) = &key {
@@ -518,12 +614,24 @@ impl AiService {
             Ok(resp) => {
                 let latency = started.elapsed().as_millis() as u64;
                 if resp.status().is_success() {
-                    crate::models::AiTestConnectionResult { ok: true, message: format!("连接成功（{} ms）", latency), latency_ms: latency }
+                    crate::models::AiTestConnectionResult {
+                        ok: true,
+                        message: format!("连接成功（{} ms）", latency),
+                        latency_ms: latency,
+                    }
                 } else {
-                    crate::models::AiTestConnectionResult { ok: false, message: format!("服务返回 {}（检查 Base URL 与 Key）", resp.status()), latency_ms: latency }
+                    crate::models::AiTestConnectionResult {
+                        ok: false,
+                        message: format!("服务返回 {}（检查 Base URL 与 Key）", resp.status()),
+                        latency_ms: latency,
+                    }
                 }
             }
-            Err(e) => crate::models::AiTestConnectionResult { ok: false, message: format!("连接失败: {}", e), latency_ms: started.elapsed().as_millis() as u64 },
+            Err(e) => crate::models::AiTestConnectionResult {
+                ok: false,
+                message: format!("连接失败: {}", e),
+                latency_ms: started.elapsed().as_millis() as u64,
+            },
         }
     }
 }
@@ -563,7 +671,11 @@ fn extract_keywords(phrase: &str) -> Vec<String> {
     terms
 }
 
-fn flush_cjk_run(run: &str, terms: &mut Vec<String>, push_unique: &mut dyn FnMut(&str, &mut Vec<String>)) {
+fn flush_cjk_run(
+    run: &str,
+    terms: &mut Vec<String>,
+    push_unique: &mut dyn FnMut(&str, &mut Vec<String>),
+) {
     let chars: Vec<char> = run.chars().collect();
     if (2..=4).contains(&chars.len()) {
         push_unique(run, terms);
@@ -610,7 +722,8 @@ fn like_search(conn: &Connection, terms: &[String], limit: i64) -> rusqlite::Res
     }
     param_values.push(Box::new(limit));
     let refs: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|b| b.as_ref()).collect();
-    let ids: Vec<i64> = conn.prepare(&sql)?
+    let ids: Vec<i64> = conn
+        .prepare(&sql)?
         .query_map(refs.as_slice(), |r| r.get::<_, i64>(0))?
         .filter_map(Result::ok)
         .collect();
@@ -643,7 +756,9 @@ impl AiSettings {
             return Some(ERR_NOT_ENABLED.to_string());
         }
         if self.base_url.trim().is_empty() || self.model.trim().is_empty() {
-            return Some("模型服务未配置完整，请在「设置 → AI 推荐」中填写 Base URL 与模型名".to_string());
+            return Some(
+                "模型服务未配置完整，请在「设置 → AI 推荐」中填写 Base URL 与模型名".to_string(),
+            );
         }
         None
     }

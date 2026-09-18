@@ -1,6 +1,6 @@
 use crate::models::{SyncConfigDTO, SyncResult};
 use crate::services::webdav::{WebdavClient, WebdavFile};
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use std::path::{Path, PathBuf};
 
 /// 旧版同步密钥（硬编码，全设备相同）——仅用于读取历史存量数据（P1-08），
@@ -18,20 +18,31 @@ fn derive_sync_key() -> [u8; 32] {
 /// DB 单独泄露不再可解密（密钥在密钥文件中，与 DB 不同文件、不同泄露面）。
 fn encrypt_sync_password_v3(machine_key: &[u8; 32], password: &str) -> String {
     use base64::Engine;
-    let bytes: Vec<u8> = password.bytes()
+    let bytes: Vec<u8> = password
+        .bytes()
         .enumerate()
         .map(|(i, b)| b ^ machine_key[i % 32])
         .collect();
-    format!("v3:seal:{}", base64::engine::general_purpose::STANDARD.encode(&bytes))
+    format!(
+        "v3:seal:{}",
+        base64::engine::general_purpose::STANDARD.encode(&bytes)
+    )
 }
 
 /// 解密同步密码：按前缀分发 v3（机器绑定）/ 旧格式（硬编码 key）。
 /// 旧格式解密成功时同步触发懒迁移（UPDATE 为 v3），返回 (密码, 是否发生迁移)。
-fn decrypt_sync_password(encoded: &str, machine_key: &[u8; 32], conn: &Connection) -> Option<String> {
+fn decrypt_sync_password(
+    encoded: &str,
+    machine_key: &[u8; 32],
+    conn: &Connection,
+) -> Option<String> {
     use base64::Engine;
     if let Some(payload) = encoded.strip_prefix("v3:seal:") {
-        let bytes = base64::engine::general_purpose::STANDARD.decode(payload).ok()?;
-        let decrypted: Vec<u8> = bytes.iter()
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(payload)
+            .ok()?;
+        let decrypted: Vec<u8> = bytes
+            .iter()
             .enumerate()
             .map(|(i, b)| b ^ machine_key[i % 32])
             .collect();
@@ -40,8 +51,11 @@ fn decrypt_sync_password(encoded: &str, machine_key: &[u8; 32], conn: &Connectio
 
     // 旧格式：硬编码 key
     let key = derive_sync_key();
-    let bytes = base64::engine::general_purpose::STANDARD.decode(encoded).ok()?;
-    let decrypted: Vec<u8> = bytes.iter()
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .ok()?;
+    let decrypted: Vec<u8> = bytes
+        .iter()
         .enumerate()
         .map(|(i, b)| b ^ key[i % 32])
         .collect();
@@ -63,8 +77,7 @@ impl SyncService {
     pub fn validate_snapshot(path: &Path, app_dir: &Path) -> Result<(), String> {
         let _ = crate::db::init_db(path.to_path_buf())
             .map_err(|e| format!("无法初始化同步数据库快照: {}", e))?;
-        let conn = Connection::open(path)
-            .map_err(|e| format!("无法打开同步数据库快照: {}", e))?;
+        let conn = Connection::open(path).map_err(|e| format!("无法打开同步数据库快照: {}", e))?;
         let integrity: String = conn
             .query_row("PRAGMA integrity_check", [], |row| row.get(0))
             .map_err(|e| format!("同步数据库完整性检查失败: {}", e))?;
@@ -72,23 +85,33 @@ impl SyncService {
             return Err(format!("同步数据库完整性检查未通过: {}", integrity));
         }
 
-        let required_tables = ["schema_migrations", "sources", "tracks", "media_files", "sync_config"];
+        let required_tables = [
+            "schema_migrations",
+            "sources",
+            "tracks",
+            "media_files",
+            "sync_config",
+        ];
         for table in required_tables {
-            let exists: bool = conn.query_row(
-                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
-                [table],
-                |row| row.get(0),
-            ).map_err(|e| format!("检查同步数据库结构失败: {}", e))?;
+            let exists: bool = conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+                    [table],
+                    |row| row.get(0),
+                )
+                .map_err(|e| format!("检查同步数据库结构失败: {}", e))?;
             if !exists {
                 return Err(format!("同步数据库缺少必要表: {}", table));
             }
         }
 
-        let version: i64 = conn.query_row(
-            "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
-            [],
-            |row| row.get(0),
-        ).map_err(|e| format!("读取同步数据库版本失败: {}", e))?;
+        let version: i64 = conn
+            .query_row(
+                "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("读取同步数据库版本失败: {}", e))?;
         if version < 8 {
             return Err(format!("同步数据库版本过旧（{}），需要至少 V8", version));
         }
@@ -97,7 +120,10 @@ impl SyncService {
     }
 
     /// 读取同步配置（密码解密后返回）。需要机器密钥（P1-08 v3 格式 + 旧格式懒迁移）。
-    pub fn get_config(conn: &Connection, machine_key: &[u8; 32]) -> rusqlite::Result<SyncConfigDTO> {
+    pub fn get_config(
+        conn: &Connection,
+        machine_key: &[u8; 32],
+    ) -> rusqlite::Result<SyncConfigDTO> {
         let (enabled, webdav_url, username, password_encrypted, remote_path, last_sync_at, last_sync_direction) = conn.query_row(
             "SELECT enabled, webdav_url, username, password_encrypted, remote_path, last_sync_at, last_sync_direction
              FROM sync_config WHERE id = 1",
@@ -129,8 +155,15 @@ impl SyncService {
     }
 
     /// 保存同步配置（密码以 v3 机器绑定格式加密写入）
-    pub fn save_config(conn: &Connection, config: &SyncConfigDTO, machine_key: &[u8; 32]) -> rusqlite::Result<()> {
-        let password_encrypted = config.password.as_deref().map(|p| encrypt_sync_password_v3(machine_key, p));
+    pub fn save_config(
+        conn: &Connection,
+        config: &SyncConfigDTO,
+        machine_key: &[u8; 32],
+    ) -> rusqlite::Result<()> {
+        let password_encrypted = config
+            .password
+            .as_deref()
+            .map(|p| encrypt_sync_password_v3(machine_key, p));
         conn.execute(
             "UPDATE sync_config SET
                 enabled = ?1,
@@ -160,15 +193,21 @@ impl SyncService {
         let snapshot_path = app_dir.join("lumo_sync_snapshot.sqlite");
         // 先清理旧快照
         let _ = std::fs::remove_file(&snapshot_path);
-        let sql = format!("VACUUM INTO '{}'", snapshot_path.to_string_lossy().replace('\'', "''"));
-        conn.execute_batch(&sql).map_err(|e| format!("Failed to create DB snapshot: {}", e))?;
+        let sql = format!(
+            "VACUUM INTO '{}'",
+            snapshot_path.to_string_lossy().replace('\'', "''")
+        );
+        conn.execute_batch(&sql)
+            .map_err(|e| format!("Failed to create DB snapshot: {}", e))?;
 
         // MOB-005: 快照脱敏处理：清空密码字段，确保上传至云端的快照绝不携带可还原密码
         if let Ok(snap_conn) = Connection::open(&snapshot_path) {
-            let _ = snap_conn.execute_batch("
+            let _ = snap_conn.execute_batch(
+                "
                 UPDATE sync_config SET password_encrypted = NULL;
                 UPDATE sources SET credential_ref = NULL WHERE kind = 'webdav';
-            ");
+            ",
+            );
         }
 
         Ok(snapshot_path)
@@ -187,19 +226,26 @@ impl SyncService {
         let base_url = config.webdav_url.as_deref().ok_or("WebDAV URL 未配置")?;
         let remote_dir = config.remote_path.as_deref().unwrap_or("/");
         let remote_dir = remote_dir.trim_end_matches('/');
-        let base = reqwest::Url::parse(base_url)
-            .map_err(|e| format!("无效的 WebDAV URL: {}", e))?;
+        let base =
+            reqwest::Url::parse(base_url).map_err(|e| format!("无效的 WebDAV URL: {}", e))?;
         // 构建完整路径
-        let joined = base.join(&format!("{}/{}", remote_dir, filename))
+        let joined = base
+            .join(&format!("{}/{}", remote_dir, filename))
             .map_err(|e| format!("路径组合失败: {}", e))?;
         Ok(joined.to_string())
     }
 
     /// 上传同步快照：VACUUM INTO → PUT 到 remote_path/lumo.sqlite
-    pub fn sync_upload(conn: &Connection, app_dir: &Path, config: &SyncConfigDTO) -> Result<SyncResult, String> {
+    pub fn sync_upload(
+        conn: &Connection,
+        app_dir: &Path,
+        config: &SyncConfigDTO,
+    ) -> Result<SyncResult, String> {
         let client = Self::build_client(config)?;
         let snapshot = Self::create_snapshot(conn, app_dir)?;
-        let file_size = std::fs::metadata(&snapshot).map_err(|e| e.to_string())?.len();
+        let file_size = std::fs::metadata(&snapshot)
+            .map_err(|e| e.to_string())?
+            .len();
         let data = std::fs::read(&snapshot).map_err(|e| format!("读取快照失败: {}", e))?;
 
         // 确保远程目录存在
@@ -222,7 +268,8 @@ impl SyncService {
         conn.execute(
             "UPDATE sync_config SET last_sync_at = ?1, last_sync_direction = 'upload' WHERE id = 1",
             params![timestamp],
-        ).map_err(|e| format!("更新同步时间失败: {}", e))?;
+        )
+        .map_err(|e| format!("更新同步时间失败: {}", e))?;
 
         Ok(SyncResult {
             bytes_uploaded: file_size,
@@ -232,7 +279,10 @@ impl SyncService {
 
     /// 下载云端快照到本地临时文件，返回文件路径。
     /// 调用方负责替换 DB 并热重载。
-    pub fn sync_download_to_temp(app_dir: &Path, config: &SyncConfigDTO) -> Result<PathBuf, String> {
+    pub fn sync_download_to_temp(
+        app_dir: &Path,
+        config: &SyncConfigDTO,
+    ) -> Result<PathBuf, String> {
         let client = Self::build_client(config)?;
         let download_url = Self::remote_file_url(config, "lumo.sqlite")?;
         let temp_path = app_dir.join("lumo_sync_remote.sqlite");
@@ -241,7 +291,9 @@ impl SyncService {
     }
 
     /// 检查云端是否有同步数据（用于首次配置检测）
-    pub fn check_remote(config: &SyncConfigDTO) -> Result<crate::models::RemoteCheckResult, String> {
+    pub fn check_remote(
+        config: &SyncConfigDTO,
+    ) -> Result<crate::models::RemoteCheckResult, String> {
         let client = Self::build_client(config)?;
         let remote_dir = config.remote_path.as_deref().unwrap_or("/");
         let path = if remote_dir == "/" || remote_dir.is_empty() {
@@ -273,9 +325,7 @@ impl SyncService {
         let client = Self::build_client(config)?;
         let files = client.propfind(path)?;
         // 排除自身条目，只返回目录
-        Ok(files.into_iter()
-            .filter(|f| f.is_dir)
-            .collect())
+        Ok(files.into_iter().filter(|f| f.is_dir).collect())
     }
 
     /// 在 WebDAV 上创建目录

@@ -70,11 +70,17 @@ impl CoverService {
         if bytes.len() < 2_000 {
             return None;
         }
-        Some(CoverHit { bytes: bytes.to_vec(), mime_type })
+        Some(CoverHit {
+            bytes: bytes.to_vec(),
+            mime_type,
+        })
     }
 
     /// 专辑封面：网易云（1500x1500）→ iTunes（最大分辨率）
-    pub async fn search_album_cover(album_title: &str, artist_name: Option<&str>) -> Option<CoverHit> {
+    pub async fn search_album_cover(
+        album_title: &str,
+        artist_name: Option<&str>,
+    ) -> Option<CoverHit> {
         let client = Self::client().ok()?;
 
         // 1) 网易云：专辑搜索 type=10，取第一个有图的
@@ -97,7 +103,11 @@ impl CoverService {
                     if let Some(pic) = pic {
                         let sized = format!("{}?param=1500y1500", pic);
                         if let Some(hit) = Self::fetch_image(&client, &sized).await {
-                            tracing::info!("[cover] album 网易云命中: {} -> {}KB", al["name"].as_str().unwrap_or(""), hit.bytes.len() / 1024);
+                            tracing::info!(
+                                "[cover] album 网易云命中: {} -> {}KB",
+                                al["name"].as_str().unwrap_or(""),
+                                hit.bytes.len() / 1024
+                            );
                             return Some(hit);
                         }
                     }
@@ -134,7 +144,12 @@ impl CoverService {
         if let Some(json) = Self::netease_get_json(&client, url.as_str()).await {
             let artist_id = json["result"]["artists"][0]["id"].as_i64();
             if let Some(id) = artist_id {
-                if let Some(detail) = Self::netease_get_json(&client, &format!("https://music.163.com/api/artist/{}", id)).await {
+                if let Some(detail) = Self::netease_get_json(
+                    &client,
+                    &format!("https://music.163.com/api/artist/{}", id),
+                )
+                .await
+                {
                     // 详情 picUrl 是大图；img1v1Url 兜底（可能仅 130px）
                     let pic = detail["artist"]["picUrl"]
                         .as_str()
@@ -143,7 +158,11 @@ impl CoverService {
                     if let Some(pic) = pic {
                         let sized = format!("{}?param=1200y1200", pic);
                         if let Some(hit) = Self::fetch_image(&client, &sized).await {
-                            tracing::info!("[cover] artist 网易云命中: {} -> {}KB", artist_name, hit.bytes.len() / 1024);
+                            tracing::info!(
+                                "[cover] artist 网易云命中: {} -> {}KB",
+                                artist_name,
+                                hit.bytes.len() / 1024
+                            );
                             return Some(hit);
                         }
                     }

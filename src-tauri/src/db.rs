@@ -1,5 +1,5 @@
-use rusqlite::{Connection, Result};
 use r2d2_sqlite::SqliteConnectionManager;
+use rusqlite::{Connection, Result};
 use std::path::PathBuf;
 
 /// 连接池类型别名，简化引用。
@@ -18,17 +18,16 @@ pub struct DbState {
 /// 2. 迁移脚本在首条连接上串行执行，保证 schema 升级完成后才开放服务
 /// 3. 连接池最大 8 条连接：覆盖 6 个封面并发请求 + 多个 IPC 命令
 pub fn init_db(db_path: PathBuf) -> Result<DbPool, Box<dyn std::error::Error>> {
-    let manager = SqliteConnectionManager::file(&db_path)
-        .with_init(|conn| {
-            // 全局 PRAGMA：每条新连接都要设置一次
-            conn.pragma_update(None, "journal_mode", "WAL")?;
-            conn.pragma_update(None, "foreign_keys", "ON")?;
-            // WAL 下提升并发读取的缓存大小（默认 2000 页，加大可减少磁盘 I/O）
-            conn.pragma_update(None, "cache_size", "8000")?;
-            // NORMAL：WAL 模式下 NORMAL 已足够安全，且比 FULL 快很多
-            conn.pragma_update(None, "synchronous", "NORMAL")?;
-            Ok(())
-        });
+    let manager = SqliteConnectionManager::file(&db_path).with_init(|conn| {
+        // 全局 PRAGMA：每条新连接都要设置一次
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.pragma_update(None, "foreign_keys", "ON")?;
+        // WAL 下提升并发读取的缓存大小（默认 2000 页，加大可减少磁盘 I/O）
+        conn.pragma_update(None, "cache_size", "8000")?;
+        // NORMAL：WAL 模式下 NORMAL 已足够安全，且比 FULL 快很多
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
+        Ok(())
+    });
 
     let pool = r2d2::Pool::builder()
         .max_size(8) // 8 条并发连接：artwork × 6 + IPC 命令 × 2
@@ -292,7 +291,11 @@ CREATE TABLE IF NOT EXISTS artwork (
 fn get_current_version(conn: &Connection) -> Result<i64> {
     // schema_migrations 表已经在 BASE_SCHEMA_SQL 中创建
     let v: Option<i64> = conn
-        .query_row("SELECT MAX(version) FROM schema_migrations", [], |row: &rusqlite::Row| row.get(0))
+        .query_row(
+            "SELECT MAX(version) FROM schema_migrations",
+            [],
+            |row: &rusqlite::Row| row.get(0),
+        )
         .ok()
         .flatten();
     Ok(v.unwrap_or(0))
@@ -354,17 +357,23 @@ fn apply_migrations(conn: &Connection, app_dir: &std::path::Path) -> Result<()> 
     // 维护点：① index_file 新建 track 时 +1；② source_remove 删孤儿 track 时同步减。
     if current < 2 {
         // albums.track_count
-        conn.execute_batch("ALTER TABLE albums ADD COLUMN track_count INTEGER NOT NULL DEFAULT 0;")?;
+        conn.execute_batch(
+            "ALTER TABLE albums ADD COLUMN track_count INTEGER NOT NULL DEFAULT 0;",
+        )?;
         // artists.track_count / artists.album_count（艺人页 stats 查询同样受益）
-        conn.execute_batch("ALTER TABLE artists ADD COLUMN track_count INTEGER NOT NULL DEFAULT 0;")?;
-        conn.execute_batch("ALTER TABLE artists ADD COLUMN album_count INTEGER NOT NULL DEFAULT 0;")?;
+        conn.execute_batch(
+            "ALTER TABLE artists ADD COLUMN track_count INTEGER NOT NULL DEFAULT 0;",
+        )?;
+        conn.execute_batch(
+            "ALTER TABLE artists ADD COLUMN album_count INTEGER NOT NULL DEFAULT 0;",
+        )?;
 
         // 一次性回填：albums.track_count = 该专辑下的 track 数
         conn.execute_batch(
             "UPDATE albums
              SET track_count = (
                  SELECT COUNT(*) FROM tracks t WHERE t.album_id = albums.id
-             );"
+             );",
         )?;
         // artists.track_count = 该艺人作为 track_artists 关联的 track 数
         conn.execute_batch(
@@ -378,19 +387,19 @@ fn apply_migrations(conn: &Connection, app_dir: &std::path::Path) -> Result<()> 
             "UPDATE artists
              SET album_count = (
                  SELECT COUNT(*) FROM albums al WHERE al.album_artist_id = artists.id
-             );"
+             );",
         )?;
 
         // 覆盖索引：让分页查询（带排序）能完全走索引，不必回表
         // albums(normalized_title) 覆盖 ORDER BY，配合 rowid 主键查 LIMIT/OFFSET 很快
         conn.execute_batch(
             "CREATE INDEX IF NOT EXISTS idx_albums_normalized_title_covering
-             ON albums(normalized_title, album_artist_id, cover_artwork_id, track_count);"
+             ON albums(normalized_title, album_artist_id, cover_artwork_id, track_count);",
         )?;
         // artists 列表页排序索引
         conn.execute_batch(
             "CREATE INDEX IF NOT EXISTS idx_artists_name_covering
-             ON artists(normalized_name, track_count);"
+             ON artists(normalized_name, track_count);",
         )?;
 
         mark_migration_applied(conn, 2)?;
@@ -406,7 +415,9 @@ fn apply_migrations(conn: &Connection, app_dir: &std::path::Path) -> Result<()> 
     // 已有库需重新扫描才会填充缩略图；未填充时前端 fallback 到 lumo:// 协议。
     if current < 3 {
         conn.execute_batch("ALTER TABLE artwork ADD COLUMN thumbnail_blob BLOB;")?;
-        conn.execute_batch("ALTER TABLE artwork ADD COLUMN thumbnail_mime TEXT NOT NULL DEFAULT 'image/jpeg';")?;
+        conn.execute_batch(
+            "ALTER TABLE artwork ADD COLUMN thumbnail_mime TEXT NOT NULL DEFAULT 'image/jpeg';",
+        )?;
         mark_migration_applied(conn, 3)?;
         current = 3;
         tracing::info!("数据库迁移：已升级至 V3（artwork 表加缩略图 BLOB 字段）");
@@ -434,7 +445,7 @@ fn apply_migrations(conn: &Connection, app_dir: &std::path::Path) -> Result<()> 
             "INSERT OR IGNORE INTO album_artists (album_id, artist_id, role, position)
              SELECT al.id, al.album_artist_id, 'album_artist', 0
              FROM albums al
-             WHERE al.album_artist_id IS NOT NULL;"
+             WHERE al.album_artist_id IS NOT NULL;",
         )?;
 
         // 2. 查找含有分隔符的组合艺人
@@ -447,13 +458,15 @@ fn apply_migrations(conn: &Connection, app_dir: &std::path::Path) -> Result<()> 
                     OR name LIKE '%;%'
                     OR name LIKE '%、%'
                     OR name LIKE '%，%'
-                    OR name LIKE '%,%'"
+                    OR name LIKE '%,%'",
             )?;
             let rows = stmt.query_map([], |row| {
                 Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
             })?;
             let mut out = Vec::new();
-            for r in rows { out.push(r?); }
+            for r in rows {
+                out.push(r?);
+            }
             out
         };
 
@@ -463,8 +476,14 @@ fn apply_migrations(conn: &Connection, app_dir: &std::path::Path) -> Result<()> 
             let mut prev_space = false;
             for ch in s.trim().chars() {
                 if ch.is_whitespace() {
-                    if !prev_space { out.push(' '); prev_space = true; }
-                } else { out.push(ch); prev_space = false; }
+                    if !prev_space {
+                        out.push(' ');
+                        prev_space = true;
+                    }
+                } else {
+                    out.push(ch);
+                    prev_space = false;
+                }
             }
             out
         }
@@ -484,12 +503,15 @@ fn apply_migrations(conn: &Connection, app_dir: &std::path::Path) -> Result<()> 
                 .replace('，', "/")
                 .replace(',', "/");
 
-            let parts: Vec<&str> = cleaned.split('/')
+            let parts: Vec<&str> = cleaned
+                .split('/')
                 .map(|s| s.trim())
                 .filter(|s| !s.is_empty())
                 .collect();
 
-            if parts.len() <= 1 { continue; }
+            if parts.len() <= 1 {
+                continue;
+            }
 
             // upsert 各拆分艺人，收集 ID
             let split_ids: Vec<i64> = parts.iter()
@@ -511,13 +533,19 @@ fn apply_migrations(conn: &Connection, app_dir: &std::path::Path) -> Result<()> 
             // track_artists：替换为拆分后的艺人
             let ta_rows: Vec<(i64, String, i64)> = {
                 let mut s = conn.prepare(
-                    "SELECT track_id, role, position FROM track_artists WHERE artist_id = ?1"
+                    "SELECT track_id, role, position FROM track_artists WHERE artist_id = ?1",
                 )?;
                 let rows = s.query_map(rusqlite::params![artist_id], |row| {
-                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?))
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
                 })?;
                 let mut r = Vec::new();
-                for row in rows { r.push(row?); }
+                for row in rows {
+                    r.push(row?);
+                }
                 r
             };
             for (track_id, role, position) in &ta_rows {
@@ -536,13 +564,19 @@ fn apply_migrations(conn: &Connection, app_dir: &std::path::Path) -> Result<()> 
             // album_artists：替换为拆分后的艺人
             let aa_rows: Vec<(i64, String, i64)> = {
                 let mut s = conn.prepare(
-                    "SELECT album_id, role, position FROM album_artists WHERE artist_id = ?1"
+                    "SELECT album_id, role, position FROM album_artists WHERE artist_id = ?1",
                 )?;
                 let rows = s.query_map(rusqlite::params![artist_id], |row| {
-                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?))
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
                 })?;
                 let mut r = Vec::new();
-                for row in rows { r.push(row?); }
+                for row in rows {
+                    r.push(row?);
+                }
                 r
             };
             for (album_id, role, position) in &aa_rows {
@@ -673,7 +707,7 @@ fn apply_migrations(conn: &Connection, app_dir: &std::path::Path) -> Result<()> 
     if current < 10 {
         conn.execute_batch(
             "DELETE FROM lyrics WHERE id NOT IN (SELECT MIN(id) FROM lyrics GROUP BY track_id);
-             CREATE UNIQUE INDEX IF NOT EXISTS idx_lyrics_track_id ON lyrics(track_id);"
+             CREATE UNIQUE INDEX IF NOT EXISTS idx_lyrics_track_id ON lyrics(track_id);",
         )?;
         mark_migration_applied(conn, 10)?;
         current = 10;

@@ -132,7 +132,9 @@ const KEYRING_SERVICE: &str = "com.hao.lumo.credentials";
 pub fn keyring_set(entry_id: &str, password: &str) -> Result<(), String> {
     let entry = keyring::Entry::new(KEYRING_SERVICE, entry_id)
         .map_err(|e| format!("钥匙串条目创建失败: {}", e))?;
-    entry.set_password(password).map_err(|e| format!("钥匙串写入失败: {}", e))
+    entry
+        .set_password(password)
+        .map_err(|e| format!("钥匙串写入失败: {}", e))
 }
 
 /// 从系统钥匙串读取密码。
@@ -140,7 +142,9 @@ pub fn keyring_set(entry_id: &str, password: &str) -> Result<(), String> {
 pub fn keyring_get(entry_id: &str) -> Result<String, String> {
     let entry = keyring::Entry::new(KEYRING_SERVICE, entry_id)
         .map_err(|e| format!("钥匙串条目创建失败: {}", e))?;
-    entry.get_password().map_err(|e| format!("钥匙串读取失败: {}", e))
+    entry
+        .get_password()
+        .map_err(|e| format!("钥匙串读取失败: {}", e))
 }
 
 /// 从系统钥匙串删除密码（条目不存在视为成功）。

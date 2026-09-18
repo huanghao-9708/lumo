@@ -178,67 +178,122 @@ mod android {
             let app_handle = app.clone();
             std::thread::spawn(move || {
                 match action {
-                    1 => { // ACTION_PLAY
-                        if let Some(ps) = app_handle.try_state::<crate::commands::playback::PlaybackState>() {
+                    1 => {
+                        // ACTION_PLAY
+                        if let Some(ps) =
+                            app_handle.try_state::<crate::commands::playback::PlaybackState>()
+                        {
                             if let Ok(m) = ps.manager.lock() {
                                 m.resume();
                                 let pos = m.get_pos();
                                 drop(m);
-                                if let Some(qs) = app_handle.try_state::<crate::services::queue::QueueState>() {
+                                if let Some(qs) =
+                                    app_handle.try_state::<crate::services::queue::QueueState>()
+                                {
                                     if let Ok(q) = qs.queue.lock() {
                                         if let Some(item) = q.items.get(q.index) {
-                                            let _ = update_foreground(&item.title, &item.artist, &item.album, true, pos, item.duration_ms.unwrap_or(0));
+                                            let _ = update_foreground(
+                                                &item.title,
+                                                &item.artist,
+                                                &item.album,
+                                                true,
+                                                pos,
+                                                item.duration_ms.unwrap_or(0),
+                                            );
                                         }
                                     }
                                 }
-                                let _ = app_handle.emit("playback-status-changed", serde_json::json!({ "is_playing": true }));
+                                let _ = app_handle.emit(
+                                    "playback-status-changed",
+                                    serde_json::json!({ "is_playing": true }),
+                                );
                             }
                         }
                     }
-                    2 => { // ACTION_PAUSE
-                        if let Some(ps) = app_handle.try_state::<crate::commands::playback::PlaybackState>() {
+                    2 => {
+                        // ACTION_PAUSE
+                        if let Some(ps) =
+                            app_handle.try_state::<crate::commands::playback::PlaybackState>()
+                        {
                             if let Ok(m) = ps.manager.lock() {
                                 m.pause();
                                 let pos = m.get_pos();
                                 drop(m);
-                                if let Some(qs) = app_handle.try_state::<crate::services::queue::QueueState>() {
+                                if let Some(qs) =
+                                    app_handle.try_state::<crate::services::queue::QueueState>()
+                                {
                                     if let Ok(q) = qs.queue.lock() {
                                         if let Some(item) = q.items.get(q.index) {
-                                            let _ = update_foreground(&item.title, &item.artist, &item.album, false, pos, item.duration_ms.unwrap_or(0));
+                                            let _ = update_foreground(
+                                                &item.title,
+                                                &item.artist,
+                                                &item.album,
+                                                false,
+                                                pos,
+                                                item.duration_ms.unwrap_or(0),
+                                            );
                                         }
                                     }
                                 }
-                                let _ = app_handle.emit("playback-status-changed", serde_json::json!({ "is_playing": false }));
+                                let _ = app_handle.emit(
+                                    "playback-status-changed",
+                                    serde_json::json!({ "is_playing": false }),
+                                );
                             }
                         }
                     }
-                    3 => { // ACTION_NEXT
+                    3 => {
+                        // ACTION_NEXT
                         if let (Some(qs), Some(ps)) = (
                             app_handle.try_state::<crate::services::queue::QueueState>(),
-                            app_handle.try_state::<crate::commands::playback::PlaybackState>()
+                            app_handle.try_state::<crate::commands::playback::PlaybackState>(),
                         ) {
-                            let _ = crate::commands::queue::playback_advance(app_handle.clone(), qs, ps, 1);
+                            let _ = crate::commands::queue::playback_advance(
+                                app_handle.clone(),
+                                qs,
+                                ps,
+                                1,
+                            );
                         }
                     }
-                    4 => { // ACTION_PREV
+                    4 => {
+                        // ACTION_PREV
                         if let (Some(qs), Some(ps)) = (
                             app_handle.try_state::<crate::services::queue::QueueState>(),
-                            app_handle.try_state::<crate::commands::playback::PlaybackState>()
+                            app_handle.try_state::<crate::commands::playback::PlaybackState>(),
                         ) {
-                            let _ = crate::commands::queue::playback_advance(app_handle.clone(), qs, ps, -1);
+                            let _ = crate::commands::queue::playback_advance(
+                                app_handle.clone(),
+                                qs,
+                                ps,
+                                -1,
+                            );
                         }
                     }
-                    5 => { // ACTION_SEEK
-                        if let Some(ps) = app_handle.try_state::<crate::commands::playback::PlaybackState>() {
-                            if let Ok(m) = ps.manager.lock() { let _ = m.try_seek(param as u64); }
+                    5 => {
+                        // ACTION_SEEK
+                        if let Some(ps) =
+                            app_handle.try_state::<crate::commands::playback::PlaybackState>()
+                        {
+                            if let Ok(m) = ps.manager.lock() {
+                                let _ = m.try_seek(param as u64);
+                            }
                         }
                     }
-                    6 => { // ACTION_STOP
-                        if let Some(ps) = app_handle.try_state::<crate::commands::playback::PlaybackState>() {
-                            if let Ok(m) = ps.manager.lock() { m.stop(); }
+                    6 => {
+                        // ACTION_STOP
+                        if let Some(ps) =
+                            app_handle.try_state::<crate::commands::playback::PlaybackState>()
+                        {
+                            if let Ok(m) = ps.manager.lock() {
+                                m.stop();
+                            }
                         }
                         let _ = stop_foreground();
-                        let _ = app_handle.emit("playback-status-changed", serde_json::json!({ "is_playing": false }));
+                        let _ = app_handle.emit(
+                            "playback-status-changed",
+                            serde_json::json!({ "is_playing": false }),
+                        );
                     }
                     _ => {}
                 }

@@ -8,13 +8,13 @@ pub fn file_priority_score(source_kind: &str, file_ext: &str) -> i32 {
         "local" => 100,
         _ => 0, // webdav
     };
-    
+
     let format_score = match file_ext.to_lowercase().as_str() {
         "flac" | "wav" | "alac" | "ape" => 50,
         "m4a" | "aac" => 30,
         "mp3" | "ogg" => 10,
         _ => 0,
     };
-    
+
     kind_score + format_score
 }

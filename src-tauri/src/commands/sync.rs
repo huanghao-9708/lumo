@@ -1,27 +1,40 @@
-use tauri::{Manager, State};
 use crate::db::DbState;
 use crate::error::AppError;
 use crate::ipc_trace;
-use crate::models::{SyncConfigDTO, SyncResult, RemoteCheckResult};
+use crate::models::{RemoteCheckResult, SyncConfigDTO, SyncResult};
 use crate::services::sync::SyncService;
 use crate::services::webdav::WebdavFile;
 use std::path::PathBuf;
+use tauri::{Manager, State};
 
 // ========================= 配置读写 =========================
 
 #[tauri::command]
-pub fn sync_get_config(app: tauri::AppHandle, db_state: State<'_, DbState>) -> Result<SyncConfigDTO, AppError> {
+pub fn sync_get_config(
+    app: tauri::AppHandle,
+    db_state: State<'_, DbState>,
+) -> Result<SyncConfigDTO, AppError> {
     let conn = db_state.db.get()?;
-    let app_dir = app.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let app_dir = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
     let machine_key = crate::commands::scanner::derive_credential_key(&app_dir);
     let config = SyncService::get_config(&conn, &machine_key)?;
     Ok(config)
 }
 
 #[tauri::command]
-pub fn sync_save_config(app: tauri::AppHandle, db_state: State<'_, DbState>, config: SyncConfigDTO) -> Result<(), AppError> {
+pub fn sync_save_config(
+    app: tauri::AppHandle,
+    db_state: State<'_, DbState>,
+    config: SyncConfigDTO,
+) -> Result<(), AppError> {
     let conn = db_state.db.get()?;
-    let app_dir = app.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let app_dir = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
     let machine_key = crate::commands::scanner::derive_credential_key(&app_dir);
     SyncService::save_config(&conn, &config, &machine_key)?;
     Ok(())
@@ -32,7 +45,12 @@ pub fn sync_save_config(app: tauri::AppHandle, db_state: State<'_, DbState>, con
 /// 浏览 WebDAV 目录树（PROPFIND 过滤后仅返回目录）。
 /// url / username / password 来自同步配置，前端在调用前已从 config 读取。
 #[tauri::command]
-pub fn sync_browse_webdav(url: String, username: Option<String>, password: Option<String>, path: String) -> Result<Vec<WebdavFile>, AppError> {
+pub fn sync_browse_webdav(
+    url: String,
+    username: Option<String>,
+    password: Option<String>,
+    path: String,
+) -> Result<Vec<WebdavFile>, AppError> {
     let config = SyncConfigDTO {
         enabled: true,
         webdav_url: Some(url),
@@ -48,7 +66,12 @@ pub fn sync_browse_webdav(url: String, username: Option<String>, password: Optio
 
 /// 在 WebDAV 上新建文件夹（文件夹浏览器内使用）。
 #[tauri::command]
-pub fn sync_create_folder(url: String, username: Option<String>, password: Option<String>, path: String) -> Result<(), AppError> {
+pub fn sync_create_folder(
+    url: String,
+    username: Option<String>,
+    password: Option<String>,
+    path: String,
+) -> Result<(), AppError> {
     let config = SyncConfigDTO {
         enabled: true,
         webdav_url: Some(url),
@@ -66,32 +89,47 @@ pub fn sync_create_folder(url: String, username: Option<String>, password: Optio
 
 /// 立即同步上传：VACUUM INTO → PUT 到远程路径。
 #[tauri::command]
-pub fn sync_upload_now(app: tauri::AppHandle, db_state: State<'_, DbState>) -> Result<SyncResult, AppError> {
+pub fn sync_upload_now(
+    app: tauri::AppHandle,
+    db_state: State<'_, DbState>,
+) -> Result<SyncResult, AppError> {
     let _trace = ipc_trace!("sync_upload_now");
-    let app_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let app_dir = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("."));
     let conn = db_state.db.get()?;
     let machine_key = crate::commands::scanner::derive_credential_key(&app_dir);
     let config = SyncService::get_config(&conn, &machine_key)?;
     if !config.enabled {
-        return Err(AppError::Internal("同步未启用，请在设置中配置并启用".to_string()));
+        return Err(AppError::Internal(
+            "同步未启用，请在设置中配置并启用".to_string(),
+        ));
     }
     let result = SyncService::sync_upload(&conn, &app_dir, &config)?;
     Ok(result)
 }
 
-
 /// Restore a validated snapshot into the live pool without replacing Tauri-managed state.
 #[tauri::command]
-pub fn sync_restore_now(app: tauri::AppHandle, db_state: State<'_, DbState>) -> Result<String, AppError> {
+pub fn sync_restore_now(
+    app: tauri::AppHandle,
+    db_state: State<'_, DbState>,
+) -> Result<String, AppError> {
     let _trace = ipc_trace!("sync_restore_now");
-    let app_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let app_dir = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("."));
     let machine_key = crate::commands::scanner::derive_credential_key(&app_dir);
     let config = {
         let conn = db_state.db.get()?;
         SyncService::get_config(&conn, &machine_key)?
     };
     if !config.enabled {
-        return Err(AppError::Internal("同步未启用，请在设置中配置并启用".to_string()));
+        return Err(AppError::Internal(
+            "同步未启用，请在设置中配置并启用".to_string(),
+        ));
     }
 
     let temp_path = SyncService::sync_download_to_temp(&app_dir, &config)?;
@@ -115,7 +153,10 @@ pub fn sync_restore_now(app: tauri::AppHandle, db_state: State<'_, DbState>) -> 
             .map_err(|e| AppError::Internal(format!("备份当前数据库失败: {}", e)))?;
         if let Err(e) = conn.restore(rusqlite::DatabaseName::Main, &temp_path, Some(|_| {})) {
             let _ = conn.restore(rusqlite::DatabaseName::Main, &backup_path, Some(|_| {}));
-            return Err(AppError::Internal(format!("恢复数据库失败，已尝试回滚: {}", e)));
+            return Err(AppError::Internal(format!(
+                "恢复数据库失败，已尝试回滚: {}",
+                e
+            )));
         }
 
         use chrono::Utc;
@@ -138,7 +179,12 @@ pub fn sync_restore_now(app: tauri::AppHandle, db_state: State<'_, DbState>) -> 
 
 /// 检查云端是否有同步数据（首次开启同步时检测用）。
 #[tauri::command]
-pub fn sync_check_remote(url: String, username: Option<String>, password: Option<String>, path: String) -> Result<RemoteCheckResult, AppError> {
+pub fn sync_check_remote(
+    url: String,
+    username: Option<String>,
+    password: Option<String>,
+    path: String,
+) -> Result<RemoteCheckResult, AppError> {
     let config = SyncConfigDTO {
         enabled: true,
         webdav_url: Some(url),

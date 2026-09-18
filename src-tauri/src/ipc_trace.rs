@@ -47,12 +47,18 @@ impl Drop for IpcTraceGuard {
         if elapsed.as_millis() > 100 {
             tracing::warn!(
                 "[IPC] ← {} EXIT seq={} backend={} (in_flight_at_enter={}, now={})",
-                self.cmd, self.seq, elapsed_str, self.in_flight_at_enter, in_flight_now - 1
+                self.cmd,
+                self.seq,
+                elapsed_str,
+                self.in_flight_at_enter,
+                in_flight_now - 1
             );
         } else {
             tracing::info!(
                 "[IPC] ← {} EXIT seq={} backend={}",
-                self.cmd, self.seq, elapsed_str
+                self.cmd,
+                self.seq,
+                elapsed_str
             );
         }
     }
@@ -76,7 +82,9 @@ pub fn __ipc_trace_inner(cmd: &'static str) -> IpcTraceGuard {
     let in_flight_at_enter = IN_FLIGHT.fetch_add(1, Ordering::Relaxed);
     tracing::info!(
         "[IPC] → {} ENTER seq={} (rust_in_flight={})",
-        cmd, seq, in_flight_at_enter + 1
+        cmd,
+        seq,
+        in_flight_at_enter + 1
     );
     IpcTraceGuard {
         cmd,
