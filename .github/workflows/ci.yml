@@ -42,7 +42,7 @@ jobs:
         run: node scripts/check-network-registry.mjs
 
   frontend:
-    name: 前端（类型检查 + 构建）
+    name: 前端（类型检查 + 单元测试 + 构建）
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -57,6 +57,9 @@ jobs:
 
       - name: 类型检查（vue-tsc）
         run: npm run typecheck
+
+      - name: 单元测试（vitest + happy-dom）
+        run: npm run test:unit
 
       - name: 构建（vite build）
         run: npm run build

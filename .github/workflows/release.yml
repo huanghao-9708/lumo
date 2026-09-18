@@ -53,10 +53,11 @@ jobs:
       - name: 联网行为均已登记
         run: node scripts/check-network-registry.mjs
 
-      - name: 前端类型检查 + 构建
+      - name: 前端类型检查 + 单元测试 + 构建
         run: |
           npm ci
           npm run typecheck
+          npm run test:unit
           npm run build
 
       - name: Rust 格式检查
