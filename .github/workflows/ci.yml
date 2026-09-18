@@ -1,0 +1,104 @@
+name: CI
+
+# I1/QA-001：PR 与主干推送的最小质量门禁。
+# 设计原则：只拦"已经在 ITERATION_OVERVIEW §DoD 里写明、且今天就能机器判定"的项——
+# 格式、严格静态检查、单元测试、类型与构建、版本一致性、联网登记。
+# 真机矩阵、抓包验证、性能基准仍在人工清单（见 resources/doc/commercial-maturity/I0_执行记录.md §5），
+# 不用假绿的山寨测试冒充覆盖。
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - codex/commercial-maturity-roadmap
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  # Windows runner 默认 core.autocrlf=true 会把 .rs 检出成 CRLF，
+  # 导致 `cargo fmt --check` 因换行符失败（.gitattributes 已声明 eol=lf）。
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ============ 治理门禁：版本单一来源 + 联网行为登记 ============
+  governance:
+    name: 治理校验（版本 / 联网登记）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 版本三处一致（package.json / Cargo.toml / tauri.conf.json）
+        run: node scripts/check-versions.mjs
+
+      - name: 联网行为均已登记（NETWORK_BEHAVIOR.md 为唯一事实源）
+        run: node scripts/check-network-registry.mjs
+
+  frontend:
+    name: 前端（类型检查 + 构建）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 类型检查（vue-tsc）
+        run: npm run typecheck
+
+      - name: 构建（vite build）
+        run: npm run build
+
+  # ============ Rust：格式 + 严格 clippy + 测试，三平台最小编译 ============
+  rust:
+    name: Rust（fmt / clippy -D warnings / test）
+    runs-on: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ubuntu-22.04, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Rust（含 rustfmt / clippy）
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: 构建缓存
+        uses: swatinem/rust-cache@v2
+        with:
+          work-dir: ./src-tauri
+
+      # cargo test / clippy 需要 Tauri 的 Linux 系统依赖（webkit2gtk 等）
+      - name: 安装系统依赖（仅 Ubuntu）
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev
+
+      - name: 格式检查
+        if: matrix.platform == 'ubuntu-22.04'
+        working-directory: src-tauri
+        run: cargo fmt --all --check
+
+      - name: 严格静态检查（告警即失败）
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: 单元测试（含 DATA-001 迁移重放、DATA-002 快照甄别）
+        working-directory: src-tauri
+        run: cargo test

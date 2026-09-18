@@ -7,7 +7,72 @@ on:
   workflow_dispatch:
 
 jobs:
+  # I1/QA-001：发布前门禁——产物只能由"通过同等 CI 检查的 commit"产生。
+  # 不打这层的话，任何人推一个 tag 就能绕过 CI 直接对外发布安装包。
+  preflight:
+    name: 发布前门禁（版本一致 / tag 匹配 / 质量检查）
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: 安装 Rust stable（含 rustfmt / clippy）
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: 构建缓存
+        uses: swatinem/rust-cache@v2
+        with:
+          work-dir: ./src-tauri
+
+      - name: 安装系统依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev
+
+      # tag 必须指向 package.json 的版本，否则 Release 标题/文件名与实际代码版本会错位。
+      # workflow_dispatch 手动补发时无 tag，只校验三处版本一致。
+      - name: 版本号三处一致
+        run: node scripts/check-versions.mjs
+
+      - name: tag 与版本匹配
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          EXPECTED="v$(node -p "require('./package.json').version")"
+          if [ "$GITHUB_REF_NAME" != "$EXPECTED" ]; then
+            echo "tag \"$GITHUB_REF_NAME\" 与代码版本 \"$EXPECTED\" 不一致，拒绝发布。" >&2
+            exit 1
+          fi
+
+      - name: 联网行为均已登记
+        run: node scripts/check-network-registry.mjs
+
+      - name: 前端类型检查 + 构建
+        run: |
+          npm ci
+          npm run typecheck
+          npm run build
+
+      - name: Rust 格式检查
+        working-directory: src-tauri
+        run: cargo fmt --all --check
+
+      - name: 严格静态检查（告警即失败）
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: 单元测试
+        working-directory: src-tauri
+        run: cargo test
+
   publish-tauri:
+    needs: preflight
     permissions:
       contents: write
     strategy:
