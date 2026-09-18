@@ -16,6 +16,9 @@ const MAX_SNAPSHOT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const REMOTE_SNAPSHOT_NAME: &str = "lumo.sqlite";
 const REMOTE_CHECKSUM_NAME: &str = "lumo.sqlite.sha256";
 
+/// 恢复前副本（救援副本）的文件名后缀，见 [`SyncService::rescue_backup_path`]。
+const RESCUE_BACKUP_SUFFIX: &str = "restore_bak";
+
 /// SQLite 文件头魔数（前 16 字节）。合法数据库必然以它开头。
 const SQLITE_HEADER_MAGIC: &[u8; 16] = b"SQLite format 3\0";
 
@@ -243,6 +246,44 @@ impl SyncService {
                 let _ = std::fs::remove_file(entry.path());
             }
         }
+    }
+
+    /// 本轮「恢复前副本」的唯一路径（`lumo.sqlite.<pid>-<纳秒>.restore_bak`）。
+    ///
+    /// 必须每轮唯一：固定名会让第二次恢复在开工第一步就删掉第一次失败时留下的副本，
+    /// 而那份副本在回滚也失败的场景里是用户唯一的历史数据（CR-001）。
+    pub fn rescue_backup_path(app_dir: &Path) -> PathBuf {
+        app_dir.join(format!(
+            "{}.{}.{}",
+            REMOTE_SNAPSHOT_NAME,
+            staging_suffix(),
+            RESCUE_BACKUP_SUFFIX
+        ))
+    }
+
+    /// `app_dir` 下尚未处理的救援副本，按文件名排序（越早的一轮越靠前）。
+    ///
+    /// 这些文件只能由成功流程或用户明确操作删除，因此这里只负责**发现并告知**，
+    /// 不做任何自动清理。老版本（固定名 `lumo.sqlite.restore_bak`）留下的遗留副本
+    /// 同样落在这个模式里，升级后也会被一并告知而不是被忽略。
+    pub fn list_rescue_backups(app_dir: &Path) -> Vec<PathBuf> {
+        let prefix = format!("{}.", REMOTE_SNAPSHOT_NAME);
+        let suffix = format!(".{}", RESCUE_BACKUP_SUFFIX);
+        let Ok(entries) = std::fs::read_dir(app_dir) else {
+            return Vec::new();
+        };
+        let mut found: Vec<PathBuf> = entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .map(|name| name.starts_with(&prefix) && name.ends_with(&suffix))
+                    .unwrap_or(false)
+            })
+            .collect();
+        found.sort();
+        found
     }
 
     /// 读取同步配置（密码解密后返回）。需要机器密钥（P1-08 v3 格式 + 旧格式懒迁移）。
