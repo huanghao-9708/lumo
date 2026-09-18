@@ -46,9 +46,6 @@ fn normalize_artist_name(s: &str) -> String {
     out
 }
 
-/// 转义 SQLite LIKE 模式串中的特殊字符（`%` / `_` / `\`），避免路径里这些字符被当通配符。
-/// 返回 (escaped_pattern, esc)，调用方需配合 `LIKE ? ESCAPE '\'` 使用。
-
 /// 提供本地曲库核心交互的服务类，处理所有文件入库解析以及前端歌曲数据的拉取
 pub struct LibraryService;
 
@@ -57,7 +54,7 @@ impl LibraryService {
     /// - conn: SQLite 连接（位于事务中）
     /// - source_id: 此文件归属的扫描来源（如特定的本地文件夹）
     /// - source_root: 该来源的根目录，用于计算文件的相对路径（持久化在 `relative_path` 字段，
-    ///                使得将来迁移根目录或支持 WebDAV 时只需调整 `root_uri` 即可）
+    ///   使得将来迁移根目录或支持 WebDAV 时只需调整 `root_uri` 即可）
     /// - path: 文件的绝对路径
     /// - metadata: 提取好的音频基础元数据（如艺术家、专辑名、比特率等）
     /// - app_data_dir: 用于缓存提取到的专辑封面图片的本地路径
@@ -371,12 +368,7 @@ impl LibraryService {
             .replace(" Feat. ", "/")
             .replace(" Ft. ", "/")
             .replace(" & ", "/")
-            .replace('&', "/")
-            .replace(';', "/")
-            .replace('；', "/")
-            .replace('、', "/")
-            .replace('，', "/")
-            .replace(',', "/");
+            .replace(['&', ';', '；', '、', '，', ','], "/");
 
         let mut ids = Vec::new();
         for part in cleaned.split('/').map(str::trim).filter(|s| !s.is_empty()) {

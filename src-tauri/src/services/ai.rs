@@ -36,6 +36,9 @@ pub struct Candidate {
     pub play_count: i64,
 }
 
+/// LLM 校验通过的生成结果：(歌单名, 推荐理由, [(track_id, 标题)])
+pub type PickedPlaylist = (String, String, Vec<(i64, String)>);
+
 /// 内部设置（含解出的明文 key；key 只在内存，绝不落库/落日志）
 #[derive(Debug, Clone)]
 pub struct AiSettings {
@@ -440,10 +443,7 @@ impl AiService {
     // ================= ④ 解析与校验 =================
 
     /// 解析 LLM 输出并硬校验：返回的 id 必须在候选集中。失败返回 None（调用方重试/兜底）。
-    pub fn parse_and_validate(
-        raw: &str,
-        candidates: &[Candidate],
-    ) -> Option<(String, String, Vec<(i64, String)>)> {
+    pub fn parse_and_validate(raw: &str, candidates: &[Candidate]) -> Option<PickedPlaylist> {
         let json_text = extract_json(raw)?;
         let value: serde_json::Value = serde_json::from_str(&json_text).ok()?;
 
@@ -661,7 +661,7 @@ fn extract_keywords(phrase: &str) -> Vec<String> {
         flush_cjk_run(&cjk_run, &mut terms, &mut push_unique);
     }
 
-    for word in phrase.split(|c: char| !(c.is_alphanumeric() && !is_cjk(c))) {
+    for word in phrase.split(|c: char| !c.is_alphanumeric() || is_cjk(c)) {
         let w = word.trim();
         if w.chars().count() >= 2 && !w.chars().all(is_cjk) {
             push_unique(w, &mut terms);

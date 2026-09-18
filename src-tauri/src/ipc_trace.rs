@@ -13,6 +13,7 @@
 //! 日志与前端 `tauriInvoke.ts` 的 `[IPC]` 日志对应：
 //! - 前端 `⏩ cmd` → 后端 `→ cmd ENTER`
 //! - 前端 `✅ cmd Xms` → 后端 `← cmd EXIT (backend=Xms)`
+//!
 //! 三者时间戳对齐，可拼出完整链路：前端发起 → 后端收到 → 后端返回 → 前端收到。
 
 use std::sync::atomic::{AtomicU64, Ordering};

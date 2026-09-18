@@ -30,7 +30,8 @@ pub struct ScanProgressPayload {
 
 /// worker 从提取通道拿到的结果：成功为预处理完成的文件，失败为待标记的损坏文件
 enum ExtractOutcome {
-    Ok(PreparedFile),
+    // Boxed：PreparedFile 体积远大于错误分支，不装箱会让整个枚举按最大变体布局
+    Ok(Box<PreparedFile>),
     Err { path: PathBuf, error: String },
 }
 
@@ -145,7 +146,10 @@ fn extract_worker(
                     true,
                     &seen_hashes,
                 );
-                if results_tx.send(ExtractOutcome::Ok(prepared)).is_err() {
+                if results_tx
+                    .send(ExtractOutcome::Ok(Box::new(prepared)))
+                    .is_err()
+                {
                     break;
                 }
             }
@@ -202,7 +206,7 @@ fn db_writer_loop(
                         },
                     );
                 }
-                batch.push(prepared);
+                batch.push(*prepared);
                 if batch.len() >= 50 {
                     flush_batch(
                         &mut conn,
@@ -370,7 +374,7 @@ pub fn scan_local_directory(app: AppHandle, source_id: i64, path: &Path, app_dat
         }
 
         // 1. 获取文件系统元数据 (mtime, size)
-        let fs_metadata = std::fs::metadata(&entry_path).ok();
+        let fs_metadata = std::fs::metadata(entry_path).ok();
         let fs_size = fs_metadata.as_ref().map(|m| m.len() as i64).unwrap_or(0);
         let fs_mtime = fs_metadata
             .as_ref()
@@ -382,7 +386,7 @@ pub fn scan_local_directory(app: AppHandle, source_id: i64, path: &Path, app_dat
         // 构建 normalized_path
         let relative_path = entry_path
             .strip_prefix(path)
-            .unwrap_or(&entry_path)
+            .unwrap_or(entry_path)
             .to_string_lossy()
             .to_string();
         let normalized_path = relative_path.to_lowercase();
@@ -397,7 +401,7 @@ pub fn scan_local_directory(app: AppHandle, source_id: i64, path: &Path, app_dat
                 skipped_shared.store(skipped_count, Ordering::Relaxed);
 
                 // 每 50 个 skipped 也发一次进度，避免长久卡顿感
-                if skipped_count % 50 == 0 {
+                if skipped_count.is_multiple_of(50) {
                     let _ = app.emit(
                         "scan-progress",
                         ScanProgressPayload {
@@ -603,7 +607,7 @@ pub fn scan_webdav_directory(
             if let Some(&(db_mtime, db_size, ref availability)) = file_cache.get(&normalized_path) {
                 if db_mtime == fs_mtime && db_size == fs_size && availability == "available" {
                     skipped_count += 1;
-                    if skipped_count % 50 == 0 {
+                    if skipped_count.is_multiple_of(50) {
                         let _ = app.emit(
                             "scan-progress",
                             ScanProgressPayload {
@@ -620,7 +624,7 @@ pub fn scan_webdav_directory(
 
             scanned_count += 1;
             // 每 20 个新扫描文件发一次进度（远程扫描更慢，阈值放宽减少 IPC 噪音）
-            if scanned_count % 20 == 0 || scanned_count == 1 {
+            if scanned_count.is_multiple_of(20) || scanned_count == 1 {
                 let _ = app.emit(
                     "scan-progress",
                     ScanProgressPayload {

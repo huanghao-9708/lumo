@@ -359,11 +359,7 @@ pub fn queue_watcher_loop(app: AppHandle) {
         }
 
         let current_item_duration = q.items[q.index].duration_ms.unwrap_or(0);
-        let remaining = if current_item_duration > position_ms {
-            current_item_duration - position_ms
-        } else {
-            0
-        };
+        let remaining = current_item_duration.saturating_sub(position_ms);
 
         // 1. Gapless 预加载逻辑：曲尾前 3 秒送入底层队列
         if queue_len == 1 && remaining < 3000 && remaining > 0 && next_enqueued_index.is_none() {

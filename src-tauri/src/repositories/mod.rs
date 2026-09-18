@@ -4,6 +4,9 @@ pub mod playlist_repo;
 pub mod track_repo;
 
 use crate::models::TrackDTO;
+
+/// 转义 SQLite LIKE 模式串中的特殊字符（`%` / `_` / `\`），避免路径里这些字符被当通配符。
+/// 转义符是反斜杠，调用方需配合 `LIKE ? ESCAPE '\'` 使用（见 playlist_repo 的用法）。
 pub fn escape_like(input: &str) -> String {
     let mut out = String::with_capacity(input.len() + 4);
     for ch in input.chars() {

@@ -18,9 +18,11 @@ use tracing::info;
 /// 业界对 rodio + Tauri 的通用解法是 `Box::leak(Box::new(stream))`：把 stream
 /// 钉死在堆上活到进程结束，让 `PlaybackManager` 自身满足 `Send + Sync`。
 /// 这块内存确实不会显式释放，但：
+///
 ///   1. 每个进程只此一份，量级固定（一个输出设备句柄），不是持续增长的泄漏；
 ///   2. 进程退出时操作系统会自动回收所有资源；
 ///   3. cpal/cpal 内部对 stream 也并未提供安全的显式释放 API。
+///
 /// 因此这里保留 `Box::leak` 模式，并显式记录此设计权衡。
 pub struct PlaybackManager {
     sink: Sink,

@@ -43,7 +43,7 @@ pub(crate) fn derive_credential_key(app_dir: &std::path::Path) -> [u8; 32] {
         use rand::Rng;
         let mut buf = [0u8; 32];
         rand::rng().fill_bytes(&mut buf);
-        let _ = std::fs::write(&secret_file, &buf);
+        let _ = std::fs::write(&secret_file, buf);
         buf.to_vec()
     };
     if !device_entropy.is_empty() {
@@ -101,6 +101,7 @@ pub(crate) fn decrypt_password(key: &[u8; 32], encoded: &str) -> Option<String> 
 /// - `user##v2:seal:…`：机器绑定 XOR 加密（V6）。桌面端解析成功后懒迁移进钥匙串。
 /// - `user:password`：V5 明文（仅读兼容），桌面端同样懒迁移。
 /// - `user`：仅用户名，无密码。
+///
 /// 钥匙串缺失 / 解密失败返回 NEEDS_REAUTH 语义错误（提示重新添加来源）。
 pub(crate) fn resolve_source_credential(
     conn: &rusqlite::Connection,

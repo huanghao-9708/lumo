@@ -52,6 +52,12 @@ pub struct PlaybackQueue {
     pub shuffle_order: Option<Vec<usize>>,
 }
 
+impl Default for PlaybackQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PlaybackQueue {
     pub fn new() -> Self {
         Self {
@@ -148,12 +154,10 @@ impl PlaybackQueue {
                     } else {
                         Some(order[order.len() - 1])
                     }
+                } else if self.index > 0 {
+                    Some(self.index - 1)
                 } else {
-                    if self.index > 0 {
-                        Some(self.index - 1)
-                    } else {
-                        Some(self.items.len() - 1)
-                    }
+                    Some(self.items.len() - 1)
                 }
             }
         }

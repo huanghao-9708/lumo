@@ -14,7 +14,6 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::{Condvar, Mutex as StdMutex};
 use tauri::Manager;
-use tracing_subscriber;
 
 /// 简易计数信号量:限制 `lumo://artwork` 协议的并发处理数。
 ///
@@ -169,7 +168,7 @@ fn backfill_artwork_thumbnails(app: tauri::AppHandle, pool: &DbPool) {
         #[cfg(not(target_os = "android"))]
         std::thread::sleep(std::time::Duration::from_millis(50));
 
-        if (done + failed) % 100 == 0 {
+        if (done + failed).is_multiple_of(100) {
             tracing::info!(
                 "[回填] 进度：{}/{}（成功 {}，失败 {}）",
                 done + failed,
@@ -325,7 +324,7 @@ pub fn run() {
             let artwork_id = uri_without_query
                 .trim_end_matches('/')
                 .split('/')
-                .last()
+                .next_back()
                 .unwrap_or("")
                 .parse::<i64>()
                 .unwrap_or(0);

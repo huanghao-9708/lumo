@@ -23,7 +23,7 @@ impl DefaultSecretStore {
             } else {
                 let mut buf = [0u8; 32];
                 rand::rng().fill_bytes(&mut buf);
-                let _ = std::fs::write(&secret_file, &buf);
+                let _ = std::fs::write(&secret_file, buf);
                 buf.to_vec()
             };
             if !device_entropy.is_empty() {
@@ -96,29 +96,6 @@ impl SecretStore for DefaultSecretStore {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_secret_store_roundtrip() {
-        let store = DefaultSecretStore::new_cross_device();
-        let plain = "my_strong_password_123!@#";
-        let sealed = store.seal(plain).expect("seal failed");
-
-        assert!(sealed.starts_with("v2:seal:"));
-        let opened = store.open(&sealed).expect("open failed");
-        assert_eq!(opened, plain);
-    }
-
-    #[test]
-    fn test_secret_store_invalid_ciphertext() {
-        let store = DefaultSecretStore::new_cross_device();
-        let res = store.open("invalid_random_string_###");
-        assert!(res.is_err());
-    }
-}
-
 // ================= 系统钥匙串（P1-08，桌面端专属） =================
 // Windows → Credential Manager；macOS → Keychain。
 // Android 无系统级 keyring，凭据仍走机器绑定的加密文件方案（见 commands/scanner.rs），
@@ -152,5 +129,28 @@ pub fn keyring_get(entry_id: &str) -> Result<String, String> {
 pub fn keyring_delete(entry_id: &str) {
     if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, entry_id) {
         let _ = entry.delete_credential();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_secret_store_roundtrip() {
+        let store = DefaultSecretStore::new_cross_device();
+        let plain = "my_strong_password_123!@#";
+        let sealed = store.seal(plain).expect("seal failed");
+
+        assert!(sealed.starts_with("v2:seal:"));
+        let opened = store.open(&sealed).expect("open failed");
+        assert_eq!(opened, plain);
+    }
+
+    #[test]
+    fn test_secret_store_invalid_ciphertext() {
+        let store = DefaultSecretStore::new_cross_device();
+        let res = store.open("invalid_random_string_###");
+        assert!(res.is_err());
     }
 }

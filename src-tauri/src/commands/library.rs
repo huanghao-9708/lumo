@@ -416,19 +416,13 @@ pub async fn library_get_lyrics(
     let client = reqwest::Client::builder()
         .user_agent("LumoMusicPlayer/1.0.0")
         .build()
-        .map_err(|e| {
-            AppError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                e.to_string(),
-            ))
-        })?;
+        .map_err(|e| AppError::Io(std::io::Error::other(e.to_string())))?;
 
-    let resp = client.get(url).send().await.map_err(|e| {
-        AppError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            e.to_string(),
-        ))
-    })?;
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| AppError::Io(std::io::Error::other(e.to_string())))?;
 
     if !resp.status().is_success() {
         return Ok(None);
@@ -442,12 +436,10 @@ pub async fn library_get_lyrics(
         plain_lyrics: Option<String>,
     }
 
-    let result = resp.json::<LrclibResponse>().await.map_err(|e| {
-        AppError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            e.to_string(),
-        ))
-    })?;
+    let result = resp
+        .json::<LrclibResponse>()
+        .await
+        .map_err(|e| AppError::Io(std::io::Error::other(e.to_string())))?;
 
     let fetched_lyrics = result.synced_lyrics.or(result.plain_lyrics);
 
