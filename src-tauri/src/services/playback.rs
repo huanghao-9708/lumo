@@ -1,7 +1,7 @@
 use rodio::{Decoder, OutputStream, Sink, Source};
 use std::fs::File;
 use std::io::BufReader;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use tracing::info;
 
@@ -26,6 +26,11 @@ use tracing::info;
 /// 因此这里保留 `Box::leak` 模式，并显式记录此设计权衡。
 pub struct PlaybackManager {
     sink: Sink,
+    /// 队列播放生命周期是否仍处于活动状态。
+    ///
+    /// `Sink::empty()` 只能说明当前没有音频，无法区分「自然播完」「用户主动停止」和
+    /// 「应用刚启动尚未播放」。队列观察器需要这个状态，才能只消费一次自然结束事件。
+    active: AtomicBool,
     /// 当前音频能量（f32 的位模式），由 `LevelSource` 在音频线程逐窗写入。
     /// 用原子量而非 Mutex：音频回调路径上绝不能阻塞。
     level: Arc<AtomicU32>,
@@ -44,6 +49,7 @@ impl PlaybackManager {
         info!("Initialized default audio output stream");
         Ok(Self {
             sink,
+            active: AtomicBool::new(false),
             level: Arc::new(AtomicU32::new(0)),
         })
     }
@@ -71,6 +77,7 @@ impl PlaybackManager {
             self.level.clone(),
         ));
         self.sink.play();
+        self.active.store(true, Ordering::Relaxed);
         Ok(duration)
     }
 
@@ -127,6 +134,11 @@ impl PlaybackManager {
     }
 
     pub fn stop(&self) {
+        // stop 是幂等操作：队尾处理完毕或平台重复下发停止命令时，不再重复操作和刷日志。
+        let was_active = self.active.swap(false, Ordering::Relaxed);
+        if !was_active && self.sink.empty() {
+            return;
+        }
         info!("Playback stopped");
         self.sink.stop();
         self.level.store(0f32.to_bits(), Ordering::Relaxed);
@@ -149,6 +161,11 @@ impl PlaybackManager {
     /// 当前是否已播放完毕（解码队列为空）。前端在时长未知时也能据此自动切下一首。
     pub fn is_finished(&self) -> bool {
         self.sink.empty()
+    }
+
+    /// 是否存在一段尚未被消费掉结束事件的队列播放生命周期。
+    pub fn is_active(&self) -> bool {
+        self.active.load(Ordering::Relaxed)
     }
 
     /// 当前音频能量（RMS，0.0–1.0）。未播放或静音段为 0。

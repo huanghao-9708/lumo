@@ -22,6 +22,17 @@ struct ProgressEvent {
     position: u64,
 }
 
+/// `Sink::empty()` 在自然播完、主动停止和从未播放时都为 true。
+/// 只有活动播放生命周期里的空队列才是观察器需要消费的「自然播完」。
+fn playback_just_finished(
+    is_active: bool,
+    is_empty: bool,
+    queue_len: usize,
+    has_preloaded_next: bool,
+) -> bool {
+    is_active && (is_empty || (queue_len == 1 && has_preloaded_next))
+}
+
 /// 解析队列条目实际应使用的 media_file_id：跟随 tracks.primary_file_id 的当前值。
 /// 用户切换版本 / 扫描重指主文件后，自动切歌与 gapless 预加载无需重建队列即自动跟随；
 /// 主文件为空或查询失败时回退到入队时的快照。
@@ -381,10 +392,11 @@ pub fn queue_watcher_loop(app: AppHandle) {
             None => continue,
         };
 
-        let (position_ms, is_empty, queue_len) = {
+        let (position_ms, is_active, is_empty, queue_len) = {
             if let Ok(manager) = playback_state.manager.lock() {
                 (
                     manager.get_pos(),
+                    manager.is_active(),
                     manager.is_finished(),
                     manager.get_queue_len(),
                 )
@@ -438,7 +450,12 @@ pub fn queue_watcher_loop(app: AppHandle) {
         }
 
         // 2. 切歌事件判定（底层队列从 2->1 变为下一首开始播放，或当前曲目播完）
-        let just_finished = is_empty || (queue_len == 1 && next_enqueued_index.is_some());
+        let just_finished = playback_just_finished(
+            is_active,
+            is_empty,
+            queue_len,
+            next_enqueued_index.is_some(),
+        );
         if !just_finished {
             // 已经正常播起来了：解除退避，避免上一次故障拖慢之后的正常切歌
             q.retry.clear();
@@ -495,5 +512,30 @@ pub fn queue_watcher_loop(app: AppHandle) {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::playback_just_finished;
+
+    #[test]
+    fn idle_empty_sink_is_not_treated_as_finished() {
+        assert!(!playback_just_finished(false, true, 0, false));
+    }
+
+    #[test]
+    fn active_empty_sink_is_treated_as_finished() {
+        assert!(playback_just_finished(true, true, 0, false));
+    }
+
+    #[test]
+    fn gapless_transition_is_treated_as_finished() {
+        assert!(playback_just_finished(true, false, 1, true));
+    }
+
+    #[test]
+    fn active_track_is_not_treated_as_finished_without_transition() {
+        assert!(!playback_just_finished(true, false, 1, false));
     }
 }
