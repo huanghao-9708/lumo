@@ -380,7 +380,7 @@ impl TrackRepo {
                 let rel_path = if relative_prefix.is_empty() {
                     name.clone()
                 } else {
-                    format!("{}{}", relative_prefix, &name)
+                    format!("{}{}", relative_prefix, name)
                 };
 
                 children.push(crate::models::DirectoryNodeDTO {

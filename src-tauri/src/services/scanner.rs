@@ -453,7 +453,7 @@ pub fn scan_local_directory(app: AppHandle, source_id: i64, path: &Path, app_dat
             // Find files in db that are not in scanned_paths
             let mut to_delete = Vec::new();
             if !scan_failed {
-                for (db_path, _) in file_cache.iter() {
+                for db_path in file_cache.keys() {
                     if !scanned_paths.contains(db_path) {
                         to_delete.push(db_path.clone());
                     }
