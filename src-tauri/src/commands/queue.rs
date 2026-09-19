@@ -3,16 +3,11 @@ use crate::commands::playback::{
 };
 use crate::db::DbState;
 use crate::error::AppError;
-use crate::services::backoff::FailureBackoff;
 use crate::services::cache::AudioCacheState;
 use crate::services::queue::{PlayMode, PlaybackQueueStateDto, QueueItem, QueueState};
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
-
-/// 自动切歌失败的退避参数：第 1 次失败等 1 秒，翻倍递增，封顶 15 秒。
-const ADVANCE_RETRY_BASE: Duration = Duration::from_secs(1);
-const ADVANCE_RETRY_MAX: Duration = Duration::from_secs(15);
 
 #[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -46,16 +41,18 @@ pub fn internal_play_item(
     index: usize,
     force_local: bool,
 ) -> Result<(), AppError> {
-    let mut q = queue_state
-        .queue
-        .lock()
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-    if index >= q.items.len() {
-        return Ok(());
-    }
-    q.index = index;
-    let item = q.items[index].clone();
-    drop(q);
+    // 只读取要播的这一首，**不**先把队列位置挪过去：播放器没接下之前挪位，
+    // 等于把失败的那一首标记成「已播过」，自动切歌就会跳过它（CR-002）。
+    let item = {
+        let q = queue_state
+            .queue
+            .lock()
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        if index >= q.items.len() {
+            return Ok(());
+        }
+        q.items[index].clone()
+    };
 
     let db_state = app.state::<DbState>();
     let cache_state = app.state::<AudioCacheState>();
@@ -109,6 +106,11 @@ pub fn internal_play_item(
         return Err(AppError::Internal("No playable source found".to_string()));
     };
 
+    // 播放器已接下这一首，此时才把队列位置写定（CR-002）。
+    if let Ok(mut q) = queue_state.queue.lock() {
+        q.commit_index(index);
+    }
+
     let _ = app.emit(
         "playback-track-changed",
         TrackChangedEvent {
@@ -140,6 +142,69 @@ pub fn internal_play_item(
     );
 
     Ok(())
+}
+
+/// 播放队列里的某一首，并顺带维护自动切歌的重试状态（CR-002）。
+///
+/// 三个调用方（设置队列、用户切歌、观察者自动推进）要做的善后完全一样，集中在这一处才不会漏：
+/// 成功就把退避整份作废；失败则把这一首登记成「下次仍要重试的目标」——否则观察者会从
+/// 它的下一首开始数，重试就变成了跳过。错误事件按「曲目 + 错误类别」去重：同一首反复失败
+/// 只报一次，换一首或换了故障类型必须再报，前端不会因为一次网络抖动刷出一串 toast，
+/// 也不会因为前一首的报错把后一首的报错吞掉。
+fn play_item(
+    app: &AppHandle,
+    queue_state: &State<'_, QueueState>,
+    playback_state: &State<'_, PlaybackState>,
+    index: usize,
+    force_local: bool,
+) -> Result<(), AppError> {
+    match internal_play_item(app, queue_state, playback_state, index, force_local) {
+        Ok(()) => {
+            if let Ok(mut q) = queue_state.queue.lock() {
+                q.retry.clear();
+            }
+            Ok(())
+        }
+        Err(e) => {
+            let (failures, notify) = match queue_state.queue.lock() {
+                Ok(mut q) => {
+                    let key = q
+                        .items
+                        .get(index)
+                        .map(|item| {
+                            format!(
+                                "{}:{}:{}",
+                                item.track_id,
+                                item.media_file_id,
+                                e.retry_class()
+                            )
+                        })
+                        .unwrap_or_else(|| format!("index-{}:{}", index, e.retry_class()));
+                    let notify = q.retry.record_failure(index, &key, Instant::now());
+                    (q.retry.failures(), notify)
+                }
+                // 连队列锁都拿不到时宁可多报一次：把故障吞掉比刷屏更糟
+                Err(_) => (0, true),
+            };
+            tracing::error!(
+                "[队列] 播放失败（index={}，连续第 {} 次）: {}",
+                index,
+                failures,
+                e
+            );
+            if notify {
+                let _ = app.emit(
+                    "playback-error",
+                    serde_json::json!({
+                        "index": index,
+                        "message": e.to_string(),
+                    }),
+                );
+            }
+            let _ = crate::services::platform::update_foreground("", "", "", false, 0, 0);
+            Err(e)
+        }
+    }
 }
 
 pub fn internal_enqueue_next(
@@ -231,18 +296,8 @@ pub fn playback_set_queue(
     }
 
     if should_play {
-        if let Err(e) = internal_play_item(&app, &queue_state, &playback_state, index, false) {
-            tracing::error!("[队列] 初始播放失败（index={}）: {}", index, e);
-            let _ = app.emit(
-                "playback-error",
-                serde_json::json!({
-                    "index": index,
-                    "message": e.to_string(),
-                }),
-            );
-            let _ = crate::services::platform::update_foreground("", "", "", false, 0, 0);
-            return Err(e);
-        }
+        // 失败善后（登记重试目标、去重上报、前台通知）都在 play_item 里，这里只把错误回传给前端
+        play_item(&app, &queue_state, &playback_state, index, false)?;
     }
     Ok(())
 }
@@ -285,18 +340,7 @@ pub fn playback_advance(
     };
 
     if let Some(idx) = target_index {
-        if let Err(e) = internal_play_item(&app, &queue_state, &playback_state, idx, false) {
-            tracing::error!("[队列] 切歌失败（idx={}）: {}", idx, e);
-            let _ = app.emit(
-                "playback-error",
-                serde_json::json!({
-                    "index": idx,
-                    "message": e.to_string(),
-                }),
-            );
-            let _ = crate::services::platform::update_foreground("", "", "", false, 0, 0);
-            return Err(e);
-        }
+        play_item(&app, &queue_state, &playback_state, idx, false)?;
     }
     Ok(())
 }
@@ -318,11 +362,8 @@ pub fn queue_watcher_loop(app: AppHandle) {
     let mut next_enqueued_index: Option<usize> = None;
     let mut last_progress_ms = 0u64;
     let mut last_save_time = std::time::Instant::now();
-    // 自动切歌连续失败的退避状态。观察者循环本身 250ms 一跳，而切歌失败的常见原因是
-    // 网络侧（WebDAV 分段读取），不节流就等于以 4Hz 重放同一首、每次都重发错误事件、
-    // 每次都可能再挂一个后台缓存下载线程。
-    let mut advance_backoff = FailureBackoff::new(ADVANCE_RETRY_BASE, ADVANCE_RETRY_MAX);
-    let mut next_attempt_at: Option<std::time::Instant> = None;
+    // 自动切歌失败的退避状态挂在 `PlaybackQueue::retry` 上而不是这里的局部变量：
+    // 用户手动切歌、换队列、停止播放都在命令侧发生，它们必须能就地作废旧的退避。
     let app_dir = app
         .path()
         .app_data_dir()
@@ -400,14 +441,14 @@ pub fn queue_watcher_loop(app: AppHandle) {
         let just_finished = is_empty || (queue_len == 1 && next_enqueued_index.is_some());
         if !just_finished {
             // 已经正常播起来了：解除退避，避免上一次故障拖慢之后的正常切歌
-            advance_backoff.reset();
-            next_attempt_at = None;
+            q.retry.clear();
         }
 
         if just_finished {
             if let Some(next_idx) = next_enqueued_index.take() {
                 // Gapless 无缝切歌成功触发
                 q.index = next_idx;
+                q.retry.clear();
                 let track = q.items[next_idx].clone();
                 drop(q);
                 let _ = app.emit(
@@ -429,42 +470,18 @@ pub fn queue_watcher_loop(app: AppHandle) {
                 continue;
             } else {
                 // 非 gapless 切换或者最后一曲
-                if let Some(next_idx) = q.next_index() {
-                    if let Some(at) = next_attempt_at {
-                        if std::time::Instant::now() < at {
-                            // 退避窗口内：不打网络、不发错误事件，等下一跳再看
-                            continue;
-                        }
-                        next_attempt_at = None;
+                // 先判退避窗口、再取目标：窗口内的空转不能被算成又一次失败（CR-002）
+                if q.retry.waiting(Instant::now()) {
+                    // 退避窗口内：不打网络、不发错误事件，等下一跳再看
+                    continue;
+                }
+                if let Some(target) = q.retry_or_next_index() {
+                    if q.retry.pending().is_some() {
+                        tracing::info!("[队列推进] 退避结束，重试 index={}", target);
                     }
                     drop(q);
-                    match internal_play_item(&app, &queue_state, &playback_state, next_idx, false) {
-                        Ok(()) => advance_backoff.reset(),
-                        Err(e) => {
-                            let delay = advance_backoff.record_failure();
-                            next_attempt_at = Some(std::time::Instant::now() + delay);
-                            tracing::error!(
-                                "[队列推进] 自动切歌下一首失败（next_idx={}，连续第 {} 次），{}ms 后重试: {}",
-                                next_idx,
-                                advance_backoff.failures(),
-                                delay.as_millis(),
-                                e
-                            );
-                            // 只在连续失败的第一次通知前端：否则一次网络抖动会刷出一串 toast
-                            if advance_backoff.failures() == 1 {
-                                let _ = app.emit(
-                                    "playback-error",
-                                    serde_json::json!({
-                                        "index": next_idx,
-                                        "message": e.to_string(),
-                                    }),
-                                );
-                            }
-                            let _ = crate::services::platform::update_foreground(
-                                "", "", "", false, 0, 0,
-                            );
-                        }
-                    }
+                    // 失败登记（锁定这一首、排退避、按「曲目 + 错误类别」去重上报）都在 play_item 里
+                    let _ = play_item(&app, &queue_state, &playback_state, target, false);
                 } else {
                     // Normal 模式播到队尾，停止
                     if let Ok(manager) = playback_state.manager.lock() {

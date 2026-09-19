@@ -466,13 +466,21 @@ pub fn playback_resume(
 }
 
 #[tauri::command]
-pub fn playback_stop(playback_state: State<'_, PlaybackState>) -> Result<(), AppError> {
+pub fn playback_stop(
+    playback_state: State<'_, PlaybackState>,
+    queue_state: State<'_, crate::services::queue::QueueState>,
+) -> Result<(), AppError> {
     let _trace = ipc_trace!("playback_stop");
     let manager = playback_state
         .manager
         .lock()
         .map_err(|e| AppError::Internal(e.to_string()))?;
     manager.stop();
+    // 用户主动停止：旧的自动重试目标与退避一并作废（CR-002）。播放结束后观察者会把
+    // 「停掉」当成播完，若还挂着待重试的那一首，它会自作主张地补播一遍。
+    if let Ok(mut q) = queue_state.queue.lock() {
+        q.retry.clear();
+    }
     let _ = crate::services::platform::stop_foreground();
     Ok(())
 }

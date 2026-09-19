@@ -4,7 +4,7 @@
 //! 立即重试等于对着正在故障的服务端持续施压，而且会把错误事件按调用循环的频率灌给前端。
 //! 这里只放纯计算部分——不 sleep、不发消息——好让退避序列能被单测钉住。
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// 指数退避：第 N 次失败等待 `base × 2^(N-1)`，封顶 `max`。`failures == 0` 表示无需等待。
 pub fn exp_backoff(failures: u32, base: Duration, max: Duration) -> Duration {
@@ -53,6 +53,69 @@ impl FailureBackoff {
 
     pub fn failures(&self) -> u32 {
         self.failures
+    }
+}
+
+/// 自动切歌失败后的重试计划（CR-002）。
+///
+/// 观察者循环每 250ms 看一次「播完了没有」，没播起来就要决定下一跳做什么。三件事必须同时成立，
+/// 「重试」才不会变成「跳过」：
+/// - 重试目标锁定在**刚刚失败的那一首**，而不是从当前位置再往下数一首；
+/// - 失败按指数退避排队，一旦播起来或用户改主意就整份作废；
+/// - 错误事件按「曲目 + 错误类别」去重：同一首反复失败只报一次，换一首或换了故障类型必须再报。
+///
+/// 时间一律由调用方注入，本类型不 sleep、不发事件，因此退避窗口和去重都能被单测钉住。
+#[derive(Debug, Clone)]
+pub struct AdvanceRetry {
+    backoff: FailureBackoff,
+    /// 上次失败、退避结束后要原样重试的队列索引。
+    pending: Option<usize>,
+    next_attempt_at: Option<Instant>,
+    last_error_key: Option<String>,
+}
+
+impl AdvanceRetry {
+    pub fn new(base: Duration, max: Duration) -> Self {
+        Self {
+            backoff: FailureBackoff::new(base, max),
+            pending: None,
+            next_attempt_at: None,
+            last_error_key: None,
+        }
+    }
+
+    pub fn pending(&self) -> Option<usize> {
+        self.pending
+    }
+
+    pub fn failures(&self) -> u32 {
+        self.backoff.failures()
+    }
+
+    /// 退避窗口还没走完：这一跳应当什么都不做（不打网络、不发事件）。
+    pub fn waiting(&self, now: Instant) -> bool {
+        self.next_attempt_at.is_some_and(|at| now < at)
+    }
+
+    /// 记一次失败：把 `index` 锁成下次要重试的那一首，并排好下一次尝试的时间。
+    /// 返回 `true` 表示这条「曲目 + 错误类别」是第一次出现，应当通知前端。
+    pub fn record_failure(&mut self, index: usize, error_key: &str, now: Instant) -> bool {
+        self.pending = Some(index);
+        let delay = self.backoff.record_failure();
+        self.next_attempt_at = Some(now + delay);
+        let fresh = self.last_error_key.as_deref() != Some(error_key);
+        if fresh {
+            self.last_error_key = Some(error_key.to_string());
+        }
+        fresh
+    }
+
+    /// 播放恢复正常，或用户自己切歌／换队列／停止：旧的惩罚不能再拖累后面正常的切歌。
+    pub fn clear(&mut self) {
+        self.backoff.reset();
+        self.pending = None;
+        self.next_attempt_at = None;
+        self.last_error_key = None;
     }
 }
 
@@ -149,5 +212,76 @@ mod tests {
         );
         assert_eq!(retry_after_delay(&h, Duration::from_secs(10)), None);
         assert_eq!(retry_after_delay(&HeaderMap::new(), SEC), None);
+    }
+
+    fn retry() -> AdvanceRetry {
+        AdvanceRetry::new(SEC, Duration::from_secs(8))
+    }
+
+    /// CR-002 的核心：失败的那一首要被锁住并等满退避窗口，而不是立刻往后数一首。
+    #[test]
+    fn advance_retry_locks_the_failed_target() {
+        let t0 = Instant::now();
+        let mut r = retry();
+        assert!(!r.waiting(t0), "没有失败时不该等待");
+        assert_eq!(r.pending(), None);
+
+        assert!(r.record_failure(3, "1:100:network", t0));
+        assert_eq!(r.pending(), Some(3), "重试目标必须是刚失败的那一首");
+        assert!(
+            r.waiting(t0 + Duration::from_millis(500)),
+            "1 秒退避窗口内不得再次尝试"
+        );
+        assert!(!r.waiting(t0 + Duration::from_millis(1001)));
+    }
+
+    #[test]
+    fn advance_retry_waits_longer_each_time_and_caps() {
+        let t0 = Instant::now();
+        let mut r = retry();
+        let mut at = t0;
+        for (attempt, want_secs) in [1u64, 2, 4, 8, 8].into_iter().enumerate() {
+            // 每次都换一个去重键，专注验证时间轴
+            let key = format!("1:100:err{}", attempt);
+            assert!(r.record_failure(1, &key, at));
+            assert!(
+                r.waiting(at + Duration::from_millis(want_secs * 1000 - 1)),
+                "第 {} 次要等满 {} 秒",
+                attempt + 1,
+                want_secs
+            );
+            at += Duration::from_secs(want_secs);
+            assert!(!r.waiting(at), "第 {} 次到点应放行", attempt + 1);
+        }
+        assert_eq!(r.failures(), 5);
+        r.clear();
+        assert_eq!(r.failures(), 0);
+        assert_eq!(r.pending(), None);
+        assert!(!r.waiting(t0));
+    }
+
+    /// 去重按「曲目 + 错误类别」：换一首歌、或同一首换了故障类型，都必须重新上报。
+    #[test]
+    fn advance_retry_dedups_per_track_and_error_class() {
+        let t0 = Instant::now();
+        let mut r = retry();
+        assert!(r.record_failure(1, "1:100:network", t0));
+        assert!(
+            !r.record_failure(1, "1:100:network", t0),
+            "同一首同一类错误只报第一次"
+        );
+        assert!(
+            r.record_failure(2, "2:200:network", t0),
+            "不同曲目的失败不能被合并掉"
+        );
+        assert!(
+            r.record_failure(2, "2:200:not_found", t0),
+            "同一首出现新的故障类型也要报"
+        );
+        r.clear();
+        assert!(
+            r.record_failure(2, "2:200:not_found", t0),
+            "播起来之后同一类错误要能重新上报"
+        );
     }
 }
