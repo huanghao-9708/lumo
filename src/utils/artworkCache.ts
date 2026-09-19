@@ -118,6 +118,7 @@ export async function prefetchArtworks(
     while (cursor < todo.length) {
       const id = todo[cursor++];
       try {
+        // 联网行为: local —— lumo:// 自定义协议，走本机 IPC 不出网
         const resp = await fetch(fetcher(id));
         if (!resp.ok) continue;
         const blob = await resp.blob();

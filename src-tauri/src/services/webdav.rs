@@ -153,6 +153,7 @@ const _: () = {
 
 impl WebdavClient {
     pub fn new(base_url: String, username: Option<String>, password: Option<String>) -> Self {
+        // 联网行为: §2E §2F —— 本客户端被曲库与备份两条链路共用，目标主机一律来自用户自填地址。
         let client = Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(60))
@@ -163,6 +164,7 @@ impl WebdavClient {
                 tracing::error!("无法构建带超时的 HTTP 客户端，退回默认客户端: {}", e);
                 Client::new()
             });
+        // 联网行为: §2E §2F —— 大文件传输客户端，同样只连用户自填的 WebDAV 地址。
         let bulk_client = Client::builder()
             .connect_timeout(Duration::from_secs(10))
             // 不在客户端上设 timeout()：它会连带套住 PUT 的整个请求体（见 BulkBudget 文档）。
@@ -242,6 +244,7 @@ impl WebdavClient {
             format!("{}/", self.base_url)
         };
 
+        // 联网行为: §2E §2F
         let req = self
             .client
             .request(
@@ -309,6 +312,7 @@ impl WebdavClient {
     pub fn propfind(&self, subpath: &str) -> Result<Vec<WebdavFile>, String> {
         let url = self.build_url(subpath)?;
 
+        // 联网行为: §2E §2F
         let req = self
             .client
             .request(
@@ -367,6 +371,7 @@ impl WebdavClient {
     /// 206 = 支持；200 = 服务器明确忽略 Range（不支持）；
     /// 认证失败 / 网络错误等返回 Err（带分类后的可读文案），调用方不落库。
     pub fn probe_range_support(&self, file_url: &str) -> Result<bool, String> {
+        // 联网行为: §2E §2F
         let req = self.apply_auth(self.client.get(file_url).header(RANGE, "bytes=0-0"));
         let resp = match req.send() {
             Ok(r) => r,
@@ -479,6 +484,7 @@ impl WebdavClient {
         let budget = self.bulk_budget.download.total_for(expected_bytes);
         let mut retries: u32 = 0;
         let mut resp = loop {
+            // 联网行为: §2E §2F
             let req = self.apply_auth(self.bulk_client.get(file_url).timeout(budget));
             match req.send() {
                 Ok(r) => {
@@ -548,6 +554,7 @@ impl WebdavClient {
     /// 对已存在的目录返回 405，视为成功（幂等）。
     pub fn mkcol(&self, path_url: &str) -> Result<(), String> {
         let req = self.apply_auth(
+            // 联网行为: §2E §2F
             self.client
                 .request(reqwest::Method::from_bytes(b"MKCOL").unwrap(), path_url),
         );
@@ -582,6 +589,7 @@ impl WebdavClient {
     ) -> Result<(), String> {
         let budget = self.bulk_budget.upload.total_for(expected_bytes);
         let req = self.apply_auth(
+            // 联网行为: §2E §2F
             self.bulk_client
                 .put(file_url)
                 .body(body.into())
@@ -606,6 +614,7 @@ impl WebdavClient {
     /// `Overwrite: T` 允许目标已存在时覆盖；201/204 视为成功。
     pub fn move_file(&self, src_url: &str, dst_url: &str) -> Result<(), String> {
         let req = self.apply_auth(
+            // 联网行为: §2E §2F
             self.client
                 .request(reqwest::Method::from_bytes(b"MOVE").unwrap(), src_url)
                 .header("Destination", dst_url)
@@ -625,6 +634,7 @@ impl WebdavClient {
     /// 读取小体积文本资源（校验和 sidecar 等），最多 max_bytes 字节。
     /// 404 返回 Ok(None)——调用方据此区分「资源不存在」与「读取失败」。
     pub fn fetch_text(&self, file_url: &str, max_bytes: u64) -> Result<Option<String>, String> {
+        // 联网行为: §2E §2F
         let req = self.apply_auth(self.client.get(file_url));
         let resp = req
             .send()
@@ -645,6 +655,7 @@ impl WebdavClient {
 
     /// DELETE：删除远程文件（清理旧快照用）。
     pub fn delete(&self, file_url: &str) -> Result<(), String> {
+        // 联网行为: §2E §2F
         let req = self.apply_auth(self.client.delete(file_url));
         let resp = req
             .send()
@@ -781,6 +792,7 @@ impl Read for HttpRangeReader {
 
             if self.current_resp.is_none() || self.offset != self.resp_offset {
                 let range_val = format!("bytes={}-{}", self.offset, self.length - 1);
+                // 联网行为: §2E §2F
                 let mut req = self.client.get(&self.url).header(RANGE, range_val);
                 req = self.apply_auth(req);
 

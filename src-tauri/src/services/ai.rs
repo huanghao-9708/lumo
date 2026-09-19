@@ -389,6 +389,7 @@ impl AiService {
         }
         let url = format!("{}/chat/completions", base);
 
+        // 联网行为: §2D —— base_url 由用户自填，无内置默认服务商
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(LLM_TIMEOUT_SECS))
             .build()
@@ -406,6 +407,7 @@ impl AiService {
             if json_mode {
                 body["response_format"] = serde_json::json!({"type": "json_object"});
             }
+            // 联网行为: §2D
             let mut req = client.post(&url).json(&body);
             if let Some(k) = &key {
                 req = req.bearer_auth(k);
@@ -593,6 +595,7 @@ impl AiService {
             .as_deref()
             .and_then(|cred| Self::load_key(app_dir, cred));
 
+        // 联网行为: §2D —— base_url 由用户自填
         let client = match reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
             .build()
@@ -606,6 +609,7 @@ impl AiService {
                 }
             }
         };
+        // 联网行为: §2D
         let mut req = client.get(format!("{}/models", base));
         if let Some(k) = &key {
             req = req.bearer_auth(k);

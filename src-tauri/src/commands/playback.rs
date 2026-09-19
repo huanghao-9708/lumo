@@ -110,6 +110,7 @@ pub fn resolve_media_file(
             }
             None => (None, None),
         };
+        // 联网行为: §2E —— 远程曲库的 Range 读
         let webdav = WebdavClient::new(root_uri.clone(), username, password);
         let base_str = if root_uri.ends_with('/') {
             root_uri.clone()

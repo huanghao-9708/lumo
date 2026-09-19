@@ -19,6 +19,8 @@ export default defineConfig({
   },
   test: {
     environment: "happy-dom",
-    include: ["src/**/*.spec.ts"],
+    // scripts/** 也纳入：联网门禁的判定逻辑是纯函数（CR-008），
+    // 没有正反例锁住，它就只是一段没人敢改的字符串匹配。
+    include: ["src/**/*.spec.ts", "scripts/**/*.spec.mjs"],
   },
 });

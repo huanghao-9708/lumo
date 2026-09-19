@@ -27,6 +27,7 @@ pub struct CoverService;
 
 impl CoverService {
     fn client() -> Result<reqwest::Client, String> {
+        // 联网行为: §2B §2C —— 两源共用一个客户端
         reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(IMAGE_TIMEOUT_SECS))
             .user_agent(UA)
@@ -36,6 +37,7 @@ impl CoverService {
 
     /// 网易云 GET（带 Referer/UA；CDN 与 API 均要求浏览器式头）
     async fn netease_get_json(client: &reqwest::Client, url: &str) -> Option<Value> {
+        // 联网行为: §2B —— 仅网易云走这条带 Referer 的取 JSON 路径
         let resp = client
             .get(url)
             .header("Referer", NETEASE_REFERER)
@@ -51,6 +53,7 @@ impl CoverService {
 
     /// 下载图片（返回 bytes + mime）
     async fn fetch_image(client: &reqwest::Client, url: &str) -> Option<CoverHit> {
+        // 联网行为: §2B §2C —— 图片主机来自两源响应体，无法预先穷举
         let resp = client.get(url).send().await.ok()?;
         if !resp.status().is_success() {
             return None;
@@ -121,6 +124,7 @@ impl CoverService {
             &[("term", q.as_str()), ("entity", "album"), ("limit", "1")],
         )
         .ok()?;
+        // 联网行为: §2C —— iTunes 兜底源
         let json: Value = client.get(url).send().await.ok()?.json().await.ok()?;
         let artwork = json["results"][0]["artworkUrl100"].as_str()?;
         if artwork.is_empty() {
@@ -176,6 +180,7 @@ impl CoverService {
             &[("term", artist_name), ("entity", "album"), ("limit", "1")],
         )
         .ok()?;
+        // 联网行为: §2C —— iTunes 兜底源
         let json: Value = client.get(url).send().await.ok()?.json().await.ok()?;
         let artwork = json["results"][0]["artworkUrl100"].as_str()?;
         if artwork.is_empty() {

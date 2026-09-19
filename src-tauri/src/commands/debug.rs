@@ -41,6 +41,7 @@ pub fn debug_webdav_probe(
     password: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let start = std::time::Instant::now();
+    // 联网行为: §2H —— MA0 Spike 探针，地址/凭据由用户当场手填，不读库
     let client = crate::services::webdav::WebdavClient::new(base_url, username, password);
     let files = client.propfind("/")?;
     Ok(serde_json::json!({

@@ -419,6 +419,7 @@ impl SyncService {
         let url = config.webdav_url.as_deref().ok_or("WebDAV URL 未配置")?;
         let username = config.username.clone();
         let password = config.password.clone();
+        // 联网行为: §2F —— 地址来自 sync_config（用户自填）
         Ok(WebdavClient::new(url.to_string(), username, password))
     }
 
@@ -472,6 +473,7 @@ impl SyncService {
         // 暂存名的清理不写在失败分支里，而是交给守卫：校验和 PUT 失败、MOVE 之后的
         // 降级 PUT 失败、甚至 panic，都不该在用户配额里永久留下一份完整数据库副本（CR-003）。
         let mut staging =
+            // 联网行为: §2F
             RemoteStagingGuard::new(|url| client.delete(url), staging_url.clone(), staging_name);
 
         let upload_result = (|| -> Result<(), String> {
@@ -555,6 +557,7 @@ impl SyncService {
                     continue;
                 }
             };
+            // 联网行为: §2F
             match client.delete(&url) {
                 Ok(()) => tracing::info!("已清理陈旧的远端暂存文件 {}", name),
                 Err(e) => tracing::warn!("远端暂存文件 {} 清理失败：{}", name, e),

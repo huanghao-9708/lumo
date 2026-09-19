@@ -144,6 +144,7 @@ async function onCheckUpdate() {
   checkingUpdate.value = true;
   updateMsg.value = '';
   try {
+    // 联网行为: §2G —— 仅用户点「检查更新」时请求
     const res = await fetch('https://api.github.com/repos/huanghao-9708/lumo/releases/latest');
     if (!res.ok) {
       updateMsg.value = '暂无法连接到更新服务器';
@@ -169,6 +170,7 @@ async function onCheckUpdate() {
 }
 
 function openDownloadUrl(url: string) {
+  // 联网行为: §2G —— 跳转 GitHub 发布页
   window.open(url, '_blank');
 }
 

@@ -96,6 +96,7 @@ export function useArtworkSrc(artworkIdGetter: () => number | null | undefined):
   }
 
   async function prefetchAndCache(id: number, url: string) {
+    // 联网行为: local —— lumo:// 自定义协议，走本机 IPC 不出网
     const resp = await fetch(url);
     if (!resp.ok) return;
     const blob = await resp.blob();

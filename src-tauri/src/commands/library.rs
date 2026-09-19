@@ -418,12 +418,14 @@ pub async fn library_get_lyrics(
     }
 
     // 必须设超时：这是播放路径上的同步 IPC，慢速/黑洞化的 lrclib 会让切歌卡住
+    // 联网行为: §2A —— lrclib 在线歌词，地址见 NETWORK_BEHAVIOR.md §2A
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(LRCLIB_TIMEOUT_SECS))
         .user_agent("LumoMusicPlayer/1.0.0")
         .build()
         .map_err(|e| AppError::Io(std::io::Error::other(e.to_string())))?;
 
+    // 联网行为: §2A
     let resp = client
         .get(url)
         .send()

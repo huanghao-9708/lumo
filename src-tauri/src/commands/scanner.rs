@@ -256,6 +256,7 @@ pub fn source_add_webdav(
 
     // Test connection (use empty subpath so PROPFIND hits the exact base URL, not the server root)
     let webdav =
+        // 联网行为: §2E —— 地址来自 sources.root_uri（用户自填）
         crate::services::webdav::WebdavClient::new(url.clone(), username.clone(), password.clone());
     webdav
         .propfind("")
@@ -306,6 +307,7 @@ pub fn scanner_test_webdav(
     password: Option<String>,
 ) -> Result<crate::services::webdav::WebdavProbeResult, AppError> {
     let _trace = ipc_trace!("scanner_test_webdav");
+    // 联网行为: §2E
     let webdav = crate::services::webdav::WebdavClient::new(url, username, password);
     Ok(webdav.probe_connection())
 }

@@ -38,7 +38,7 @@ jobs:
       - name: 版本三处一致（package.json / Cargo.toml / tauri.conf.json）
         run: node scripts/check-versions.mjs
 
-      - name: 联网行为均已登记（NETWORK_BEHAVIOR.md 为唯一事实源）
+      - name: 联网行为登记（主机级白名单 + 调用点行为 ID，事实源 NETWORK_BEHAVIOR.md）
         run: node scripts/check-network-registry.mjs
 
   frontend:

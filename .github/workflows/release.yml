@@ -50,7 +50,7 @@ jobs:
             exit 1
           fi
 
-      - name: 联网行为均已登记
+      - name: 联网行为登记（主机级白名单 + 调用点行为 ID）
         run: node scripts/check-network-registry.mjs
 
       - name: 前端类型检查 + 单元测试 + 构建

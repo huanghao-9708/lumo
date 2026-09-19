@@ -566,6 +566,7 @@ pub fn scan_webdav_directory(
             .unwrap_or_else(|_| root_uri.clone()),
     );
 
+    // 联网行为: §2E —— 地址来自 sources.root_uri（用户自填）
     let webdav = WebdavClient::new(root_uri.clone(), username, password);
 
     // Recursive propfind (start at base URL, not server root)

@@ -3,8 +3,10 @@
 > 文档状态：Draft v2（I0/PC-001 建立，I3/DATA-002 同步修复后更新）
 > 事实基线：Lumo v1.8.1，分支 `codex/commercial-maturity-roadmap`
 > 核对方式：逐行审阅 `src-tauri/src/` 与 `src/` 的全部出网代码。**行号是本文核对时点的位置**，
-> 代码改动后会漂移——定位请以括注里的函数名为准；机器门禁只校验「文件是否登记」
-> （`scripts/check-network-registry.mjs`），不校验行号。
+> 代码改动后会漂移——定位请以括注里的函数名为准。机器门禁（`scripts/check-network-registry.mjs`，
+> CR-008 起为**主机级**）校验两件事：①代码里出现的每个字面量主机都必须在 §1 登记；
+> ②每个真正发请求的调用点（Rust 的 HTTP client 动词、前端的 `fetch` / `window.open` 等）都必须在
+> 紧邻位置声明 `联网行为: §2X`，X 指向本文件的条目。不校验行号。
 > 适用范围：本文件是 Lumo 联网行为的**唯一事实源**。隐私政策、README、设置页文案一律引用本文件，不得各自维护第二套清单。
 
 ## 0. 总则
@@ -24,9 +26,18 @@
 | D | AI 服务商 | 用户自填 `base_url` | AI 电台补全 | 用户手动点「生成」/「测试连接」 | **关** | `ai_settings.enabled` |
 | E | WebDAV 曲库 | 用户自填 `root_uri` | 远程扫描、流播、缓存 | 用户操作 + 播放自动 | 无默认值 | 删除来源或停用 |
 | F | WebDAV 备份 | 用户自填 `sync_config` | 整库快照上传/恢复 | 上传手动；**打开设置页会自动 PROPFIND 检查** | `enabled=false` | 关闭备份恢复开关 |
-| G | GitHub API | `api.github.com` | 移动端检查新版本 | 仅用户手动点按钮 | 无开关 | 不点即不请求 |
+| G | GitHub | `api.github.com` + `github.com` | 移动端检查新版本、跳转发布页下载 | 仅用户手动点「检查更新」/「去下载」 | 无开关 | 不点即不请求 |
+| H | 移动端连通性探针 | 用户当场手填地址（不落库） | MA0 技术验证：对任意 WebDAV 地址发一次 PROPFIND | 仅 debug 构建、仅手动点「探测」 | **release 构建无入口** | 不出手即不请求 |
 
-以上七类**穷尽**了当前代码中的出网路径。未列出的域名（Deezer、MusicBrainz）仅存在于注释（`services/cover.rs:9`、`models.rs:48`），无实现。
+以上八类**穷尽**了当前代码中的出网路径。未列出的域名（Deezer、MusicBrainz）仅存在于注释（`services/cover.rs:9`、`models.rs:48`），无实现。
+
+**门禁协议（CR-008）**：§1 的每一行有一个 ID（A–H），§2 的同名小节描述其触发与落地。
+代码中真正发起请求的调用点必须在紧邻上一行或行尾声明归属，例如
+`// 联网行为: §2E`（曲库 WebDAV）、`// 联网行为: §2E §2F`（同一客户端被两类用途共用）、
+`// 联网行为: local`（`lumo://` 自定义协议等不出网目标）。
+声明的 ID 必须同时存在 §1 与 §2；调用点若写死了字面量主机，该主机还必须登记在**所声明那一行**里，
+不能靠别的条目蒙过去。回环与保留域（`127.x`、`localhost`、`::1`、`*.local`、`example.*`）
+按测试夹具豁免，Rust 的 `#[cfg(test)]` 段与前端 `*.spec.ts` 整体豁免。
 
 ## 2. 逐项明细
 
@@ -172,6 +183,17 @@
 - **无自动检查、无 tauri updater 插件**（`Cargo.toml`、`tauri.conf.json` 均无 updater endpoints），即应用不会自行下载或安装更新。
 - 本项未在设置页声明，属轻微缺口（§4 R-06）。
 
+### H. 移动端连通性探针（MA0 Spike，仅开发构建有入口）
+
+- **入口**：`debug_webdav_probe`（`src-tauri/src/commands/debug.rs:38`）→ `WebdavClient::new(base_url, …)` → `propfind("/")`。
+  地址、账号、口令全部由用户在探针表单里**当场手填**，不读库、不写库、不落地。
+- **触发**：移动端设置页 MA0 区块的「探测」按钮（`MobileSettings.vue:534` 的 `v-if="isDev"`）。
+  生产构建的 UI 不渲染该区块，用户没有可达路径。
+- **残留缺口**：命令本身**没有** `#[cfg(debug_assertions)]`（同模块的 `debug_play_tone` 有），
+  即 release 二进制仍注册 `debug_webdav_probe`。当前无 UI 调用，但只要有前端漏洞就能对任意地址发请求
+  → 记 §4 R-10，收口方式是给该命令补 debug 门控。
+- **用途限定**：验证 rustls(ring) 握手、认证与目录枚举，属技术验证而非产品能力；MA1 收尾时整模块移除。
+
 ## 3. 连接层事实
 
 | 项 | 现状 | 证据 |
@@ -180,7 +202,7 @@
 | 证书校验 | 全程开启，无跳过开关 | 全仓无 `danger_accept_invalid_certs` |
 | 系统代理 | reqwest 启用 `system-proxy` feature，**所有外联可能经由系统代理/PAC** | `Cargo.toml` reqwest features；全仓未调用 `no_proxy()` |
 | User-Agent | 三套并存：封面用浏览器伪装 UA、歌词用 `LumoMusicPlayer/1.0.0`、WebDAV/AI/GitHub 用 reqwest 或 WebView 默认 UA | `cover.rs:16`、`commands/library.rs:421` |
-| 前端 fetch | 只访问本地协议 `lumo://artwork`（`useArtworkSrc.ts:99`、`artworkCache.ts:121`）与 §2G 的 GitHub；不直连其他第三方 | — |
+| 前端 fetch | 只访问本地协议 `lumo://artwork`（`useArtworkSrc.ts`、`artworkCache.ts`，两处均声明 `联网行为: local`）与 §2G 的 GitHub；不直连其他第三方。门禁会扫 `src/**` 的 `fetch` / `window.open` / `WebSocket` 调用点 | — |
 | 窗口 CSP | `csp: null`（未设置），I2 待收口 | `tauri.conf.json:25-27` |
 
 ## 4. 隐私风险登记（转 I2 处置）
@@ -196,6 +218,7 @@
 | R-07 | **两个隐私开关存 localStorage 而非数据库**：换设备/清 WebView 即重置，且不随备份迁移；后端门禁依赖前端传入 `allow_online`，直连 IPC 可绕过（`ui.ts:126` 自称「双保险」） | P1 | I2（开关落库 + 后端独立判定） |
 | R-08 | 打开设置页自动 WebDAV PROPFIND | P2 | I2 |
 | R-09 | 系统代理下所有元数据查询可能经第三方代理节点，未在文档披露 | P2 | I2 |
+| R-10 | `debug_webdav_probe` 未加 `#[cfg(debug_assertions)]`，release 二进制仍注册该命令（仅无 UI 入口） | P2 | I2（补门控或按 MA1 移除 MA0 Spike 模块） |
 
 ## 5. 日志与敏感信息
 
@@ -209,10 +232,14 @@
 
 ## 6. 变更控制规则
 
-1. 新增出网必须随 PR 提交本文件的更新，并在 §1 表格占一行；评审时缺此项即打回。
-   CI 会用 `scripts/check-network-registry.mjs` 机器校验：Rust 源码里任何以字符串字面量
-   书写的 `http(s)://` 目标，其所在文件（相对 `src-tauri/src` 的路径，如
-   `commands/library.rs`）必须出现在本文件中。**这条规则不依赖 reviewer 记性**。
+1. 新增出网必须随 PR 提交本文件的更新，并在 §1 表格占一行、在 §2 写清触发与落地；缺此项即打回。
+   CI 用 `scripts/check-network-registry.mjs`（判定逻辑在 `network-registry-rules.mjs`，
+   由 `scripts/network-registry-rules.spec.mjs` 的正反例锁住）机器校验三件事：
+   ①代码里出现的每个字面量主机都必须在 §1 登记 —— **在已登记文件里追加新域名同样会红**；
+   ②Rust 的 HTTP 客户端调用点/构造点、前端的 `fetch` / `window.open` / `WebSocket` 等调用点
+   必须声明 `联网行为: §2X`，声明的 ID 必须在 §1 与 §2 同时存在；
+   ③前端与 Rust 共用本文件这一套事实源，不存在第二份白名单。
+   判定逻辑本身要改时，必须同步改测试；「把检查关掉」不算整改。
 2. 新增外联默认关闭；任何「应用启动即请求」的设计一律视为 P0 阻断。
 3. 本文件与隐私政策、设置页文案不一致时，**以代码为准并立即修正文档**，不得为了维护旧承诺而隐瞒真实行为。
 4. 域名清单中「由服务端响应决定的动态主机」（网易云 CDN、mzstatic）在对外政策里以「及其内容分发网络」表述，不假装可枚举。
