@@ -92,7 +92,7 @@ pub fn resolve_media_file(
     // file_size <= 0 表示部分服务端不回 getcontentlength，此时无期望值可校验。
     if kind == "webdav" {
         let expected_size = (size > 0).then_some(size as u64);
-        if let Some(cached) = audio_cache.get_cached_path(media_file_id, expected_size) {
+        if let Some(cached) = audio_cache.acquire_cached_path(media_file_id, expected_size) {
             tracing::info!("Audio cache hit for media_file_id={}", media_file_id);
             return Ok((Some(cached), None, WebdavResolveInfo::default()));
         }

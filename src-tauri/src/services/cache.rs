@@ -71,8 +71,9 @@ impl Drop for DownloadGuard {
 /// 有效性判定：命中缓存必须与 DB 记录的 `file_size` 一致。只判「文件非空」会让
 /// 一次截断下载永久变成坏缓存——播放时才发现，且用户无法自愈。
 ///
-/// 缓存淘汰：按 mtime 升序清到上限之下；命中即 touch，使 mtime 表示「最近使用时间」
-/// 而非「下载时间」，否则正在播放的老文件会被第一个淘汰。
+/// 缓存淘汰：按 mtime 升序清到上限之下。mtime 表示「最近一次真正播放」而非下载时间
+/// ——只有 [`AudioCache::acquire_cached_path`] 会推进它，状态查询不会（CR-005），
+/// 否则正在播放的老文件会被第一个淘汰，而只是被列表扫过的文件活得最久。
 pub struct AudioCache {
     cache_dir: PathBuf,
 }
@@ -111,13 +112,18 @@ impl AudioCache {
 
     /// 是否已缓存且大小与远端一致。`expected_size` 取自 `media_files.file_size`，
     /// 未知时传 None（退化为「非空即有效」）。
+    ///
+    /// 纯查询：**不**刷新 mtime。可播性批量查询和 `playback_is_cached` 都会逐首调用它，
+    /// 若顺手 touch，打开一次列表就等于把整批缓存标记成"刚刚使用"，
+    /// 淘汰顺序会变成列表浏览顺序而不是真实播放历史（CR-005）。
     pub fn is_cached(&self, media_file_id: i64, expected_size: Option<u64>) -> bool {
-        self.get_cached_path(media_file_id, expected_size).is_some()
+        self.validate_cached_path(media_file_id, expected_size)
+            .is_some()
     }
 
-    /// 获取有效缓存文件的本地路径，未缓存或大小不符返回 None。
-    /// 命中时把 mtime 推到当前时间，供 [`Self::prune_to_max_bytes`] 做近似 LRU。
-    pub fn get_cached_path(
+    /// 只校验缓存是否有效（存在、非空、大小与 `expected_size` 一致），**不更新 mtime**。
+    /// 命中但体积不符时仍会删掉坏缓存——那是数据修正，不是"使用"。
+    pub fn validate_cached_path(
         &self,
         media_file_id: i64,
         expected_size: Option<u64>,
@@ -142,6 +148,17 @@ impl AudioCache {
                 return None;
             }
         }
+        Some(path)
+    }
+
+    /// 取缓存路径**并**把 mtime 推到当前时间，供 [`Self::prune_to_max_bytes`] 做近似 LRU。
+    /// 只有真正把缓存文件交给播放器时才调用——"用过一次"才应该改变它的淘汰顺序。
+    pub fn acquire_cached_path(
+        &self,
+        media_file_id: i64,
+        expected_size: Option<u64>,
+    ) -> Option<PathBuf> {
+        let path = self.validate_cached_path(media_file_id, expected_size)?;
         touch_mtime(&path);
         Some(path)
     }
@@ -349,11 +366,70 @@ mod tests {
         let path = write_entry(tmp.path(), "201", 1000);
         set_age(&path, 3 * 24 * 60 * 60);
 
-        assert_eq!(cache.get_cached_path(201, Some(1000)), Some(path.clone()));
+        assert_eq!(
+            cache.acquire_cached_path(201, Some(1000)),
+            Some(path.clone())
+        );
         assert!(
             age_secs(&path) < 60,
-            "命中后 mtime 应刷新为最近使用，实际 {} 秒前",
+            "播放取用后 mtime 应刷新为最近使用，实际 {} 秒前",
             age_secs(&path)
+        );
+    }
+
+    /// CR-005：状态查询（可播性批量检查、`playback_is_cached`）只读，不得推进 mtime。
+    #[test]
+    fn status_queries_leave_mtime_alone() {
+        let tmp = TempDir::new("cache_readonly");
+        let cache = AudioCache::from_cache_dir(tmp.path().clone());
+        let path = write_entry(tmp.path(), "202", 1000);
+        set_age(&path, 3600);
+
+        assert!(cache.is_cached(202, Some(1000)));
+        assert_eq!(
+            cache.validate_cached_path(202, Some(1000)),
+            Some(path.clone())
+        );
+        let after = age_secs(&path);
+        assert!(
+            after >= 3500,
+            "只读查询把缓存标成了刚刚使用，实际年龄 {} 秒",
+            after
+        );
+    }
+
+    /// CR-005 的验收点：淘汰保留「近期真实播放过的文件」，浏览列表不能插队。
+    ///
+    /// 时间线故意排成"最后一次操作是只读查询"：只要查询会 touch，501 就挤到 502 之后，
+    /// 被淘汰的就变成了刚播过的 502——正是本条要防的回归。
+    #[test]
+    fn eviction_follows_real_playback_not_queries() {
+        let tmp = TempDir::new("cache_lru");
+        let cache = AudioCache::from_cache_dir(tmp.path().clone());
+        let viewed = write_entry(tmp.path(), "501", 100);
+        let played = write_entry(tmp.path(), "502", 100);
+        set_age(&viewed, 3600);
+        set_age(&played, 600);
+
+        // 1) 真实播放 502：只有这一步算"使用"
+        assert_eq!(
+            cache.acquire_cached_path(502, Some(100)),
+            Some(played.clone())
+        );
+        // 2) 之后用户打开歌曲列表，501 被反复只读查询
+        assert!(cache.is_cached(501, Some(100)));
+        assert_eq!(
+            cache.validate_cached_path(501, Some(100)),
+            Some(viewed.clone())
+        );
+
+        // 只容得下一首：让位必须是不曾被播放、只被浏览过的 501
+        let freed = cache.prune_to_max_bytes(100);
+        assert_eq!(freed, 100, "只该淘汰一个 100 字节的缓存");
+        assert!(played.exists(), "刚播放过的缓存不能被淘汰");
+        assert!(
+            !viewed.exists(),
+            "只被列表查询扫过的缓存应最先让出空间（查询不该算使用）"
         );
     }
 

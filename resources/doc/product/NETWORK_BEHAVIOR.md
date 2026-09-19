@@ -92,8 +92,8 @@
 
 - **base_url 来源**：用户填写的 `sources.root_uri`（添加来源时写入，见 `commands/scanner.rs` 的 `source_add_*`），**无内置默认值**。
 - **方法与端点**：`PROPFIND`（Depth 0/1，`WebdavClient::propfind` / `probe_connection`）、`GET` + `Range`（`probe_range_support`、`HttpRangeReader::read`）、`PUT`（`put_file`）、`MKCOL`、`MOVE`（`move_file`，I3 新增）、`DELETE`；`basic_auth`（`apply_auth`）。
-- **触发**：扫描由用户点击 `source_scan`（`commands/scanner.rs`）；扫描期对每个远端文件做 Range GET 以解析标签（`services/scanner.rs`）。播放远程曲目时流播，并**无条件在后台整曲下载缓存**（`commands/playback.rs::spawn_background_cache_download`，队列自动切歌路径 `commands/queue.rs` 同样触发）→ `app_data_dir/audio_cache/<media_file_id>`（`services/cache.rs::AudioCache`，上限 `DEFAULT_MAX_BYTES` = 2GB，超出按最久未用淘汰）。该后台下载**没有独立开关**，见 §4 R-04。
-- **完整性**：下载落盘前后都比对 `media_files.file_size`（`AudioCache::store_from_webdav` / `get_cached_path`），大小不符即丢弃并重新下载，不会把截断文件固化成坏缓存（I3/G-10）。服务端未上报大小时退化为「非空即有效」。
+- **触发**：扫描由用户点击 `source_scan`（`commands/scanner.rs`）；扫描期对每个远端文件做 Range GET 以解析标签（`services/scanner.rs`）。播放远程曲目时流播，并**无条件在后台整曲下载缓存**（`commands/playback.rs::spawn_background_cache_download`，队列自动切歌路径 `commands/queue.rs` 同样触发）→ `app_data_dir/audio_cache/<media_file_id>`（`services/cache.rs::AudioCache`，上限 `DEFAULT_MAX_BYTES` = 2GB，超出按最久未用淘汰；「未用」以**真实播放**为准——只有 `acquire_cached_path` 推进访问时间，可播性批量查询与 `playback_is_cached` 走 `validate_cached_path`/`is_cached`，只读不改淘汰顺序（CR-005））。该后台下载**没有独立开关**，见 §4 R-04。
+- **完整性**：下载落盘前后都比对 `media_files.file_size`（`AudioCache::store_from_webdav` / `validate_cached_path`），大小不符即丢弃并重新下载，不会把截断文件固化成坏缓存（I3/G-10）。服务端未上报大小时退化为「非空即有效」。
 - **超时**：两个客户端并存（`WebdavClient::new`）——
   `client`：连接 10s + **总** 60s，用于 PROPFIND / MKCOL / DELETE / Range 探测 / Range 读；
   `bulk_client`：连接 10s + **客户端上不设总超时**，用于整文件下载与快照 PUT，
