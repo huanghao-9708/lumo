@@ -96,9 +96,22 @@
 - **完整性**：下载落盘前后都比对 `media_files.file_size`（`AudioCache::store_from_webdav` / `get_cached_path`），大小不符即丢弃并重新下载，不会把截断文件固化成坏缓存（I3/G-10）。服务端未上报大小时退化为「非空即有效」。
 - **超时**：两个客户端并存（`WebdavClient::new`）——
   `client`：连接 10s + **总** 60s，用于 PROPFIND / MKCOL / DELETE / Range 探测 / Range 读；
-  `bulk_client`：连接 10s + **无总超时**（reqwest blocking 无读超时能力，改用 TCP keepalive
-  空闲 30s / 间隔 10s 探测死连接），用于整文件下载与快照 PUT，
+  `bulk_client`：连接 10s + **客户端上不设总超时**，用于整文件下载与快照 PUT，
   大文件不会再被 60s 掐断（I3/G-09）。构建失败退回默认客户端时会 `tracing::error!` 留痕。
+- **大文件传输总预算（CR-007）**：`bulk_client` 的每个请求按**体积**单独施加总超时（`TransferBudget::total_for`），
+  保证「服务器接了连接却不再传字节」时请求必然在明确时间内返回可读错误，前端不会停在「处理中」：
+  `总预算 = 固定开销 30s + 体积 / 最低假设吞吐`，再夹在 `[下限 60s, 上限]` 内；体积未知（无 `file_size`）时用兜底 30 分钟。
+  - 下载（`download_to_file`，`expected_bytes` 取自 `media_files.file_size`，缺失传 `None`）：
+    假设吞吐 **128 KiB/s**，上限 **60 分钟**（1 GiB 按假设吞吐需要 8192s，已超上限：
+    即 1 GiB 级的整库恢复要求链路至少撑到约 290 KiB/s，否则按「传不完」判失败）。
+  - 上传（`put_file`，快照/校验和都带真实字节数）：假设吞吐 **32 KiB/s**，上限 **2 小时**。
+  - 取舍：**低于假设吞吐的极慢链路会被判定为传不完并掐断**。reqwest blocking **没有读超时**，
+    做不到「只要还有进展就继续等」的真·空闲超时；把它连同**用户取消令牌**一起做 async 化是已登记的残余缺口
+    （见 `CODE_REVIEW_2026-09-19.md` CR-007 整改记录）。TCP keepalive（空闲 30s / 间隔 10s）只是 OS 层兜底，
+    能掐掉「对端完全不再回包」，兜不住应用层停滞，因此不作为主要终止手段。
+  - 失败口径：预算耗尽的错误文案点明阶段与等待时长（「下载超时：服务器在 N 秒内没有完成传输…」），
+    与「连接超时/无法连接服务器」区分开；**停滞不重试**（重试会把最坏等待乘以 1+次数）。
+    已写的半截文件由调用方删除（缓存删 `.tmp`，恢复删 `.download`），响应头阶段失败则连文件都不创建。
 - **重试与退避（I3/G-12）**：重试只发生在**同一已声明端点**上，不新增目标主机或字段。
   - Range 读（`HttpRangeReader::read`）：429/5xx、连接层失败、提前断流、流读错误共用一份预算
     ——每次 `read` 最多 3 次重试，等待 100ms 起指数递增、单次封顶 1s（最坏总等待约 0.7s + 请求耗时）；
@@ -136,6 +149,10 @@
   **每轮恢复都用唯一文件名保存恢复前副本**；只有恢复成功、或失败但回滚成功时才删除本轮副本，
   回滚同样失败则一律保留并把真实路径写进提示，历史遗留副本永不自动删除（CR-001 / I3/G-04）。
 - **语义**：整库替换，不做实体级合并、无冲突处理，因此本计划统一称「备份恢复」而非「同步」。
+- **超时与取消（CR-007）**：上传的两次 `PUT` 与恢复的快照 `GET` 走 §2E 的按体积总预算（快照 `PUT` 带 `file_size`，
+  恢复下载在拿到响应前体积未知 → 30 分钟兜底）；预算耗尽即返回可读错误，**用户侧无「取消」按钮可中断进行中的传输**
+  （取消令牌同样在残余缺口清单里）。半途失败不留本地半成品：恢复侧在失败分支删除 `.download` 临时文件，
+  远端侧由暂存对象守卫 `DELETE`；校验和 `GET` 失败只降级为「跳过比对」，结构校验仍兜底。
 - **远端新增产物**：除 `lumo.sqlite` 外，本版本起还会写入 `lumo.sqlite.sha256`，
   以及 MOVE 失败时可能短暂残留的 `lumo.sqlite.tmp-*`（下次备份起会自动回收超过 24 小时的这类残留）。
   对外披露时必须算作两个文件。
@@ -159,7 +176,7 @@
 
 | 项 | 现状 | 证据 |
 |---|---|---|
-| TLS 后端 | rustls 0.23 + `ring`（纯 Rust，为 Android 交叉编译所选），进程内安装默认 provider | `Cargo.toml` rustls 依赖项、`lib.rs:248-253` |
+| TLS 后端 | rustls 0.23 + `ring`（纯 Rust，为 Android 交叉编译所选），进程内安装默认 provider | `Cargo.toml` rustls 依赖项、`lib.rs::install_crypto_provider` |
 | 证书校验 | 全程开启，无跳过开关 | 全仓无 `danger_accept_invalid_certs` |
 | 系统代理 | reqwest 启用 `system-proxy` feature，**所有外联可能经由系统代理/PAC** | `Cargo.toml` reqwest features；全仓未调用 `no_proxy()` |
 | User-Agent | 三套并存：封面用浏览器伪装 UA、歌词用 `LumoMusicPlayer/1.0.0`、WebDAV/AI/GitHub 用 reqwest 或 WebView 默认 UA | `cover.rs:16`、`commands/library.rs:421` |

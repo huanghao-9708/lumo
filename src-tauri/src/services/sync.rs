@@ -476,11 +476,17 @@ impl SyncService {
 
         let upload_result = (|| -> Result<(), String> {
             // 每次 PUT 各自重新打开快照文件流式上传：内存里不同时存在两份整库字节（CR-004）
-            client.put_file(&staging_url, open_snapshot(&snapshot)?)?;
+            // 体积一并传给上传接口换算总时间预算：服务器接了连接却不再收字节时，
+            // 请求必须在一个明确的时间点返回而不是挂到永远（CR-007）
+            client.put_file(&staging_url, open_snapshot(&snapshot)?, Some(file_size))?;
             // 校验和先于正式名就位：任何时刻远端的 `lumo.sqlite` 都不会配上更新的校验和，
             // 最坏情况是校验和比库新（恢复侧按「不匹配」拒绝，重新备份一次即可自愈），
             // 而不是校验和比库旧（会放过损坏数据）。
-            client.put_file(&checksum_url, checksum.as_bytes().to_vec())?;
+            client.put_file(
+                &checksum_url,
+                checksum.as_bytes().to_vec(),
+                Some(checksum.len() as u64),
+            )?;
             match client.move_file(&staging_url, &upload_url) {
                 Ok(()) => staging.disarm(),
                 Err(e) => {
@@ -489,7 +495,7 @@ impl SyncService {
                     if let Some(detail) = staging.cleanup() {
                         tracing::warn!("远端暂存文件 {} 清理失败：{}", staging.name(), detail);
                     }
-                    client.put_file(&upload_url, open_snapshot(&snapshot)?)?;
+                    client.put_file(&upload_url, open_snapshot(&snapshot)?, Some(file_size))?;
                 }
             }
             Ok(())
@@ -571,7 +577,14 @@ impl SyncService {
             REMOTE_SNAPSHOT_NAME,
             staging_suffix()
         ));
-        client.download_to_file(&download_url, &temp_path)?;
+        // 体积未知（开工前拿不到远端大小）：走体积未知的兜底总预算，停滞的服务器同样会在
+        // 明确时间内返回（CR-007）。半途失败必须立刻删掉临时文件——下一轮开头的
+        // cleanup_stale_downloads 只是兜底，不能拿它当清理手段，否则用户配额里会一直
+        // 躺着一份半截数据库快照。
+        if let Err(e) = client.download_to_file(&download_url, &temp_path, None) {
+            let _ = std::fs::remove_file(&temp_path);
+            return Err(e);
+        }
 
         // 校验和 sidecar 存在则比对；不存在（老版本备份、服务器拒绝）跳过，
         // 由 validate_snapshot 的结构校验兜底。

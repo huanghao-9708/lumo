@@ -29,15 +29,127 @@ pub struct WebdavProbeResult {
 #[derive(Clone)]
 pub struct WebdavClient {
     pub client: Client,
-    /// 大体积传输专用客户端（整文件下载、DB 快照上传）：保留连接超时，但**不设总超时**——
-    /// reqwest 的总超时覆盖整个响应体，大文件传输会被 60s 掐断。
-    /// 挂死的连接改由 TCP keepalive 探测（blocking 客户端没有 read_timeout，只有这一层能兜住
-    /// "连上了但不再传字节"）。
+    /// 大体积传输专用客户端（整文件下载、DB 快照上传）：保留连接超时与 keepalive，但
+    /// **不在客户端上设总超时**——总超时挂到客户端会同时套住 PUT 的整个请求体，GB 级快照
+    /// 会被固定值掐断在半程。终止条件改由每个请求按 `bulk_budget` 单独施加（见其文档）。
     pub bulk_client: Client,
+    /// 本次传输的终止预算（CR-007）。不写成常量而放进实例：停滞路径的回归测试要把窗口
+    /// 缩到毫秒级，否则每个用例都得等满 90 秒。
+    bulk_budget: BulkBudget,
     pub base_url: String,
     pub username: Option<String>,
     pub password: Option<String>,
 }
+
+/// 大体积传输（整文件下载、DB 快照上传/下载）的终止条件（CR-007）。
+///
+/// `RequestBuilder::timeout` 在 reqwest 里是**整次传输的总预算**：请求体侧由
+/// `execute_request` 一次性建 deadline 并驱动完整个 body，响应体侧由
+/// `async_impl::body::response` 用 `total_timeout` 包住整个 body 流。所以它一定终止得掉，
+/// 但也一定要求预算随体积走——固定值会把慢速大文件掐死在半程。
+/// 因此上传与下载分别配置换算阈值（审查报告建议 4：不共用一个粗粒度策略），
+/// 体积已知时按「体积 / 最小假设吞吐」给足时间，未知时走兜底预算，两端都有硬上限。
+///
+/// TCP keepalive 仍然保留：它是 OS 层的补充，能提前探出「对端完全不再回包」，
+/// 但探不到「链路活着、ACK 照回、应用层不再吐字节」的服务器。
+///
+/// 本期未覆盖（记在 I3 执行记录的残余缺口里）：
+/// 1. 「真·空闲超时」——blocking API 没有 `read_timeout`（只有 async `ClientBuilder` 有），
+///    所以低于最小假设吞吐的极慢链路会被当成停滞掐断，而不是按进展放行；
+/// 2. 用户主动取消（取消令牌）：blocking 请求一旦发出就无法中途唤醒，需要整条链路 async 化。
+#[derive(Debug, Clone, Copy)]
+struct BulkBudget {
+    /// 下载总预算的换算参数。
+    download: TransferBudget,
+    /// 上传总预算的换算参数。
+    upload: TransferBudget,
+}
+
+/// 「体积 → 传输总时长」的换算参数，集中成一处便于核对口径，
+/// 也让停滞路径的回归测试能换成毫秒级值——生产下限 60s 起，逐个用例等下去不现实。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TransferBudget {
+    /// 最小假设吞吐：低于它就把这条链路判为「传不完」而不是「慢」。
+    min_bytes_per_sec: u64,
+    /// 与体积无关的固定开销：连接、TLS 握手、服务端接收与落盘排队。
+    allowance: Duration,
+    /// 总预算下限：体积再小也要留出握手与服务端提交时间。
+    min: Duration,
+    /// 总预算上限：不封顶就等于没有终止条件。
+    max: Duration,
+    /// 体积未知（拿不到 Content-Length / metadata）时的兜底预算。
+    unknown_size: Duration,
+}
+
+impl TransferBudget {
+    /// 按体积推导本次传输的总预算：固定开销 + 体积 / 最小假设吞吐，再夹到 `[min, max]`。
+    fn total_for(&self, expected_bytes: Option<u64>) -> Duration {
+        let Some(bytes) = expected_bytes else {
+            return self.unknown_size.clamp(self.min, self.max);
+        };
+        // 先夹住换算结果再加固定开销：`u64::MAX` 字节会算出天文秒数，直接相加会溢出 panic。
+        let rate = self.min_bytes_per_sec.max(1) as f64;
+        let transfer = Duration::from_secs_f64(bytes as f64 / rate).min(self.max);
+        (self.allowance + transfer).clamp(self.min, self.max)
+    }
+}
+
+/// 与体积无关的固定开销：连接、TLS 握手、服务端接收与落盘排队。
+const BULK_TRANSFER_ALLOWANCE: Duration = Duration::from_secs(30);
+
+/// 体积未知时的兜底总预算（云端恢复在开工前拿不到快照体积）。
+const BULK_UNKNOWN_SIZE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
+/// 传输总预算下限：小文件也要留够握手与服务端提交时间。
+const BULK_TIMEOUT_MIN: Duration = Duration::from_secs(60);
+
+/// 上传的最小假设吞吐：32 KiB/s ≈ 256 kbps，覆盖弱网移动链路上持续慢速的上传。
+pub const UPLOAD_MIN_BYTES_PER_SEC: u64 = 32 * 1024;
+
+/// 下载的最小假设吞吐：128 KiB/s ≈ 1 Mbps，下行链路通常比上行快一档。
+pub const DOWNLOAD_MIN_BYTES_PER_SEC: u64 = 128 * 1024;
+
+/// 上传总预算上限：按 32 KiB/s 换算，它锁定本方案愿意等待的最慢上传约为 225 MiB。
+const UPLOAD_TIMEOUT_MAX: Duration = Duration::from_secs(2 * 60 * 60);
+
+/// 下载总预算上限：整首曲目通常几十 MB，1 小时封顶已覆盖极端慢速下行。
+const DOWNLOAD_TIMEOUT_MAX: Duration = Duration::from_secs(60 * 60);
+
+/// 生产上传预算。
+const UPLOAD_BUDGET: TransferBudget = TransferBudget {
+    min_bytes_per_sec: UPLOAD_MIN_BYTES_PER_SEC,
+    allowance: BULK_TRANSFER_ALLOWANCE,
+    min: BULK_TIMEOUT_MIN,
+    max: UPLOAD_TIMEOUT_MAX,
+    unknown_size: BULK_UNKNOWN_SIZE_TIMEOUT,
+};
+
+/// 生产下载预算。
+const DOWNLOAD_BUDGET: TransferBudget = TransferBudget {
+    min_bytes_per_sec: DOWNLOAD_MIN_BYTES_PER_SEC,
+    allowance: BULK_TRANSFER_ALLOWANCE,
+    min: BULK_TIMEOUT_MIN,
+    max: DOWNLOAD_TIMEOUT_MAX,
+    unknown_size: BULK_UNKNOWN_SIZE_TIMEOUT,
+};
+
+impl Default for BulkBudget {
+    fn default() -> Self {
+        Self {
+            download: DOWNLOAD_BUDGET,
+            upload: UPLOAD_BUDGET,
+        }
+    }
+}
+
+// 预算常量的大小关系是这套口径的一部分：写反了会让下限高于上限、兜底预算超过封顶，
+// 或者上下行用同一个阈值而失去意义。放进编译期断言，而不是等测试跑挂才发现。
+const _: () = {
+    assert!(UPLOAD_MIN_BYTES_PER_SEC < DOWNLOAD_MIN_BYTES_PER_SEC);
+    assert!(BULK_TIMEOUT_MIN.as_secs() < BULK_UNKNOWN_SIZE_TIMEOUT.as_secs());
+    assert!(BULK_UNKNOWN_SIZE_TIMEOUT.as_secs() < DOWNLOAD_TIMEOUT_MAX.as_secs());
+    assert!(DOWNLOAD_TIMEOUT_MAX.as_secs() < UPLOAD_TIMEOUT_MAX.as_secs());
+};
 
 impl WebdavClient {
     pub fn new(base_url: String, username: Option<String>, password: Option<String>) -> Self {
@@ -53,8 +165,9 @@ impl WebdavClient {
             });
         let bulk_client = Client::builder()
             .connect_timeout(Duration::from_secs(10))
-            // 不用 timeout()：它覆盖整个响应体，GB 级快照/曲库文件会被掐断。
-            // keepalive 让"连上后对端不再发字节"的死连接由 OS 探测出来。
+            // 不在客户端上设 timeout()：它会连带套住 PUT 的整个请求体（见 BulkBudget 文档）。
+            // 终止条件按请求逐个施加——下载用空闲窗口、上传用按体积推导的总预算。
+            // keepalive 只是 OS 层补充：能兜住「对端完全不再回包」，兜不住应用层停滞。
             .tcp_keepalive(Duration::from_secs(30))
             .tcp_keepalive_interval(Duration::from_secs(10))
             .build()
@@ -65,6 +178,7 @@ impl WebdavClient {
         Self {
             client,
             bulk_client,
+            bulk_budget: BulkBudget::default(),
             base_url: base_url.trim_end_matches('/').to_string(),
             username,
             password,
@@ -80,6 +194,17 @@ impl WebdavClient {
         } else {
             format!("网络请求失败: {}", e)
         }
+    }
+
+    /// 传输超时的可读文案（CR-007）。点明「等了多久」与「传输没完成」，
+    /// 让用户区分"链路太慢"与笼统的"网络请求失败"。
+    fn bulk_stall_message(what: &str, budget: Duration) -> String {
+        format!(
+            "{}超时：服务器在 {} 秒内没有完成传输，请稍后重试或换用更好的网络",
+            what,
+            // 测试会注入亚秒预算，生产值恒 >= 60s；取 max 只为不把"0 秒"甩给用户看
+            budget.as_secs().max(1)
+        )
     }
 
     /// 拼接 base_url 与子路径。统一替代原先散落各处的 unwrap 链——
@@ -335,17 +460,26 @@ impl WebdavClient {
     /// 用于云端文件透明缓存与「服务器不支持 Range」时的整文件降级：
     /// 播放 WebDAV 歌曲时后台异步拉取完整文件，
     /// 下次播放同一首歌即可命中本地缓存，实现「零网络请求」秒开。
-    /// 走 bulk_client（不设总超时，靠 TCP keepalive 探测死连接），大文件不会被 60s 掐断。
+    /// 走 bulk_client + 按体积推导的总预算（CR-007）：`timeout` 覆盖整次传输，
+    /// 所以体积已知就按「体积 / 最小假设吞吐」给足时间（慢速但持续有进展不会被误杀），
+    /// 体积未知走兜底预算；无论哪种，挂死的连接都会在明确时间内返回可读错误。
+    /// `expected_bytes` 传 DB 记录或 PROPFIND 得到的远端文件大小。
     /// 返回写入的字节数。
-    pub fn download_to_file(&self, file_url: &str, dest: &Path) -> Result<u64, String> {
+    pub fn download_to_file(
+        &self,
+        file_url: &str,
+        dest: &Path,
+        expected_bytes: Option<u64>,
+    ) -> Result<u64, String> {
         // 只重试"还没开始传字节"的失败：状态码 429/5xx 与连接层错误。
         // 半路断开的响应体不能在这里重连（没有 Range 续传），交给上层的临时文件校验兜底。
         const DL_BASE: Duration = Duration::from_millis(500);
         const DL_MAX: Duration = Duration::from_secs(8);
         const DL_RETRY_AFTER_CAP: Duration = Duration::from_secs(15);
+        let budget = self.bulk_budget.download.total_for(expected_bytes);
         let mut retries: u32 = 0;
         let mut resp = loop {
-            let req = self.apply_auth(self.bulk_client.get(file_url));
+            let req = self.apply_auth(self.bulk_client.get(file_url).timeout(budget));
             match req.send() {
                 Ok(r) => {
                     let status = r.status();
@@ -368,7 +502,10 @@ impl WebdavClient {
                     );
                     std::thread::sleep(delay);
                 }
-                Err(e) if (e.is_connect() || e.is_timeout()) && retries < DOWNLOAD_MAX_RETRIES => {
+                // 只重连"握手阶段就失败"的错误（含 connect 超时，单次最多 10s）。
+                // 预算耗尽的停滞不重试：那说明服务器已经接了请求却不给数据，
+                // 重试只会把最坏等待时间乘以 (1+重试次数)，把前端"处理中"挂死更久（CR-007）。
+                Err(e) if e.is_connect() && retries < DOWNLOAD_MAX_RETRIES => {
                     retries += 1;
                     let delay = exp_backoff(retries, DL_BASE, DL_MAX);
                     tracing::debug!(
@@ -379,6 +516,7 @@ impl WebdavClient {
                     );
                     std::thread::sleep(delay);
                 }
+                Err(e) if e.is_timeout() => return Err(Self::bulk_stall_message("下载", budget)),
                 Err(e) => return Err(WebdavClient::describe_reqwest_error(&e)),
             }
         };
@@ -393,9 +531,16 @@ impl WebdavClient {
         }
         let mut file =
             File::create(dest).map_err(|e| format!("Failed to create cache file: {}", e))?;
-        let bytes = resp
-            .copy_to(&mut file)
-            .map_err(|e| format!("Download write failed: {}", e))?;
+        // 总预算同样覆盖响应体读取（reqwest 用 total_timeout 包住整个 body 流），
+        // 所以「服务器吐完一半就沉默」会在预算到点时返回可读错误，而不是把线程挂到永远。
+        // 半截文件由调用方按 Err 分支删除（缓存侧删 .tmp，恢复侧删 .download）。
+        let bytes = resp.copy_to(&mut file).map_err(|e| {
+            if e.is_timeout() {
+                Self::bulk_stall_message("下载", budget)
+            } else {
+                format!("Download write failed: {}", e)
+            }
+        })?;
         Ok(bytes)
     }
 
@@ -419,7 +564,12 @@ impl WebdavClient {
     }
 
     /// PUT：上传文件内容到指定 URL（上传 DB 快照用）。
-    /// 走 bulk_client：快照可能有上百 MB，60s 总超时会把慢速上传掐断在半程。
+    ///
+    /// 终止条件与下载不同（CR-007 建议 4：上传/下载不共用一个粗粒度策略）。带请求体的请求
+    /// 在 blocking reqwest 里只在发送前建立一次 deadline，并驱动完整个 body，所以这里的
+    /// `timeout` 是**覆盖整次上传的总预算**——必须按体积换算，固定值会把慢速大快照掐死。
+    /// `expected_bytes` 取调用方已经知道的体积（快照的 file_size、校验和的字节数）；
+    /// 传 None 时走体积未知的兜底预算。
     ///
     /// body 收 `Into<Body>` 而不是 `Vec<u8>`：上百 MB 至 GiB 级的快照读进内存再克隆一份，
     /// 峰值内存就是「两份完整数据库」，低内存设备上进程会被系统直接杀掉（CR-004）。
@@ -428,11 +578,22 @@ impl WebdavClient {
         &self,
         file_url: &str,
         body: B,
+        expected_bytes: Option<u64>,
     ) -> Result<(), String> {
-        let req = self.apply_auth(self.bulk_client.put(file_url).body(body.into()));
-        let resp = req
-            .send()
-            .map_err(|e| format!("PUT request failed: {}", e))?;
+        let budget = self.bulk_budget.upload.total_for(expected_bytes);
+        let req = self.apply_auth(
+            self.bulk_client
+                .put(file_url)
+                .body(body.into())
+                .timeout(budget),
+        );
+        let resp = req.send().map_err(|e| {
+            if e.is_timeout() {
+                Self::bulk_stall_message("上传", budget)
+            } else {
+                format!("PUT request failed: {}", e)
+            }
+        })?;
         if resp.status().is_success() {
             Ok(())
         } else {
@@ -787,5 +948,283 @@ mod tests {
     fn content_range_start_handles_wildcard_and_garbage() {
         assert_eq!(parse_content_range_start("bytes */1465152"), None);
         assert_eq!(parse_content_range_start("garbage"), None);
+    }
+
+    /// CR-007：大文件传输的终止条件。
+    ///
+    /// 夹具全部走 loopback 上的自建故障服务器（审查报告建议 5「连接建立后不再传输数据」）：
+    /// 只完成 TCP 握手就沉默的连接，keepalive 探不到、请求会永远挂着，正是这条整改要治的形态。
+    /// 用例把预算注入成毫秒级——终止条件与具体数值无关，等满生产的 90s 只是让套件变慢。
+    mod bulk_transfer_termination {
+        use super::*;
+        use crate::db::test_util::TempDir;
+        use std::io::Write;
+        use std::net::{TcpListener, TcpStream};
+        use std::time::Instant;
+
+        /// 接受连接后一个字节都不读、也不回应的服务器。
+        fn silent_server() -> String {
+            listen_loopback(|listener| {
+                let mut held = Vec::new();
+                for stream in listener.incoming().flatten() {
+                    // 握住连接不关闭：关掉会让客户端看到 EOF，测的就不是停滞而是断链
+                    held.push(stream);
+                }
+            })
+        }
+
+        /// 每隔 `gap` 才吐 1 字节的慢速服务器：用来同时验证"预算内放行"和"超预算掐断"。
+        fn trickling_server(bytes: usize, gap: Duration) -> String {
+            listen_loopback(move |listener| {
+                let Some(Ok(mut stream)) = listener.incoming().next() else {
+                    return;
+                };
+                // 先把请求读干净再回应：带着未读数据关闭套接字，Windows 会发 RST 而不是 FIN，
+                // 客户端可能因此丢掉已经收到的响应体，测的就不是慢速而是断链了。
+                if drain_request(&mut stream).is_err() {
+                    return;
+                }
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    bytes
+                );
+                if stream.write_all(head.as_bytes()).is_err() {
+                    return;
+                }
+                for _ in 0..bytes {
+                    std::thread::sleep(gap);
+                    if stream.write_all(b"x").is_err() {
+                        return;
+                    }
+                }
+                // 写完即关闭：Content-Length 已满足，这里是正常结束而不是截断
+            })
+        }
+
+        /// 读到请求头结束标记（`\r\n\r\n`）为止。
+        fn drain_request(stream: &mut TcpStream) -> io::Result<()> {
+            let mut buf = [0u8; 512];
+            let mut seen = Vec::new();
+            loop {
+                let n = stream.read(&mut buf)?;
+                if n == 0 {
+                    return Ok(());
+                }
+                seen.extend_from_slice(&buf[..n]);
+                if seen.windows(4).any(|w| w == b"\r\n\r\n") {
+                    return Ok(());
+                }
+            }
+        }
+
+        /// 起一个只监听 127.0.0.1:0 的线程级夹具，返回 base URL。
+        /// 处理线程随测试进程结束一起退出，连接由调用方在闭包里逐个接手。
+        fn listen_loopback<F>(handler: F) -> String
+        where
+            F: FnOnce(TcpListener) + Send + 'static,
+        {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("loopback 端口应可绑定");
+            let addr = listener.local_addr().expect("loopback 地址应可查询");
+            std::thread::spawn(move || handler(listener));
+            format!("http://{}", addr)
+        }
+
+        /// 毫秒级的传输预算：终止条件与具体数值无关，生产的 60s 起步等下去只是让套件变慢。
+        fn client_at(base: &str) -> WebdavClient {
+            // reqwest 以 rustls-no-provider 构建，客户端在测试进程里也要先装好加密后端（ADR-1）
+            crate::install_crypto_provider();
+            let fast = TransferBudget {
+                min_bytes_per_sec: 1_000_000,
+                allowance: Duration::from_millis(50),
+                min: Duration::from_millis(250),
+                max: Duration::from_secs(2),
+                unknown_size: Duration::from_millis(250),
+            };
+            let mut client = WebdavClient::new(base.to_string(), None, None);
+            client.bulk_budget.download = fast;
+            client.bulk_budget.upload = fast;
+            client
+        }
+
+        /// 生产默认值必须是文档口径里的那几个常量：改动会同时影响备份、缓存与恢复路径。
+        /// （常量之间的大小关系另有编译期断言把关。）
+        #[test]
+        fn default_budget_matches_the_documented_constants() {
+            let budget = BulkBudget::default();
+            assert_eq!(budget.upload, UPLOAD_BUDGET);
+            assert_eq!(budget.download, DOWNLOAD_BUDGET);
+        }
+
+        #[test]
+        fn transfer_budget_grows_with_size_and_is_bounded() {
+            // 4 MiB / 32 KiB·s⁻¹ = 128s，再加固定开销
+            assert_eq!(
+                UPLOAD_BUDGET.total_for(Some(4 * 1024 * 1024)),
+                BULK_TRANSFER_ALLOWANCE + Duration::from_secs(128)
+            );
+            // 同一份 4 MiB 走下载预算：下行假设吞吐更高，预算更短
+            assert_eq!(
+                DOWNLOAD_BUDGET.total_for(Some(4 * 1024 * 1024)),
+                BULK_TRANSFER_ALLOWANCE + Duration::from_secs(32)
+            );
+            // 256 MiB 快照 → 8192s，但被上传封顶夹住
+            assert_eq!(
+                UPLOAD_BUDGET.total_for(Some(256 * 1024 * 1024)),
+                UPLOAD_TIMEOUT_MAX
+            );
+            // 体积再小也有下限（小文件也要留够握手与服务端提交时间），
+            // 体积再大也有封顶（含 u64::MAX 这种荒谬输入，不能溢出 panic）
+            assert_eq!(UPLOAD_BUDGET.total_for(Some(0)), BULK_TIMEOUT_MIN);
+            assert_eq!(UPLOAD_BUDGET.total_for(Some(1)), BULK_TIMEOUT_MIN);
+            assert_eq!(UPLOAD_BUDGET.total_for(Some(64 * 1024)), BULK_TIMEOUT_MIN);
+            assert_eq!(UPLOAD_BUDGET.total_for(Some(u64::MAX)), UPLOAD_TIMEOUT_MAX);
+            assert_eq!(
+                DOWNLOAD_BUDGET.total_for(Some(u64::MAX)),
+                DOWNLOAD_TIMEOUT_MAX
+            );
+            // 体积未知走兜底预算，而不是"没有预算"
+            assert_eq!(UPLOAD_BUDGET.total_for(None), BULK_UNKNOWN_SIZE_TIMEOUT);
+            assert_eq!(DOWNLOAD_BUDGET.total_for(None), BULK_UNKNOWN_SIZE_TIMEOUT);
+            // 单调：更大的体积绝不能拿到更短的预算
+            for budget in [UPLOAD_BUDGET, DOWNLOAD_BUDGET] {
+                let mut last = Duration::ZERO;
+                for bytes in [0u64, 1, 4096, 1 << 20, 1 << 26, 1 << 30, u64::MAX] {
+                    let total = budget.total_for(Some(bytes));
+                    assert!(
+                        total >= last,
+                        "{} 字节的预算 {:?} 短于上一档 {:?}",
+                        bytes,
+                        total,
+                        last
+                    );
+                    last = total;
+                }
+            }
+        }
+
+        #[test]
+        fn stalled_download_fails_within_its_total_budget() {
+            let dir = TempDir::new("bulk_stalled_download");
+            let dest = dir.path().join("partial.bin");
+            let base = silent_server();
+            let client = client_at(&base);
+
+            let started = Instant::now();
+            let err = client
+                .download_to_file(&format!("{}/stalled", base), &dest, Some(4096))
+                .expect_err("服务器接受连接后不再发字节，下载必须失败");
+            let elapsed = started.elapsed();
+
+            assert!(err.contains("超时"), "文案要让用户看出是超时：{}", err);
+            assert!(err.contains("下载"), "文案要指明失败阶段：{}", err);
+            // 预算耗尽即返回，不再叠加重试：停滞重试只会把前端"处理中"挂得更久
+            assert!(
+                elapsed < Duration::from_secs(5),
+                "停滞下载耗时 {:?}，终止条件未生效",
+                elapsed
+            );
+            // 验收点「不留下本地半成品」：连文件都不该创建（响应头都没等到）
+            assert!(!dest.exists(), "停滞下载不应落地任何本地文件");
+        }
+
+        #[test]
+        fn stalled_upload_fails_within_the_total_budget() {
+            let base = silent_server();
+            let client = client_at(&base);
+
+            let started = Instant::now();
+            let err = client
+                .put_file(&format!("{}/staged", base), vec![7u8; 4096], Some(4096))
+                .expect_err("服务器不再收字节，上传必须失败");
+            let elapsed = started.elapsed();
+
+            assert!(err.contains("超时"), "文案要让用户看出是超时：{}", err);
+            assert!(err.contains("上传"), "文案要指明失败阶段：{}", err);
+            assert!(
+                elapsed < Duration::from_secs(5),
+                "停滞上传耗时 {:?}，终止条件未生效",
+                elapsed
+            );
+        }
+
+        #[test]
+        fn unknown_size_transfers_also_get_a_deadline() {
+            let base = silent_server();
+            let client = client_at(&base);
+            let started = Instant::now();
+            let err = client
+                .put_file(&format!("{}/staged", base), vec![7u8; 64], None)
+                .expect_err("体积未知的上传同样要有终止条件");
+            assert!(err.contains("超时"), "文案要让用户看出是超时：{}", err);
+
+            let dir = TempDir::new("bulk_unknown_size_download");
+            let err = client
+                .download_to_file(
+                    &format!("{}/stalled", base),
+                    &dir.path().join("out.bin"),
+                    None,
+                )
+                .expect_err("体积未知的下载同样要有终止条件");
+            assert!(err.contains("超时"), "文案要让用户看出是超时：{}", err);
+            // 必须早于 OS 兜底：bulk_client 的 tcp_keepalive 是 30s，若测到 30s 上下，
+            // 说明是内核把连接掐了而不是应用层预算在生效（keepalive 兜不住应用层停滞）。
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "体积未知的传输耗时 {:?}，终止条件未生效",
+                started.elapsed()
+            );
+        }
+
+        /// 验收点「慢但持续有进展不被误杀」：预算按体积给足时间后，
+        /// 每 40ms 才吐 1 字节的下载必须完整走完（12 字节约 0.5s，远超 250ms 的下限预算）。
+        #[test]
+        fn trickling_download_inside_its_budget_completes() {
+            let dir = TempDir::new("bulk_trickle_download");
+            let dest = dir.path().join("slow.bin");
+            let base = trickling_server(12, Duration::from_millis(40));
+            let mut client = client_at(&base);
+            // 12 字节的 trickle ≈ 0.5s：给它 2s 总预算
+            client.bulk_budget.download.allowance = Duration::from_secs(2);
+            client.bulk_budget.download.min = Duration::from_secs(2);
+
+            let bytes = client
+                .download_to_file(&format!("{}/slow", base), &dest, Some(12))
+                .expect("预算内的慢速下载不能被掐断");
+            assert_eq!(bytes, 12);
+            assert_eq!(
+                std::fs::metadata(&dest).expect("文件应存在").len(),
+                12,
+                "下载内容必须完整落地"
+            );
+        }
+
+        /// 取舍的另一面，写成测试固定住：低于最小假设吞吐（这里是"2s 传 12 字节"≈ 6 B/s）
+        /// 的传输被判定为传不完并掐断——blocking API 没有 read_timeout，做不到按进展放行。
+        /// 掐断时必须在预算内返回，并且**已写的半截文件由调用方删除**（本层保留半成品）。
+        #[test]
+        fn download_below_the_assumed_throughput_is_cut_off_at_its_budget() {
+            let dir = TempDir::new("bulk_trickle_timeout");
+            let dest = dir.path().join("half.bin");
+            let base = trickling_server(40, Duration::from_millis(100));
+            let mut client = client_at(&base);
+            client.bulk_budget.download.allowance = Duration::from_millis(500);
+            client.bulk_budget.download.min = Duration::from_millis(500);
+            client.bulk_budget.download.max = Duration::from_secs(1);
+
+            let started = Instant::now();
+            let err = client
+                .download_to_file(&format!("{}/slow", base), &dest, Some(40))
+                .expect_err("远低于假设吞吐的传输应当被预算掐断");
+            assert!(err.contains("超时"), "文案要让用户看出是超时：{}", err);
+            // 半途停滞与「连不上服务器」必须是两条文案：这里已经拿到响应头并收到过字节，
+            // 若退化成通用的"连接超时"，用户会去查地址和证书，而实际问题是链路太慢。
+            assert!(err.contains("下载"), "文案要指明失败阶段：{}", err);
+            assert!(err.contains("秒"), "文案要让用户看出等了多久：{}", err);
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "掐断必须及时，实际耗时 {:?}",
+                started.elapsed()
+            );
+        }
     }
 }

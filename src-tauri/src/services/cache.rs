@@ -162,7 +162,8 @@ impl AudioCache {
         let final_path = self.cache_path(media_file_id);
 
         // 任何失败路径都要清掉临时文件，否则坏 .tmp 会长期占盘并被后续误用
-        let result = client.download_to_file(file_url, &tmp);
+        // 体积同时用于推导传输总预算：服务器停滞时请求要在明确时间内返回（CR-007）
+        let result = client.download_to_file(file_url, &tmp, expected_size);
         let bytes = match result {
             Ok(bytes) => bytes,
             Err(e) => {

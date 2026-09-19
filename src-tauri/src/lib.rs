@@ -237,6 +237,20 @@ pub extern "system" fn Java_com_hao_lumo_MainActivity_initLumoAudioContext<'loca
     tracing::info!("[LumoContext] ndk_context 已初始化（cpal/oboe 可用）");
 }
 
+/// ADR-1(MA0)：reqwest 以 rustls-no-provider 构建，需在任意 TLS 使用前进程级安装加密后端。
+/// ring 为纯 Rust 实现，Windows/Android 构建路径一致。
+///
+/// 独立成函数是因为 `reqwest::blocking::Client` 在单元测试里构建同样要求它已就绪；
+/// 重复安装（测试与 `run()` 共用一个进程）返回 Err，那不是错误而是「已经装好了」。
+pub(crate) fn install_crypto_provider() {
+    if rustls::crypto::ring::default_provider()
+        .install_default()
+        .is_err()
+    {
+        tracing::debug!("rustls ring 加密后端已安装，跳过重复安装");
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // debug 构建下让 panic 输出 backtrace 到 logcat（RustStdoutStderr）
@@ -245,11 +259,7 @@ pub fn run() {
 
     tracing_subscriber::fmt::init();
 
-    // ADR-1(MA0)：reqwest 以 rustls-no-provider 构建，需在任意 TLS 使用前
-    // 进程级安装加密后端。ring 为纯 Rust 实现，Windows/Android 构建路径一致。
-    rustls::crypto::ring::default_provider()
-        .install_default()
-        .expect("failed to install rustls ring crypto provider");
+    install_crypto_provider();
 
     tauri::Builder::default()
         .setup(|app| {
