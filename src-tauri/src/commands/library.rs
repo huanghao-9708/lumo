@@ -1387,8 +1387,93 @@ pub enum Playability {
     Unavailable,
 }
 
+/// 一次批量查询里为某首曲目取得的判定输入
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PlayabilityRow {
+    track_id: i64,
+    media_file_id: Option<i64>,
+    kind: Option<String>,
+    root_uri: Option<String>,
+    availability: Option<String>,
+    file_size: Option<i64>,
+}
+
+impl PlayabilityRow {
+    /// 缓存有效性校验用的期望体积；DB 未记体积时为 None（退化为「非空即有效」）
+    fn expected_size(&self) -> Option<u64> {
+        match self.file_size.unwrap_or(0) {
+            size if size > 0 => Some(size as u64),
+            _ => None,
+        }
+    }
+}
+
+/// 取一批 track 的判定输入。`kind` 经 `media_files → sources` 两段 LEFT JOIN 得来，
+/// 因此曲目没有主文件时 kind 也是 None（不是漏 JOIN）。
+fn query_playability_rows(
+    conn: &rusqlite::Connection,
+    ids: &[i64],
+) -> Result<Vec<PlayabilityRow>, AppError> {
+    let sql = format!(
+        "SELECT t.id, m.id, s.kind, s.root_uri, m.availability, m.file_size
+         FROM tracks t
+         LEFT JOIN media_files m ON m.id = COALESCE(t.primary_file_id, (SELECT mf.id FROM media_files mf WHERE mf.track_id = t.id ORDER BY mf.id LIMIT 1))
+         LEFT JOIN sources s ON s.id = m.source_id
+         WHERE t.id IN ({})",
+        vec!["?"; ids.len()].join(",")
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(ids.iter()), |row| {
+        Ok(PlayabilityRow {
+            track_id: row.get(0)?,
+            media_file_id: row.get(1)?,
+            kind: row.get(2)?,
+            root_uri: row.get(3)?,
+            availability: row.get(4)?,
+            file_size: row.get(5)?,
+        })
+    })?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+/// 纯判定（单测接缝）：输入已全部算好，本函数不做任何 I/O。
+///
+/// 本地曲目的存在性**不再逐曲 stat**，而是用扫描器写下的 `media_files.availability`
+/// 加上一次「来源根目录是否还在」的探测（30k 首机械盘曲库里每条来源只需 1 次 stat，
+/// 旧实现是每条 1 次、单条 10–20 ms）。整盘拔出 / 挂载点消失这类情况一次根目录探测就能判出。
+/// 已知代价：在库外手工删除单个文件时，置灰要等下次扫描才更新——此时点击仍会被
+/// `playback_play` 的打开失败路径拦下并提示，不会静默播放失败。
+///
+/// 云端曲目只看缓存（含体积校验），与旧实现一致，不受 availability 影响。
+fn classify_playability(
+    row: &PlayabilityRow,
+    root_reachable: bool,
+    cache_hit: bool,
+) -> Playability {
+    match (row.kind.as_deref(), row.media_file_id) {
+        (Some("local"), _) => {
+            if root_reachable && row.availability.as_deref() == Some("available") {
+                Playability::Local
+            } else {
+                Playability::Unavailable
+            }
+        }
+        (Some("webdav"), Some(_)) => {
+            if cache_hit {
+                Playability::Cached
+            } else {
+                Playability::Remote
+            }
+        }
+        _ => Playability::Unavailable,
+    }
+}
+
 /// [MA3 A3-3] 批量查询歌曲的可播性状态（本地存在 / 已缓存 / 远端流播 / 不可用）
-#[tauri::command]
+///
+/// `#[tauri::command(async)]`：sync 命令跑在主线程且串行（见 `library_get_insights` 上方注释），
+/// 本命令要对整屏曲目做文件系统判定，留在主线程就是一次界面冻结。
+#[tauri::command(async)]
 pub fn library_get_playability(
     db_state: State<'_, DbState>,
     cache_state: State<'_, crate::services::cache::AudioCacheState>,
@@ -1400,62 +1485,256 @@ pub fn library_get_playability(
         return Ok(map);
     }
 
-    let conn = db_state.db.get()?;
-    let cache = cache_state
-        .cache
-        .lock()
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-
-    for chunk in track_ids.chunks(500) {
-        let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-        // media_files 无 path 列：完整路径 = root_uri + '/' + relative_path（与
-        // library_get_track_file_info 等命令的拼接口径一致），下游 Path::join(p) 的
-        // p 即相对路径。
-        let sql = format!(
-            "SELECT t.id, m.id, s.kind, s.root_uri, m.relative_path, m.file_size
-             FROM tracks t
-             LEFT JOIN media_files m ON m.id = COALESCE(t.primary_file_id, (SELECT mf.id FROM media_files mf WHERE mf.track_id = t.id ORDER BY mf.id LIMIT 1))
-             LEFT JOIN sources s ON s.id = m.source_id
-             WHERE t.id IN ({})",
-            placeholders
-        );
-
-        let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map(rusqlite::params_from_iter(chunk.iter()), |row| {
-            let track_id: i64 = row.get(0)?;
-            let media_file_id: Option<i64> = row.get(1)?;
-            let kind: Option<String> = row.get(2)?;
-            let root_uri: Option<String> = row.get(3)?;
-            let path: Option<String> = row.get(4)?;
-            let file_size: Option<i64> = row.get(5)?;
-            Ok((track_id, media_file_id, kind, root_uri, path, file_size))
-        })?;
-
-        for r in rows {
-            let (track_id, media_file_id, kind, root_uri, path, file_size) = r?;
-            let status = match (kind.as_deref(), media_file_id, root_uri, path) {
-                (Some("local"), _, Some(root), Some(p)) => {
-                    let full_path = std::path::Path::new(&root).join(p);
-                    if full_path.exists() {
-                        Playability::Local
-                    } else {
-                        Playability::Unavailable
-                    }
-                }
-                (Some("webdav"), Some(mf_id), _, _) => {
-                    // 带 file_size 校验：否则截断缓存会被标成"已缓存"，离线时才发现放不出来
-                    let expected_size = file_size.unwrap_or(0).max(0) as u64;
-                    if cache.is_cached(mf_id, (expected_size > 0).then_some(expected_size)) {
-                        Playability::Cached
-                    } else {
-                        Playability::Remote
-                    }
-                }
-                _ => Playability::Unavailable,
-            };
-            map.insert(track_id, status);
+    let rows = {
+        let conn = db_state.db.get()?;
+        let mut rows = Vec::with_capacity(track_ids.len());
+        for chunk in track_ids.chunks(500) {
+            rows.extend(query_playability_rows(&conn, chunk)?);
         }
+        rows
+    };
+
+    // 缓存查询集中在这一把短锁里问完：它是唯一需要与「正在写缓存」互斥的部分。
+    // 旧实现把整轮循环（含逐曲磁盘探测）罩在锁内，可播性查询能拖住 playback_play。
+    let cached_files: std::collections::HashSet<i64> = {
+        let cache = cache_state
+            .cache
+            .lock()
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        rows.iter()
+            .filter(|row| row.kind.as_deref() == Some("webdav"))
+            .filter(|row| {
+                row.media_file_id
+                    .is_some_and(|mf| cache.is_cached(mf, row.expected_size()))
+            })
+            .filter_map(|row| row.media_file_id)
+            .collect()
+    };
+
+    // 每个来源根目录只探测一次，整批共用
+    let mut roots: HashMap<&str, bool> = HashMap::new();
+    for row in &rows {
+        let root_reachable = match row.kind.as_deref() {
+            Some("local") => match row.root_uri.as_deref() {
+                Some(root) => *roots
+                    .entry(root)
+                    .or_insert_with(|| std::path::Path::new(root).exists()),
+                None => false,
+            },
+            _ => false,
+        };
+        let cache_hit = row
+            .media_file_id
+            .is_some_and(|mf| cached_files.contains(&mf));
+        map.insert(
+            row.track_id,
+            classify_playability(row, root_reachable, cache_hit),
+        );
     }
 
     Ok(map)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::test_util::TempDir;
+    use rusqlite::params;
+
+    fn row(
+        kind: Option<&str>,
+        availability: Option<&str>,
+        media_file_id: Option<i64>,
+    ) -> PlayabilityRow {
+        PlayabilityRow {
+            track_id: 1,
+            media_file_id,
+            kind: kind.map(str::to_string),
+            root_uri: kind.map(|_| "X:/lib".to_string()),
+            availability: availability.map(str::to_string),
+            file_size: Some(20_000_000),
+        }
+    }
+
+    #[test]
+    fn local_track_needs_both_scanner_verdict_and_reachable_root() {
+        let available = row(Some("local"), Some("available"), Some(7));
+        assert_eq!(
+            classify_playability(&available, true, false),
+            Playability::Local
+        );
+        // 盘被拔掉 / 挂载点消失：一次根目录探测就够，不必逐曲 stat
+        assert_eq!(
+            classify_playability(&available, false, false),
+            Playability::Unavailable
+        );
+    }
+
+    #[test]
+    fn local_track_marked_missing_or_corrupt_by_scan_is_unavailable() {
+        // 扫描器写入的三种非 available 状态都不该被标成可播
+        for state in ["missing", "offline", "error"] {
+            let row = row(Some("local"), Some(state), Some(7));
+            assert_eq!(
+                classify_playability(&row, true, true),
+                Playability::Unavailable,
+                "availability={state} 仍被判为可播"
+            );
+        }
+    }
+
+    /// 旧实现只看缓存、不看 availability（云端文件被扫描标记丢失也不改判）。
+    /// 这是刻意保留的口径：本命令只做性能改造，不顺手改语义。
+    #[test]
+    fn webdav_track_follows_cache_not_availability() {
+        let cached = row(Some("webdav"), Some("available"), Some(7));
+        assert_eq!(
+            classify_playability(&cached, false, true),
+            Playability::Cached
+        );
+        assert_eq!(
+            classify_playability(&cached, false, false),
+            Playability::Remote
+        );
+        // 根目录探测与云端无关：即使为 true 也不会把未缓存的云端曲目说成本地可播
+        assert_eq!(
+            classify_playability(&cached, true, false),
+            Playability::Remote
+        );
+    }
+
+    #[test]
+    fn track_without_primary_media_file_is_unavailable() {
+        // kind 来自 media_files → sources 的 LEFT JOIN，没有主文件时同为 None
+        let row = row(None, None, None);
+        assert_eq!(
+            classify_playability(&row, true, true),
+            Playability::Unavailable
+        );
+    }
+
+    #[test]
+    fn expected_size_absents_unknown_or_non_positive_file_size() {
+        let mut row = row(Some("webdav"), Some("available"), Some(7));
+        assert_eq!(row.expected_size(), Some(20_000_000));
+        row.file_size = Some(0);
+        assert_eq!(row.expected_size(), None);
+        row.file_size = Some(-1);
+        assert_eq!(row.expected_size(), None);
+        row.file_size = None;
+        assert_eq!(row.expected_size(), None);
+    }
+
+    /// 列名回归：本命令曾因写错 `media_files` 的列名（`m.path` 不存在）而在运行时炸。
+    /// 这里对真实 schema 跑一次查询，锁住所引用的列确实存在、且取值口径正确。
+    #[test]
+    fn playability_query_reads_real_schema_columns() {
+        let dir = TempDir::new("playability_sql");
+        let pool = crate::db::init_db(dir.db_path()).unwrap();
+        let conn = pool.get().unwrap();
+        let root = dir.path().to_string_lossy().to_string();
+
+        conn.execute(
+            "INSERT INTO sources (id, name, kind, root_uri) VALUES (1, '本地', 'local', ?1)",
+            params![&root],
+        )
+        .unwrap();
+        // media_files.track_id 有外键，先建曲目再建文件；primary_file_id 无外键，最后回填
+        conn.execute(
+            "INSERT INTO tracks (id, title, normalized_title) VALUES (101, 'A', 'a'), (102, 'B', 'b'), (103, 'C', 'c')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO media_files (id, source_id, track_id, relative_path, normalized_path,
+                                      file_name, file_size, availability)
+             VALUES (11, 1, 101, 'a.flac', 'a.flac', 'a.flac', 1234, 'available'),
+                    (12, 1, 102, 'b.flac', 'b.flac', 'b.flac', 0, 'missing')",
+            [],
+        )
+        .unwrap();
+        // 101 有 primary_file_id；102 故意留 NULL，验证 COALESCE 回退子查询取到 12；103 两路都无文件
+        conn.execute("UPDATE tracks SET primary_file_id = 11 WHERE id = 101", [])
+            .unwrap();
+
+        let rows = query_playability_rows(
+            &conn,
+            &[
+                101, 102, 103,
+                999, // 不存在的 id：不应报错，也不应出现在结果里
+            ],
+        )
+        .unwrap();
+        let by_track: HashMap<i64, &PlayabilityRow> =
+            rows.iter().map(|r| (r.track_id, r)).collect();
+        // 103 无任何媒体文件：LEFT JOIN 仍出一行（kind 为 NULL），由判定归入不可用；
+        // 只有查询里不存在的 999 才完全不出现。
+        assert_eq!(by_track.len(), 3, "只应过滤掉查询里不存在的 id");
+        let orphan = by_track.get(&103).unwrap();
+        assert_eq!(orphan.kind, None);
+        assert_eq!(
+            classify_playability(orphan, true, true),
+            Playability::Unavailable,
+            "没有主文件的曲目不能判为可播"
+        );
+
+        let present = by_track.get(&101).unwrap();
+        assert_eq!(present.kind.as_deref(), Some("local"));
+        assert_eq!(present.root_uri.as_deref(), Some(root.as_str()));
+        assert_eq!(present.availability.as_deref(), Some("available"));
+        assert_eq!(present.expected_size(), Some(1234));
+
+        let missing = by_track.get(&102).unwrap();
+        assert_eq!(
+            missing.media_file_id,
+            Some(12),
+            "primary_file_id 为空时应回退到该曲目的媒体文件"
+        );
+        assert_eq!(missing.availability.as_deref(), Some("missing"));
+        assert_eq!(missing.expected_size(), None, "0 体积不能当成有效期望值");
+    }
+
+    /// 判定必须来自 availability 而非「文件是否真的存在」：临时库里的 a.flac 并不在磁盘上，
+    /// 根目录存在 + available 仍判可播，扫描器标 missing 即判不可用。
+    #[test]
+    fn local_verdict_comes_from_availability_not_per_file_stat() {
+        let dir = TempDir::new("playability_root");
+        let pool = crate::db::init_db(dir.db_path()).unwrap();
+        let conn = pool.get().unwrap();
+        let root = dir.path().to_string_lossy().to_string();
+        conn.execute(
+            "INSERT INTO sources (id, name, kind, root_uri) VALUES (1, '本地', 'local', ?1)",
+            params![&root],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tracks (id, title, normalized_title) VALUES (101, 'A', 'a'), (102, 'B', 'b')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO media_files (id, source_id, track_id, relative_path, normalized_path,
+                                      file_name, file_size, availability)
+             VALUES (11, 1, 101, '不存在的文件.flac', 'x', 'x', 10, 'available'),
+                    (12, 1, 102, '也不存在.flac', 'y', 'y', 10, 'missing')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE tracks SET primary_file_id = CASE id WHEN 101 THEN 11 WHEN 102 THEN 12 END",
+            [],
+        )
+        .unwrap();
+
+        let rows = query_playability_rows(&conn, &[101, 102]).unwrap();
+        let verdicts: HashMap<i64, Playability> = rows
+            .iter()
+            .map(|r| {
+                let reachable = std::path::Path::new(r.root_uri.as_deref().unwrap()).exists();
+                (r.track_id, classify_playability(r, reachable, false))
+            })
+            .collect();
+        assert_eq!(verdicts[&101], Playability::Local);
+        assert_eq!(verdicts[&102], Playability::Unavailable);
+    }
 }
