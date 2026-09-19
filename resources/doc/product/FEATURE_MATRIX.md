@@ -131,7 +131,7 @@
 | G-15 | 首屏列表随曲库线性变慢：30k 首时取 200 条要 127.6 ms，约 95% 成本来自 SELECT 相关子查询在全表求值（同排序裸取 200 id 仅 6.4 ms） | P2 | B-20（性能基线已建立，见 `PERFORMANCE_BASELINE.md` §3.1） |
 | G-16 | 联网登记门禁只按「文件是否被清单点名」判定：在已登记文件里新增域名照样全绿，前端 `fetch` / `window.open` 完全不在扫描范围内，`github.com` 因此漏登记 | P2 | **已修** `3150c48`：门禁改**主机级白名单 + 调用点行为 ID 声明**，前后端共用 `NETWORK_BEHAVIOR.md` §1/§2 同一事实源；判定逻辑抽成纯函数并由 19 项 vitest 正反例锁住（`scripts/network-registry-rules.spec.mjs`）。残余见 `CODE_REVIEW_2026-09-19.md` §9.2 |
 | G-17 | `debug_webdav_probe`（MA0 Spike）未加 `#[cfg(debug_assertions)]`，release 二进制仍注册该命令，前端入口虽 DEV-only，命令面仍在 | P2 | I2（补门控或按 MA1 移除 MA0 Spike 模块）。已登记 `NETWORK_BEHAVIOR.md` §2H 与 §4 R-10 |
-| G-18 | `library_get_playability` 对**每首本地曲目**做一次 `Path::exists()`，且命令是 sync（Tauri v2 主线程串行）：真实库 32,466 首、来源 `F:\音乐【880G】` 上单条探测 11.7–20.9 ms，一批 500 条即 5.8–10 秒的界面冻结；同一轮循环还全程持有 `AudioCache` 锁，可拖住 `playback_play` | P1（打开大歌单/收藏、每次扫描后可播性失效时必现） | **已修** 本次提交：本地判定改读扫描器写下的 `media_files.availability` + **每个来源一次**根目录探测（同批 SQL 实测 4–6 ms）；加 `#[tauri::command(async)]` 移出主线程；缓存查询集中到一把短锁内问完。已知代价：库外手工删除单个文件时置灰延后到下次扫描，点击仍被 `playback_play` 的打开失败路径拦下。纯判定接缝 `classify_playability` 由 7 项单测锁住（6 条变异验证全部转红），含一次列名回归（该命令曾因 `m.path` 不存在在运行时炸） |
+| G-18 | `library_get_playability` 对**每首本地曲目**做一次 `Path::exists()`，且命令是 sync（Tauri v2 主线程串行）：真实库 32,466 首、来源 `F:\音乐【880G】` 上单条探测 11.7–20.9 ms，一批 500 条即 5.8–10 秒的界面冻结；同一轮循环还全程持有 `AudioCache` 锁，可拖住 `playback_play` | P1（打开大歌单/收藏、每次扫描后可播性失效时必现） | **已修** `8ad3119`：本地判定改读扫描器写下的 `media_files.availability` + **每个来源一次**根目录探测（同批 SQL 实测 4–6 ms）；加 `#[tauri::command(async)]` 移出主线程；缓存查询集中到一把短锁内问完。已知代价：库外手工删除单个文件时置灰延后到下次扫描，点击仍被 `playback_play` 的打开失败路径拦下。纯判定接缝 `classify_playability` 由 7 项单测锁住（6 条变异验证全部转红），含一次列名回归（该命令曾因 `m.path` 不存在在运行时炸） |
 
 ## 6. 复核待办
 
