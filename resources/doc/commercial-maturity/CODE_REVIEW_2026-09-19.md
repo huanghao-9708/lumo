@@ -292,7 +292,7 @@ WebDAV 凭据解析失败或扫描线程无法取得数据库连接时，代码�
 | CR-005 | 已关闭 | `fcb0eaa` | 拆 `validate_cached_path`（只校验，不 touch）与 `acquire_cached_path`（播放路径才刷新访问时间）；`is_cached` 走前者 | `status_queries_leave_mtime_alone`、`eviction_follows_real_playback_not_queries` | 仍依赖文件系统 mtime；独立 `last_access_at` 索引属后续优化 |
 | CR-006 | 已关闭 | `20c9f3c` | 扫描所有早退统一走 `finish_scan`：失败原因**既落库（`last_error`）也随 `scan-complete` 结构化事件下发**（`success` / `error_code` / `message` / `persisted`），前端只在 `persisted=false` 时用事件文案兜底 | Rust `scan_complete_payload_is_structured` 等 8 项 + `src/stores/player.spec.ts` 3 项（锁住「表里的文案」不被事件文案覆盖） | `finish_scan` 自身「所有早退都经过它」这条接线无自动化覆盖——构造 `AppHandle` 超出单元测试能力，只能靠纯函数接缝 + 代码审查 |
 | CR-007 | 已关闭 | `fe25e06` | 大文件传输按体积推导**总预算**（`TransferBudget::total_for`，含下限/上限/无尺寸兜底），下载与上传逐个请求施加；停滞时返回可理解的中文文案 | `mod bulk_transfer_termination` 7 项（loopback 静默 / 滴流服务器；含 `elapsed < 5s` 断言防 TCP keepalive 蒙混过关） | reqwest blocking 无 `read_timeout`，做不到真·空闲超时；用户取消令牌需 async 化。三类真实 WebDAV 服务端兼容矩阵仍为人工项 |
-| CR-008 | 已关闭 | 本次提交 | 门禁由「文件是否登记」升级为**主机级白名单 + 调用点行为 ID 声明**，并覆盖前端；判定逻辑抽成纯函数模块配正反例 | `scripts/network-registry-rules.spec.mjs` 19 项；另有 7 条门禁变异（新增域名 / 缺声明 / 删声明 / 前端新主机 / 删 §2 小节 / 主机挪行）全部转红 | 见下 §9.2 |
+| CR-008 | 已关闭 | `3150c48` | 门禁由「文件是否登记」升级为**主机级白名单 + 调用点行为 ID 声明**，并覆盖前端；判定逻辑抽成纯函数模块配正反例 | `scripts/network-registry-rules.spec.mjs` 19 项；另有 7 条门禁变异（新增域名 / 缺声明 / 删声明 / 前端新主机 / 删 §2 小节 / 主机挪行）全部转红 | 见下 §9.2 |
 
 ### 9.1 CR-008 的实现口径
 
