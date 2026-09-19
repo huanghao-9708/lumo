@@ -74,7 +74,16 @@ const NEW: &str = "https://cdn.new-service.io/ping";
   });
 
   it('回环 / 保留域是测试夹具，不算外联', () => {
-    for (const host of ['127.0.0.1', 'localhost', '::1', '0.0.0.0', 'nas.local', 'example.com']) {
+    for (const host of [
+      '127.0.0.1',
+      'localhost',
+      'lumo.localhost',
+      '::1',
+      '[::1]',
+      '0.0.0.0',
+      'nas.local',
+      'example.com',
+    ]) {
       expect(isLoopbackHost(host)).toBe(true);
     }
     expect(isLoopbackHost('music.163.com')).toBe(false);
@@ -209,6 +218,26 @@ describe('前后端共用同一事实源（验收标准三）', () => {
 `);
     // 未登记的主机只有一种错：清单里没有它。再叠一条「不属于 §2G」是重复告警。
     expect(sneaky.violations.map((v) => v.type)).toEqual(['undeclared-host']);
+  });
+
+  it('前端 URL 先存进变量也必须经过主机白名单', () => {
+    const sneaky = front(`
+<script setup lang="ts">
+const endpoint = 'https://telemetry.vendor.io/v1/ping';
+// 联网行为: §2G
+await fetch(endpoint);
+</script>
+`);
+    expect(sneaky.violations.map((v) => v.type)).toEqual(['undeclared-host']);
+
+    const registered = front(`
+<script setup lang="ts">
+const endpoint = 'https://api.github.com/repos/x/y/releases/latest';
+// 联网行为: §2G
+await fetch(endpoint);
+</script>
+`);
+    expect(registered.violations).toEqual([]);
   });
 
   it('前端只扫真正的调用点：设置页 placeholder 不是外联', () => {

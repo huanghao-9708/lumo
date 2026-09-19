@@ -820,8 +820,8 @@ fn record_scan_result(
     source_id: i64,
     failed: bool,
     failure_note: &str,
-) {
-    let result = if failed {
+) -> rusqlite::Result<()> {
+    let updated = if failed {
         conn.execute(
             "UPDATE sources SET last_error = ?1 WHERE id = ?2",
             rusqlite::params![failure_note, source_id],
@@ -831,10 +831,11 @@ fn record_scan_result(
             "UPDATE sources SET last_scan_at = datetime('now'), last_error = NULL WHERE id = ?1",
             rusqlite::params![source_id],
         )
-    };
-    if let Err(e) = result {
-        warn!("更新来源 {} 扫描状态失败: {}", source_id, e);
+    }?;
+    if updated == 0 {
+        return Err(rusqlite::Error::QueryReturnedNoRows);
     }
+    Ok(())
 }
 
 /// 一次扫描的终态（CR-006）。
@@ -912,8 +913,13 @@ pub(crate) fn finish_scan(app: &AppHandle, source_id: i64, outcome: ScanOutcome)
     let persisted = match app.try_state::<DbState>() {
         Some(db_state) => match db_state.db.get() {
             Ok(conn) => {
-                record_scan_result(&conn, source_id, !outcome.is_success(), outcome.note());
-                true
+                match record_scan_result(&conn, source_id, !outcome.is_success(), outcome.note()) {
+                    Ok(()) => true,
+                    Err(e) => {
+                        error!("来源 {} 的扫描终态未能写入数据库: {}", source_id, e);
+                        false
+                    }
+                }
             }
             // 池耗尽（CR-006 建议 5 的场景）：状态落不了库，但事件必须照发
             Err(e) => {
@@ -1023,7 +1029,7 @@ mod tests {
         .unwrap();
         let before = source_state(&conn, id);
 
-        record_scan_result(&conn, id, true, "凭据解析失败：该来源的密码凭据已失效");
+        record_scan_result(&conn, id, true, "凭据解析失败：该来源的密码凭据已失效").unwrap();
 
         let (last_scan_at, last_error) = source_state(&conn, id);
         assert_eq!(
@@ -1046,7 +1052,7 @@ mod tests {
         )
         .unwrap();
 
-        record_scan_result(&conn, id, false, "");
+        record_scan_result(&conn, id, false, "").unwrap();
 
         let (last_scan_at, last_error) = source_state(&conn, id);
         assert!(last_error.is_none(), "成功扫描要清掉 last_error");
@@ -1069,5 +1075,22 @@ mod tests {
         }
         assert_eq!(ScanOutcome::Success.note(), "");
         assert!(ScanOutcome::Success.is_success());
+    }
+
+    #[test]
+    fn scan_result_reports_database_write_failure() {
+        let (_dir, conn, id) = db_with_source("scan_outcome_write_failure");
+        conn.execute_batch(
+            "CREATE TRIGGER reject_source_status_update
+             BEFORE UPDATE ON sources
+             BEGIN
+               SELECT RAISE(FAIL, 'forced scan status write failure');
+             END;",
+        )
+        .unwrap();
+
+        let err = record_scan_result(&conn, id, true, "本次扫描失败")
+            .expect_err("数据库拒绝 UPDATE 时不能声称终态已持久化");
+        assert!(err.to_string().contains("forced scan status write failure"));
     }
 }

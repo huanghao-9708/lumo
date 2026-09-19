@@ -149,6 +149,32 @@ enum RestoreOutcome {
     },
 }
 
+/// 已下载快照的作用域清理器。
+///
+/// 恢复命令在下载完成后还有校验、连接池取连接、在线备份与替换等多个可能提前返回的步骤；
+/// 把删除动作绑到 Drop，才能保证任何 `?` 都不会把一份完整数据库遗留在数据目录里。
+struct DownloadedSnapshotGuard(PathBuf);
+
+impl DownloadedSnapshotGuard {
+    fn new(path: PathBuf) -> Self {
+        Self(path)
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for DownloadedSnapshotGuard {
+    fn drop(&mut self) {
+        if let Err(e) = std::fs::remove_file(&self.0) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!("恢复下载临时文件清理失败 {}: {}", self.0.display(), e);
+            }
+        }
+    }
+}
+
 /// 把已校验的快照灌进 live 库，并为失败留下退路。
 ///
 /// 副本删除口径（CR-001）：只有恢复成功、或失败后**已用副本回滚成功**，才允许删除本轮副本；
@@ -161,7 +187,9 @@ fn restore_with_backup(
 ) -> RestoreOutcome {
     let backup_path = SyncService::rescue_backup_path(app_dir);
     if let Err(e) = db.snapshot_to(&backup_path) {
-        // 副本没建成，live 库也还没被碰过：没有需要保留的东西，也没有需要删的文件。
+        // 在线 Backup API 直接写目标文件；磁盘满或 I/O 中断时可能先留下半截文件再报错。
+        // live 库尚未被碰过，这种文件没有救援价值，必须删掉，不能被后续列表冒充成可恢复副本。
+        discard_rescue_copy(&backup_path);
         return RestoreOutcome::Failed {
             message: format!("备份当前数据库失败，本地库未做任何改动: {}", e),
         };
@@ -196,11 +224,24 @@ fn restore_with_backup(
     }
 }
 
-/// 只在成功流程（含回滚成功）上调用。删除失败就原地留一个陈旧副本并告警：
-/// 宁可多占一份磁盘，也不谎称用户的历史数据已经被清理掉了。
+/// 清理本轮不再有价值的副本：恢复成功、回滚成功，或副本创建中途失败时调用。
+/// 删除失败就原地保留并告警：宁可多占磁盘，也不谎称文件已经被清理掉了。
 fn discard_rescue_copy(path: &Path) {
     if let Err(e) = std::fs::remove_file(path) {
-        tracing::warn!("恢复前副本清理失败，仍保留在 {}: {}", path.display(), e);
+        if e.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!("恢复前副本清理失败，仍保留在 {}: {}", path.display(), e);
+        }
+    }
+    // SQLite 在异常退出路径上可能留下辅助文件；它们与不完整主文件一样没有恢复价值。
+    for suffix in ["-wal", "-shm", "-journal"] {
+        let mut sidecar = path.as_os_str().to_os_string();
+        sidecar.push(suffix);
+        let sidecar = PathBuf::from(sidecar);
+        if let Err(e) = std::fs::remove_file(&sidecar) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!("恢复前副本辅助文件清理失败 {}: {}", sidecar.display(), e);
+            }
+        }
     }
 }
 
@@ -280,11 +321,11 @@ pub fn sync_restore_now(
         ));
     }
 
-    let temp_path = SyncService::sync_download_to_temp(&app_dir, &config)?;
+    let temp_snapshot =
+        DownloadedSnapshotGuard::new(SyncService::sync_download_to_temp(&app_dir, &config)?);
     // 空文件 / HTML 错误页 / 非 Lumo 库 / 版本越界 / integrity_check 不通过
     // 全部由 validate_snapshot 拒绝，此时本地库尚未被触碰。
-    if let Err(e) = SyncService::validate_snapshot(&temp_path) {
-        let _ = std::fs::remove_file(&temp_path);
+    if let Err(e) = SyncService::validate_snapshot(temp_snapshot.path()) {
         return Err(AppError::Internal(e));
     }
 
@@ -308,9 +349,8 @@ pub fn sync_restore_now(
     let outcome = {
         let mut conn = db_state.db.get()?;
         let mut restorer = LiveBackupRestorer { conn: &mut conn };
-        restore_with_backup(&mut restorer, &app_dir, &temp_path)
+        restore_with_backup(&mut restorer, &app_dir, temp_snapshot.path())
     };
-    let _ = std::fs::remove_file(&temp_path);
 
     match &outcome {
         RestoreOutcome::Success => Ok(format!(
@@ -419,7 +459,11 @@ mod tests {
     impl LiveDatabase for FakeDb {
         fn snapshot_to(&mut self, backup: &Path) -> Result<(), String> {
             self.record(&format!("snapshot:{}", backup.display()));
-            self.script.snapshot.clone()?;
+            if let Err(e) = self.script.snapshot.clone() {
+                // 模拟 SQLite 已创建并写入部分目标文件后才遇到磁盘/I/O 错误。
+                std::fs::write(backup, "partial rescue copy").map_err(|e| e.to_string())?;
+                return Err(e);
+            }
             let round = {
                 let mut r = self.rounds.borrow_mut();
                 *r += 1;
@@ -584,6 +628,21 @@ mod tests {
             "副本没建成就不该再动 live 库: {:?}",
             actions
         );
+    }
+
+    #[test]
+    fn downloaded_snapshot_guard_removes_file_on_early_return() {
+        let dir = TempDir::new("restore_download_guard");
+        let path = dir.path().join("lumo.sqlite.test.download");
+        std::fs::write(&path, "complete downloaded database").unwrap();
+
+        {
+            let guard = DownloadedSnapshotGuard::new(path.clone());
+            assert!(guard.path().exists());
+            // 模拟连接池获取失败等任意 `?` 提前返回：离开作用域即清理。
+        }
+
+        assert!(!path.exists(), "提前返回后不能遗留完整下载快照");
     }
 
     /// `mark_restored` 失败同样必须回滚到刚建的副本：否则 live 库被换掉、时间戳没记上，也没人还原它。

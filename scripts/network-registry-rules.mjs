@@ -26,7 +26,8 @@ const RUST_CALL_SITE =
   /(?:\breqwest::(?:blocking::)?(?:get|post|put|delete|patch|head)\s*\()|(?:[A-Za-z0-9_]+\s*\.\s*)?[A-Za-z0-9_]*client[A-Za-z0-9_]*\s*\.\s*(?:get|post|put|delete|patch|head|request)\s*\(\s*(?:[^)\s]|$)|\b[A-Za-z0-9_]*[Cc]lient\s*::\s*builder\s*\(|\b[A-Za-z0-9_]*[Cc]lient\s*::\s*new\s*\(\s*(?:[^)\s]|$)/i;
 
 /**
- * 前端：真正会出网的调用点。刻意不看「任意字符串字面量」，否则设置页的 placeholder 会全量误报。
+ * 前端：识别真正会出网的调用点，用来校验行为 ID。字面量主机另在 TS/JS 可执行代码与
+ * Vue `<script>` 区域统一扫描，模板里的地址输入框 placeholder 不参与。
  * 裸 `open(...)` 不列入——那是 Tauri dialog 插件的本地文件夹选择器，不出网。
  */
 const FRONTEND_CALL_SITE =
@@ -36,11 +37,12 @@ const FRONTEND_CALL_SITE =
 const NON_OUTBOUND_HOSTS = new Set(['localhost', '0.0.0.0', '::1', 'example.com', 'example.org', 'example.net', 'example']);
 
 export function isLoopbackHost(host) {
-  const h = host.replace(/^\[(?:::)?\]/, '::1').toLowerCase();
+  // URL 提取器会保留 IPv6 的方括号；统一去掉后再和回环地址比较。
+  const h = host.replace(/^\[|\]$/g, '').toLowerCase();
   if (NON_OUTBOUND_HOSTS.has(h)) return true;
   if (h.startsWith('127.')) return true;
-  // *.local / *.invalid / .test 是 mDNS 与测试保留域，不会真的走到公网
-  if (/\.(local|invalid|test|example)$/.test(h)) return true;
+  // *.localhost 是 WebView2 自定义协议映射；*.local / 保留域同样不会走到公网。
+  if (/\.(localhost|local|invalid|test|example)$/.test(h)) return true;
   return false;
 }
 
@@ -176,7 +178,8 @@ export function toLogicalLines(lines) {
 
 /**
  * 单文件扫描。kind: 'rust' | 'frontend'
- * Rust 额外扫「任意代码行里的字面量主机」（R1），前端只扫调用点行（避免 placeholder 误报）。
+ * Rust 扫任意代码行里的字面量主机；前端扫 TS/JS 代码与 Vue `<script>`，
+ * 同时在实际请求调用点校验行为 ID。Vue 模板不扫主机，避免 placeholder 误报。
  */
 export function scanFile({ path, kind, content, registry }) {
   const violations = [];
@@ -189,6 +192,17 @@ export function scanFile({ path, kind, content, registry }) {
   }
 
   const callSiteRe = kind === 'rust' ? RUST_CALL_SITE : FRONTEND_CALL_SITE;
+  // TS/JS 的 URL 常量往往与 fetch/window.open 分行书写，不能只在调用行找主机；
+  // Vue 则只扫描 <script>，避免把模板里的地址输入框 placeholder 当成真实外联。
+  const frontendScriptLines = new Set();
+  if (kind === 'frontend' && path.endsWith('.vue')) {
+    let insideScript = false;
+    physical.forEach((line, index) => {
+      if (/<script\b/i.test(line)) insideScript = true;
+      if (insideScript) frontendScriptLines.add(index);
+      if (/<\/script\s*>/i.test(line)) insideScript = false;
+    });
+  }
   const usedMarkers = new Set();
   // 从前往后遍历调用点：每个标记最多服务一个调用点，逼着「一处声明、一处使用」
   for (const logical of toLogicalLines(physical)) {
@@ -196,7 +210,9 @@ export function scanFile({ path, kind, content, registry }) {
     const index = logical.start;
     if (!isCodeLine(line)) continue;
     const isCallSite = callSiteRe.test(line);
-    if (kind === 'rust' || isCallSite) {
+    const isFrontendCode =
+      kind === 'frontend' && (!path.endsWith('.vue') || frontendScriptLines.has(index));
+    if (kind === 'rust' || isFrontendCode || isCallSite) {
       for (const host of extractHosts(line)) {
         if (isLoopbackHost(host)) continue;
         if (registry.allHosts.has(host)) continue;

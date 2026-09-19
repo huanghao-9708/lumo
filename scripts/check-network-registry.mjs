@@ -7,7 +7,8 @@
  * 更新 NETWORK_BEHAVIOR.md」变成可执行规则——CI 直接失败，而不是靠 reviewer 记性。
  *
  * 判定粒度（旧的「文件里出现过 http 就算登记过」已在 CR-008 中废弃）：
- *  1. Rust 代码行里出现的字面量主机，必须逐主机命中 §1；在已登记文件中新增域名同样会红。
+ *  1. Rust 与前端可执行代码里出现的字面量主机，必须逐主机命中 §1；Vue 模板里的 placeholder
+ *     不参与判定，但 `<script>` 内先赋值、后 fetch/window.open 的地址同样逃不过检查。
  *  2. 真正发起请求的调用点（Rust 的 HTTP client 动词 / 前端的 fetch、window.open、WebSocket 等）
  *     必须带 `联网行为: §2X` 声明；主机由变量、配置或响应决定的动态目标只能靠这条被钉住。
  *  3. 前端与 Rust 共用同一份 §1/§2 事实源；纯本机协议（lumo://）用 `联网行为: local` 显式声明。

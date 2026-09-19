@@ -5,7 +5,7 @@
 > 对比基线：`main` / `47e5614522bfd9543e6624f034f47536effb9e1b`  
 > 审查提交：`a7c0c3d`  
 > 审查方式：只读代码审查、变更对比、调用链核对、构建与自动化测试验证  
-> 文档状态：已整改——CR-001 至 CR-008 逐条关闭，结果见 §9 整改记录（合并准入的人工项仍未完成）
+> 文档状态：已整改——CR-001 至 CR-008 及二次复核的 4 项边界缺陷均已关闭，结果见 §9 整改记录（合并准入的人工项仍未完成）
 
 ## 1. 执行摘要
 
@@ -292,7 +292,7 @@ WebDAV 凭据解析失败或扫描线程无法取得数据库连接时，代码�
 | CR-005 | 已关闭 | `fcb0eaa` | 拆 `validate_cached_path`（只校验，不 touch）与 `acquire_cached_path`（播放路径才刷新访问时间）；`is_cached` 走前者 | `status_queries_leave_mtime_alone`、`eviction_follows_real_playback_not_queries` | 仍依赖文件系统 mtime；独立 `last_access_at` 索引属后续优化 |
 | CR-006 | 已关闭 | `20c9f3c` | 扫描所有早退统一走 `finish_scan`：失败原因**既落库（`last_error`）也随 `scan-complete` 结构化事件下发**（`success` / `error_code` / `message` / `persisted`），前端只在 `persisted=false` 时用事件文案兜底 | Rust `scan_complete_payload_is_structured` 等 8 项 + `src/stores/player.spec.ts` 3 项（锁住「表里的文案」不被事件文案覆盖） | `finish_scan` 自身「所有早退都经过它」这条接线无自动化覆盖——构造 `AppHandle` 超出单元测试能力，只能靠纯函数接缝 + 代码审查 |
 | CR-007 | 已关闭 | `fe25e06` | 大文件传输按体积推导**总预算**（`TransferBudget::total_for`，含下限/上限/无尺寸兜底），下载与上传逐个请求施加；停滞时返回可理解的中文文案 | `mod bulk_transfer_termination` 7 项（loopback 静默 / 滴流服务器；含 `elapsed < 5s` 断言防 TCP keepalive 蒙混过关） | reqwest blocking 无 `read_timeout`，做不到真·空闲超时；用户取消令牌需 async 化。三类真实 WebDAV 服务端兼容矩阵仍为人工项 |
-| CR-008 | 已关闭 | `3150c48` | 门禁由「文件是否登记」升级为**主机级白名单 + 调用点行为 ID 声明**，并覆盖前端；判定逻辑抽成纯函数模块配正反例 | `scripts/network-registry-rules.spec.mjs` 19 项；另有 7 条门禁变异（新增域名 / 缺声明 / 删声明 / 前端新主机 / 删 §2 小节 / 主机挪行）全部转红 | 见下 §9.2 |
+| CR-008 | 已关闭 | `3150c48` | 门禁由「文件是否登记」升级为**主机级白名单 + 调用点行为 ID 声明**，并覆盖前端；判定逻辑抽成纯函数模块配正反例 | `scripts/network-registry-rules.spec.mjs` 20 项；另有 7 条门禁变异（新增域名 / 缺声明 / 删声明 / 前端新主机 / 删 §2 小节 / 主机挪行）全部转红 | 见下 §9.2 |
 
 ### 9.1 CR-008 的实现口径
 
@@ -316,8 +316,8 @@ WebDAV 凭据解析失败或扫描线程无法取得数据库连接时，代码�
 2. §1 中「由响应决定的动态主机」（网易云 CDN、`mzstatic.com`）无法穷举，清单里出现而代码里没有时
    只打印告警，不做硬失败——否则门禁会拒绝诚实的文档写法。
 3. `#[cfg(test)]` 只在顶格时整段豁免；写在函数内部的 `cfg(test)` 块不豁免（宁可多判不误放）。
-4. 前端只扫调用点行，不扫全文件字面量——设置页 placeholder 里的示例地址不是外联，
-   代价是模板字符串里裸写的域名要靠 review 兜。
+4. 前端现已扫描 TS/JS 可执行代码及 Vue `<script>` 内的全部 URL 字面量；Vue 模板不扫描，
+   因而地址输入框 placeholder 不会误报。若未来在模板表达式里直接发起外联，仍需扩展解析规则。
 
 ### 9.3 §7 测试缺口对照
 
@@ -336,7 +336,21 @@ WebDAV 凭据解析失败或扫描线程无法取得数据库连接时，代码�
 ### 9.4 本轮门禁基线
 
 `cargo fmt --all --check`、`cargo clippy --all-targets -- -D warnings` 干净；
-`cargo test --lib` 81 项通过；`npm run typecheck` 通过；`npm run test:unit` 37 项通过
-（前端 18 + 门禁规则 19）；`npm run check:network` 通过；`npm run check:ci` 全绿。
+`cargo test --all-targets` 83 项通过（性能基准 1 项按设计忽略）；`npm run typecheck` 通过；
+`npm run test:unit` 38 项通过（前端 18 + 门禁规则 20）；`npm run check:network` 通过；
+`npm run check:ci` 全绿。
 §8 里的三平台 CI 实跑、真实 WebDAV 服务端验收、旧库升级人工演练**仍未完成**，合并决定权在维护者。
 
+### 9.5 二次复核收尾（2026-09-19）
+
+二次复核发现的 4 项 P2 边界缺陷已完成修复：
+
+1. 恢复下载文件增加 `DownloadedSnapshotGuard`，连接池获取失败等任意提前返回都会删除完整临时快照；
+2. 在线备份中途失败时删除可能已生成的残缺救援文件及 SQLite sidecar，避免把坏文件提示为“可手动还原”；
+3. `record_scan_result` 改为返回真实写库结果，UPDATE 失败或来源已不存在时 `scan-complete.persisted=false`；
+4. 联网门禁扫描前端 URL 常量而不只扫描请求调用行，同时保留 Vue 模板 placeholder 豁免，并补齐
+   `lumo.localhost` 与 `[::1]` 本机地址识别。
+
+新增代表性回归：`downloaded_snapshot_guard_removes_file_on_early_return`、
+`snapshot_failure_claims_no_rescue_copy`、`scan_result_reports_database_write_failure`，以及
+“前端 URL 先存进变量也必须经过主机白名单”。
