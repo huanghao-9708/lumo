@@ -44,9 +44,14 @@ function* walk(dir, matches) {
 
 const isTestFile = (path) => /\.(spec|test)\.[mc]?[jt]sx?$/.test(path);
 
+// 注意：walk 是生成器，`.map` 只在 Node ≥22 的 Iterator helpers 下存在（CI 固定 Node 20 会炸），
+// 所以先展开成数组再映射。
 const targets = [
-  ...walk(RUST_SRC, (p) => p.endsWith('.rs')).map((p) => ({ path: relative(root, p).split(sep).join('/'), kind: 'rust' })),
-  ...walk(FRONTEND_SRC, (p) => /\.(ts|js|vue)$/.test(p) && !isTestFile(p)).map((p) => ({
+  ...[...walk(RUST_SRC, (p) => p.endsWith('.rs'))].map((p) => ({
+    path: relative(root, p).split(sep).join('/'),
+    kind: 'rust',
+  })),
+  ...[...walk(FRONTEND_SRC, (p) => /\.(ts|js|vue)$/.test(p) && !isTestFile(p))].map((p) => ({
     path: relative(root, p).split(sep).join('/'),
     kind: 'frontend',
   })),
