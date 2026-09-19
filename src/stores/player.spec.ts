@@ -146,6 +146,77 @@ describe("scan-complete 事件后的状态刷新", () => {
     expect(commands).toContain("library_get_tracks");
   });
 
+  /**
+   * CR-006 的早退场景：数据库写不进去（连接池耗尽、DB 不可用）时，表里仍是上一次的状态。
+   * 事件带 persisted=false，前端必须改用事件里的原因，否则用户只看到"点了没反应"。
+   */
+  it("终态没落库时直接展示事件带来的原因", async () => {
+    const { usePlayerStore } = await import("../stores/player");
+    const successAt = "2026-09-18T02:00:00Z";
+    // 表里既没有本轮错误，也没有本轮时间——只有上一次的
+    stubSourceList([makeSource({ id: 1, last_scan_at: successAt, last_error: "上一次的错误" })]);
+
+    const store = usePlayerStore();
+    await store.fetchSources();
+    await vi.waitFor(() => {
+      expect(eventHandlers.has("scan-complete")).toBe(true);
+    });
+
+    await eventHandlers.get("scan-complete")!({
+      payload: {
+        source_id: 1,
+        success: false,
+        error_code: "db_unavailable",
+        message: "扫描无法开始：本地数据库正忙，请稍后重试",
+        persisted: false,
+      },
+    });
+
+    expect(store.sources[0].lastError).toBe("扫描无法开始：本地数据库正忙，请稍后重试");
+  });
+
+  it("已落库的失败沿用数据库状态，不用事件覆盖", async () => {
+    const { usePlayerStore } = await import("../stores/player");
+    // 表里刻意留一条与事件不同的文案：persisted=true 时以回读结果为准，
+    // 这条断言锁住"事件只兜底、不抢戏"，避免两处口径互相覆盖。
+    stubSourceList([makeSource({ id: 1, last_error: "表里的文案" })]);
+
+    const store = usePlayerStore();
+    await store.fetchSources();
+    await vi.waitFor(() => {
+      expect(eventHandlers.has("scan-complete")).toBe(true);
+    });
+
+    await eventHandlers.get("scan-complete")!({
+      payload: {
+        source_id: 1,
+        success: false,
+        error_code: "credential_unresolved",
+        message: "事件里的文案",
+        persisted: true,
+      },
+    });
+
+    expect(store.sources[0].lastError).toBe("表里的文案");
+  });
+
+  it("成功终态不会凭空造出错误", async () => {
+    const { usePlayerStore } = await import("../stores/player");
+    stubSourceList([makeSource({ id: 1, last_scan_at: "2026-09-18T04:00:00Z" })]);
+
+    const store = usePlayerStore();
+    await store.fetchSources();
+    await vi.waitFor(() => {
+      expect(eventHandlers.has("scan-complete")).toBe(true);
+    });
+
+    await eventHandlers.get("scan-complete")!({
+      payload: { source_id: 1, success: true, error_code: null, message: null, persisted: true },
+    });
+
+    expect(store.sources[0].lastError).toBeUndefined();
+  });
+
   it("scan-progress 只在来源存在时更新进度文本", async () => {
     const { usePlayerStore } = await import("../stores/player");
     stubSourceList([makeSource({ id: 1 })]);

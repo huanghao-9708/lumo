@@ -19,7 +19,8 @@ import {
   playbackPlay, playbackPause, playbackResume, playbackSetVolume, playbackSeek
 } from '../api/playback';
 import {
-  sourceAddLocal, sourceAddWebdav, sourceList, sourceRemove, sourceScan
+  sourceAddLocal, sourceAddWebdav, sourceList, sourceRemove, sourceScan,
+  type ScanCompleteEvent
 } from '../api/scanner';
 import {
   playbackSetQueue, playbackQueueState, playbackAdvance, playbackSetMode,
@@ -2025,7 +2026,7 @@ const albums = shallowRef<Album[]>([]);
       }
     });
 
-    unlistenScanComplete = await listen('scan-complete', async () => {
+    unlistenScanComplete = await listen<ScanCompleteEvent>('scan-complete', async (event) => {
       // 扫描结果一律以重新拉取为准：写死"刚刚扫描"会把失败的扫描报成成功
       // （后端 last_scan_at 只在成功时推进，失败原因在 last_error）。
       await fetchSources();
@@ -2034,6 +2035,17 @@ const albums = shallowRef<Album[]>([]);
       await fetchArtists(true);
       // 扫描可能修复/删除了文件，可播性缓存整体失效，由各列表视图按需重拉
       invalidatePlayability();
+
+      // 早退兜底（CR-006）：后端把终态写进 sources 时前端回读即可拿到原因；
+      // 但数据库当时不可用（连接池耗尽等）就写不进去，表里仍是上一次的状态。
+      // 事件里的原因比表里的状态新：直接盖到这条来源上，否则用户只看到"没变化"。
+      const payload = event.payload;
+      if (payload && payload.success === false && payload.message && payload.persisted === false) {
+        const source = sources.value.find(s => s.id === payload.source_id);
+        if (source) {
+          source.lastError = payload.message;
+        }
+      }
     });
 
     unlistenArtworkBackfill = await listen('artwork-backfill-complete', async () => {

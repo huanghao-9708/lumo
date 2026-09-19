@@ -273,15 +273,19 @@ pub fn scan_local_directory(app: AppHandle, source_id: i64, path: &Path, app_dat
     match std::fs::metadata(path) {
         Ok(metadata) if metadata.is_dir() => {}
         Ok(_) => {
-            let message = "扫描根路径不是目录";
-            update_scan_status(&app, source_id, false, Some(message));
-            let _ = app.emit("scan-complete", source_id);
+            finish_scan(
+                &app,
+                source_id,
+                ScanOutcome::failed("root_not_a_directory", "扫描根路径不是目录"),
+            );
             return;
         }
         Err(e) => {
-            let message = format!("无法访问扫描根路径: {}", e);
-            update_scan_status(&app, source_id, false, Some(&message));
-            let _ = app.emit("scan-complete", source_id);
+            finish_scan(
+                &app,
+                source_id,
+                ScanOutcome::failed("root_unreachable", format!("无法访问扫描根路径: {}", e)),
+            );
             return;
         }
     }
@@ -478,12 +482,6 @@ pub fn scan_local_directory(app: AppHandle, source_id: i64, path: &Path, app_dat
                 "UPDATE media_files SET last_seen_at = datetime('now') WHERE source_id = ?1 AND availability = 'available'",
                 rusqlite::params![source_id]
             );
-            record_scan_result(
-                &conn,
-                source_id,
-                scan_failed,
-                "扫描未完成，已跳过缺失文件清理",
-            );
         }
     }
 
@@ -491,7 +489,15 @@ pub fn scan_local_directory(app: AppHandle, source_id: i64, path: &Path, app_dat
         "Scan completed for directory: {:?} (scanned={}, errors={}, skipped={}, missing={})",
         path, totals.scanned, totals.errors, skipped_count, missing_count
     );
-    let _ = app.emit("scan-complete", source_id);
+    finish_scan(
+        &app,
+        source_id,
+        if scan_failed {
+            ScanOutcome::failed("scan_incomplete", "扫描未完成，已跳过缺失文件清理")
+        } else {
+            ScanOutcome::Success
+        },
+    );
 }
 
 /// 执行 WebDAV 远程目录扫描（串行；预处理与本地 worker 相同，但进度事件按 20 个节流）。
@@ -510,10 +516,24 @@ pub fn scan_webdav_directory(
     let mut scan_failed = false;
 
     let Some(db_state) = app.try_state::<DbState>() else {
+        // 这两条早退此前只 return、不发事件：前端会永远停在「扫描中」（CR-006）
+        finish_scan(
+            &app,
+            source_id,
+            ScanOutcome::failed(
+                "db_unavailable",
+                "扫描无法开始：本地数据库不可用，请重启应用后重试",
+            ),
+        );
         return;
     };
     // 独占一条连接贯穿整个扫描（文件缓存加载 / 预处理错误标记 / 批量写库 / 收尾）
     let Ok(mut scan_conn) = db_state.db.get() else {
+        finish_scan(
+            &app,
+            source_id,
+            ScanOutcome::failed("db_unavailable", "扫描无法开始：本地数据库正忙，请稍后重试"),
+        );
         return;
     };
     let _ = scan_conn.pragma_update(None, "cache_size", -65536i64);
@@ -722,19 +742,24 @@ pub fn scan_webdav_directory(
             "UPDATE media_files SET last_seen_at = datetime('now') WHERE source_id = ?1 AND availability = 'available'",
             rusqlite::params![source_id],
         );
-        record_scan_result(
-            conn,
-            source_id,
-            scan_failed,
-            "WebDAV 扫描未完成，已跳过缺失文件清理",
-        );
     }
 
     info!(
         "WebDAV Scan completed: scanned={}, skipped={}, missing={}",
         scanned_count, skipped_count, missing_count
     );
-    let _ = app.emit("scan-complete", source_id);
+    // 先归还贯穿整轮扫描的连接，再让终止出口自己去取一条：连接池只有 8 条，
+    // 扫描期间不额外占第二条，收尾记账也就不会在满载时排队等待。
+    drop(scan_conn);
+    finish_scan(
+        &app,
+        source_id,
+        if scan_failed {
+            ScanOutcome::failed("scan_incomplete", "WebDAV 扫描未完成，已跳过缺失文件清理")
+        } else {
+            ScanOutcome::Success
+        },
+    );
 }
 
 /// 把损坏的文件也记一行到 media_files（availability='error'），
@@ -811,18 +836,237 @@ fn record_scan_result(
     }
 }
 
-fn update_scan_status(app: &AppHandle, source_id: i64, success: bool, error_message: Option<&str>) {
-    let Some(db_state) = app.try_state::<DbState>() else {
-        return;
+/// 一次扫描的终态（CR-006）。
+///
+/// 扫描线程一旦启动就必须落到这两种状态之一，并且**写库与发事件两件事一起做**：
+/// 只写库，数据库恰好不可用时用户什么也看不到；只发事件，重开界面后错误就消失了。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ScanOutcome {
+    Success,
+    Failed {
+        /// 稳定的机器可读分类；前端据此区分展示，不随文案改写而变。
+        code: &'static str,
+        /// 面向用户的中文说明：写进 `sources.last_error`，同时随 `scan-complete` 下发。
+        message: String,
+    },
+}
+
+impl ScanOutcome {
+    pub(crate) fn failed(code: &'static str, message: impl Into<String>) -> Self {
+        Self::Failed {
+            code,
+            message: message.into(),
+        }
+    }
+
+    fn is_success(&self) -> bool {
+        matches!(self, Self::Success)
+    }
+
+    /// 写库用的说明文案；成功路径不读这个值。
+    fn note(&self) -> &str {
+        match self {
+            Self::Success => "",
+            Self::Failed { message, .. } => message,
+        }
+    }
+}
+
+/// `scan-complete` 的结构化载荷（CR-006）。
+///
+/// 原来事件只带 `source_id`，前端回读数据库当作本次结果；DB 写入失败时那条路径
+/// 会把「上一次的旧错误」当成这次的状态。现在失败原因随事件一起给出。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct ScanCompletePayload {
+    pub source_id: i64,
+    pub success: bool,
+    pub error_code: Option<&'static str>,
+    pub message: Option<String>,
+    /// 终态是否已写进 `sources`：false 表示数据库当时不可用，前端必须直接展示
+    /// `message`，而不是回读一份永远停在旧值的表。
+    pub persisted: bool,
+}
+
+impl ScanCompletePayload {
+    fn new(source_id: i64, outcome: &ScanOutcome, persisted: bool) -> Self {
+        let (success, error_code, message) = match outcome {
+            ScanOutcome::Success => (true, None, None),
+            ScanOutcome::Failed { code, message } => (false, Some(*code), Some(message.clone())),
+        };
+        Self {
+            source_id,
+            success,
+            error_code,
+            message,
+            persisted,
+        }
+    }
+}
+
+/// 扫描的唯一终止出口（CR-006）：落库 → 记日志 → 发结构化 `scan-complete`。
+///
+/// 所有「扫描已启动但提前退出」的路径都必须走这里，否则前端会一直停在「扫描中」。
+/// 记账先于事件：前端收到 `scan-complete` 就回读来源列表，顺序反了会读到上一次的状态。
+pub(crate) fn finish_scan(app: &AppHandle, source_id: i64, outcome: ScanOutcome) {
+    let persisted = match app.try_state::<DbState>() {
+        Some(db_state) => match db_state.db.get() {
+            Ok(conn) => {
+                record_scan_result(&conn, source_id, !outcome.is_success(), outcome.note());
+                true
+            }
+            // 池耗尽（CR-006 建议 5 的场景）：状态落不了库，但事件必须照发
+            Err(e) => {
+                error!(
+                    "来源 {} 的扫描终态未能落库（取不到数据库连接: {}）",
+                    source_id, e
+                );
+                false
+            }
+        },
+        None => {
+            error!(
+                "来源 {} 的扫描终态未能落库：应用状态里没有数据库连接",
+                source_id
+            );
+            false
+        }
     };
-    let Ok(conn) = db_state.db.get() else {
-        warn!("无法记录来源 {} 的扫描状态：取不到数据库连接", source_id);
-        return;
-    };
-    record_scan_result(
-        &conn,
-        source_id,
-        !success,
-        error_message.unwrap_or("扫描未完成"),
+    match &outcome {
+        ScanOutcome::Success => info!("来源 {} 扫描完成", source_id),
+        ScanOutcome::Failed { code, message } => {
+            error!("来源 {} 扫描终止 [{}]: {}", source_id, code, message)
+        }
+    }
+    let _ = app.emit(
+        "scan-complete",
+        ScanCompletePayload::new(source_id, &outcome, persisted),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::test_util::TempDir;
+
+    /// 建一份带单个来源的测试库，返回 (临时目录, 连接, source_id)。
+    fn db_with_source(label: &str) -> (TempDir, Connection, i64) {
+        let dir = TempDir::new(label);
+        crate::db::init_db(dir.db_path()).expect("构造测试库失败");
+        let conn = Connection::open(dir.db_path()).expect("打开测试库失败");
+        conn.execute(
+            "INSERT INTO sources (name, kind, root_uri) VALUES ('测试来源', 'webdav', 'http://127.0.0.1/dav')",
+            [],
+        )
+        .expect("插入来源失败");
+        let id = conn.last_insert_rowid();
+        (dir, conn, id)
+    }
+
+    fn source_state(conn: &Connection, source_id: i64) -> (Option<String>, Option<String>) {
+        conn.query_row(
+            "SELECT last_scan_at, last_error FROM sources WHERE id = ?1",
+            rusqlite::params![source_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("读回来源状态失败")
+    }
+
+    /// `scan-complete` 载荷必须是结构化的：前端靠它区分「本次成功」与「本次失败且原因」，
+    /// 光一个 source_id 无法在数据库没写进去时给出任何反馈（CR-006）。
+    #[test]
+    fn scan_complete_payload_is_structured() {
+        let ok = ScanCompletePayload::new(7, &ScanOutcome::Success, true);
+        assert!(ok.success && ok.error_code.is_none() && ok.message.is_none());
+        assert_eq!(ok.source_id, 7);
+
+        let failed = ScanCompletePayload::new(
+            7,
+            &ScanOutcome::failed("credential_unresolved", "凭据已失效"),
+            true,
+        );
+        assert!(!failed.success);
+        assert_eq!(failed.error_code, Some("credential_unresolved"));
+        assert_eq!(failed.message.as_deref(), Some("凭据已失效"));
+
+        // 序列化字段名是前端契约（src/api/scanner.ts 的 ScanCompleteEvent）
+        let json = serde_json::to_value(&failed).expect("载荷应可序列化");
+        assert_eq!(json["source_id"], 7);
+        assert_eq!(json["success"], false);
+        assert_eq!(json["error_code"], "credential_unresolved");
+        assert_eq!(json["message"], "凭据已失效");
+        assert_eq!(json["persisted"], true);
+    }
+
+    /// 落不了库时事件仍要带着原因：`persisted=false` 是前端改用临时文案的唯一依据。
+    #[test]
+    fn unpersisted_failure_still_carries_the_reason() {
+        let payload = ScanCompletePayload::new(
+            3,
+            &ScanOutcome::failed("db_unavailable", "本地数据库正忙"),
+            false,
+        );
+        let json = serde_json::to_value(&payload).expect("载荷应可序列化");
+        assert_eq!(json["persisted"], false);
+        assert_eq!(json["message"], "本地数据库正忙");
+    }
+
+    /// 失败只写 last_error、不推进 last_scan_at（G-08 口径）；
+    /// 扫描早退同样走这条路，所以每个早退原因都会留在这里（CR-006）。
+    #[test]
+    fn failure_records_error_without_advancing_last_scan_at() {
+        let (_dir, conn, id) = db_with_source("scan_outcome_failure");
+        conn.execute(
+            "UPDATE sources SET last_scan_at = datetime('now','-1 day') WHERE id = ?1",
+            rusqlite::params![id],
+        )
+        .unwrap();
+        let before = source_state(&conn, id);
+
+        record_scan_result(&conn, id, true, "凭据解析失败：该来源的密码凭据已失效");
+
+        let (last_scan_at, last_error) = source_state(&conn, id);
+        assert_eq!(
+            last_scan_at, before.0,
+            "失败的扫描不能推进「上次成功扫描」时间"
+        );
+        assert_eq!(
+            last_error.as_deref(),
+            Some("凭据解析失败：该来源的密码凭据已失效")
+        );
+    }
+
+    /// 成功清掉历史错误并推进时间：否则一次修好的扫描在界面上仍显示旧故障。
+    #[test]
+    fn success_clears_error_and_advances_last_scan_at() {
+        let (_dir, conn, id) = db_with_source("scan_outcome_success");
+        conn.execute(
+            "UPDATE sources SET last_error = '上一次的错误' WHERE id = ?1",
+            rusqlite::params![id],
+        )
+        .unwrap();
+
+        record_scan_result(&conn, id, false, "");
+
+        let (last_scan_at, last_error) = source_state(&conn, id);
+        assert!(last_error.is_none(), "成功扫描要清掉 last_error");
+        assert!(
+            last_scan_at.is_some() && last_scan_at != Some("".to_string()),
+            "成功扫描必须推进 last_scan_at"
+        );
+    }
+
+    /// 终态只有两种形状：`failed()` 造出来的必然带 code + message，
+    /// 这样 `finish_scan` 才不会发出「既不成功也不带原因」的事件。
+    #[test]
+    fn failed_outcome_always_has_code_and_message() {
+        let outcome = ScanOutcome::failed("root_unreachable", "无法访问扫描根路径");
+        assert!(!outcome.is_success());
+        assert_eq!(outcome.note(), "无法访问扫描根路径");
+        match &outcome {
+            ScanOutcome::Failed { code, .. } => assert_eq!(*code, "root_unreachable"),
+            ScanOutcome::Success => panic!("failed() 不可能构造出 Success"),
+        }
+        assert_eq!(ScanOutcome::Success.note(), "");
+        assert!(ScanOutcome::Success.is_success());
+    }
 }

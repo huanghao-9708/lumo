@@ -1,6 +1,7 @@
 use crate::db::DbState;
 use crate::error::AppError;
 use crate::ipc_trace;
+use crate::services::scanner::{finish_scan, ScanOutcome};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{LazyLock, Mutex};
@@ -149,6 +150,44 @@ pub(crate) fn resolve_source_credential(
 
     // 4. 仅用户名
     Ok((credential_ref.to_string(), None))
+}
+
+/// WebDAV 扫描开工前的凭据准备（CR-006）。
+///
+/// 把「取不到数据库连接」和「凭据解析失败」两种早退统一翻译成 [`ScanOutcome`]：
+/// 调用方只负责交给 `finish_scan` 落库 + 发事件，两条路径因此共享同一套终态口径。
+/// 拆成不依赖 `AppHandle` 的纯逻辑，是为了让这两条失败路径能被单元测试直接驱动
+/// ——构造一个 AppHandle 不在测试能力范围内，而构造一个连接池在范围内。
+fn prepare_webdav_credentials(
+    pool: &crate::db::DbPool,
+    source_id: i64,
+    credential_ref: Option<&str>,
+    machine_key: &[u8; 32],
+) -> Result<(Option<String>, Option<String>), ScanOutcome> {
+    let Some(cred) = credential_ref else {
+        // 无凭据来源（公开共享目录 / 匿名访问）本就是合法配置
+        return Ok((None, None));
+    };
+    let conn = pool.get().map_err(|e| {
+        ScanOutcome::failed(
+            "db_unavailable",
+            format!("扫描无法开始：本地数据库正忙，请稍后重试（{}）", e),
+        )
+    })?;
+    match resolve_source_credential(&conn, source_id, cred, machine_key) {
+        Ok((u, p)) => Ok((Some(u), p)),
+        Err(e) => {
+            // AppError 的 Display 带 "Internal error:" 前缀；last_error 是直接展示给用户的，取内层文案
+            let detail = match &e {
+                AppError::Internal(msg) => msg.clone(),
+                other => other.to_string(),
+            };
+            Err(ScanOutcome::failed(
+                "credential_unresolved",
+                format!("凭据解析失败：{}", detail),
+            ))
+        }
+    }
 }
 
 /// 桌面端把解析出的明文密码升级进系统钥匙串，并把 credential_ref 改写为 kr 引用。
@@ -312,27 +351,24 @@ pub fn source_scan(
                 );
             } else if kind == "webdav" {
                 // 凭据解析（P1-08 统一入口）：支持钥匙串引用 / V6 加密 / V5 明文；
-                // 桌面端解析成功后懒迁移进系统钥匙串。解析失败中止扫描并发出 scan-complete。
-                let (username, password) = match credential.as_deref() {
-                    Some(cred) => {
-                        let conn = match app.state::<DbState>().db.get() {
-                            Ok(c) => c,
-                            Err(_) => {
-                                tracing::error!("扫描中止：来源 {} 无法获取数据库连接", source_id);
-                                let _ = tauri::Emitter::emit(&app, "scan-complete", source_id);
-                                return;
-                            }
-                        };
-                        match resolve_source_credential(&conn, source_id, cred, &key) {
-                            Ok((u, p)) => (Some(u), p),
-                            Err(e) => {
-                                tracing::error!("扫描中止：来源 {} 凭据解析失败: {}", source_id, e);
-                                let _ = tauri::Emitter::emit(&app, "scan-complete", source_id);
-                                return;
-                            }
-                        }
+                // 桌面端解析成功后懒迁移进系统钥匙串。
+                // 失败必须带原因地终止（CR-006）：只 emit 一个 source_id 会让前端
+                // 回读到上一次的旧状态，用户看不出这次扫描到底为什么没成。
+                let prepared = match app.try_state::<DbState>() {
+                    Some(db) => {
+                        prepare_webdav_credentials(&db.db, source_id, credential.as_deref(), &key)
                     }
-                    None => (None, None),
+                    None => Err(ScanOutcome::failed(
+                        "db_unavailable",
+                        "扫描无法开始：本地数据库不可用，请重启应用后重试",
+                    )),
+                };
+                let (username, password) = match prepared {
+                    Ok(pair) => pair,
+                    Err(outcome) => {
+                        finish_scan(&app, source_id, outcome);
+                        return;
+                    }
                 };
                 crate::services::scanner::scan_webdav_directory(
                     app, source_id, path, username, password, &app_dir,
@@ -495,4 +531,90 @@ pub fn source_remove(db_state: State<'_, DbState>, source_id: i64) -> Result<(),
 
     tx.commit()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::test_util::TempDir;
+    use std::time::Duration;
+
+    /// 建一份带单个 WebDAV 来源的测试库，返回 (临时目录, 连接池, source_id)。
+    /// 凭据引用直接写进 `sources.credential_ref`，模拟"上一次保存成功、这次解不开"的真实状态。
+    fn pool_with_source(
+        label: &str,
+        credential_ref: Option<&str>,
+    ) -> (TempDir, crate::db::DbPool, i64) {
+        let dir = TempDir::new(label);
+        let pool = crate::db::init_db(dir.db_path()).expect("构造测试库失败");
+        let conn = pool.get().expect("取连接失败");
+        conn.execute(
+            "INSERT INTO sources (name, kind, root_uri, credential_ref) VALUES ('来源', 'webdav', 'http://127.0.0.1/dav', ?1)",
+            rusqlite::params![credential_ref],
+        )
+        .expect("插入来源失败");
+        let id = conn.last_insert_rowid();
+        (dir, pool, id)
+    }
+
+    /// 匿名共享目录没有凭据引用，本就不是失败：不能因为 cred 为空而中止扫描。
+    #[test]
+    fn source_without_credential_is_not_a_failure() {
+        let (_dir, pool, id) = pool_with_source("cred_none", None);
+        let (user, pass) = prepare_webdav_credentials(&pool, id, None, &[0u8; 32])
+            .expect("无凭据来源应允许匿名扫描");
+        assert_eq!(user, None);
+        assert_eq!(pass, None);
+    }
+
+    /// 凭据失效（CR-006 的核心场景）：早退必须变成带原因的终态，而不是只发一条完成事件。
+    /// 断言文案可直接展示给用户，且不泄露任何口令内容。
+    #[test]
+    fn expired_credential_becomes_a_terminal_outcome() {
+        let stored = "alice##乱码不是合法密文";
+        let (_dir, pool, id) = pool_with_source("cred_expired", Some(stored));
+        let err = prepare_webdav_credentials(&pool, id, Some(stored), &[0u8; 32])
+            .expect_err("解不开的凭据必须中止扫描");
+        let ScanOutcome::Failed { code, message } = err else {
+            panic!("凭据失效必须是 Failed 终态，得到 {:?}", err)
+        };
+        assert_eq!(code, "credential_unresolved");
+        assert!(
+            message.contains("凭据已失效"),
+            "文案要说明该怎么做：{}",
+            message
+        );
+        assert!(
+            !message.contains("乱码"),
+            "不能把凭据引用原文回显给用户：{}",
+            message
+        );
+    }
+
+    /// 连接池耗尽（CR-006 建议 5 的另一半）：拿不到库同样要有明确终态与原因。
+    #[test]
+    fn exhausted_pool_becomes_a_terminal_outcome() {
+        let dir = TempDir::new("cred_pool_busy");
+        crate::db::init_db(dir.db_path()).expect("建库失败");
+        // 只给一条连接并先占住，第二次 get 在超时后失败——就是线上"数据库正忙"的形态
+        let pool = r2d2::Pool::builder()
+            .max_size(1)
+            .connection_timeout(Duration::from_millis(50))
+            .build(r2d2_sqlite::SqliteConnectionManager::file(dir.db_path()))
+            .expect("构造连接池失败");
+        let held = pool.get().expect("首次取连接应成功");
+
+        let err = prepare_webdav_credentials(&pool, 1, Some("alice"), &[0u8; 32])
+            .expect_err("池被占满时不能假装扫描已启动");
+        let ScanOutcome::Failed { code, message } = err else {
+            panic!("取不到连接必须是 Failed 终态，得到 {:?}", err)
+        };
+        assert_eq!(code, "db_unavailable");
+        assert!(
+            message.contains("数据库正忙"),
+            "文案要让用户知道稍后重试：{}",
+            message
+        );
+        drop(held);
+    }
 }
