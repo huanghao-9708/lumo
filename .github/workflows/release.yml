@@ -88,6 +88,10 @@ jobs:
             args: ''
 
     runs-on: ${{ matrix.platform }}
+    # 预发布 tag（v*-beta.N）判定，供通道隔离与 Windows 打包目标两处复用。
+    # env 里的布尔会被转成字符串，比较时写 == 'true'。
+    env:
+      IS_PRERELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && contains(github.ref_name, '-') }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -129,8 +133,10 @@ jobs:
           # 通道隔离（VERSION_POLICY §2）：预发布 tag（v*-beta.N）必须在 GitHub 上标成 prerelease，
           # 否则它会成为 /releases/latest 的返回值，被应用内更新检查（MobileSettings.vue 的
           # releases/latest）当成 Stable 推给全部用户。稳定 tag 仍为 false。
-          prerelease: ${{ startsWith(github.ref, 'refs/tags/') && contains(github.ref_name, '-') }}
-          args: ${{ matrix.args }}
+          prerelease: ${{ env.IS_PRERELEASE_TAG == 'true' }}
+          # MSI（WiX）要求预发布标识符是纯数字且 ≤65535，`1.8.2-beta.N` 直接打回构建，
+          # 所以 Beta tag 下 Windows 只出 NSIS 安装包；稳定 tag 仍按 bundle targets 全出。
+          args: ${{ matrix.platform == 'windows-latest' && env.IS_PRERELEASE_TAG == 'true' && '--bundles nsis' || matrix.args }}
 
   publish-android:
     needs: publish-tauri
