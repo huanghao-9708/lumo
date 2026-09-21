@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import {
-  Search, Play, List, LayoutGrid, MoreHorizontal, Heart, Loader2, Music, CloudOff, CheckSquare,
+  Search, Play, List, LayoutGrid, MoreHorizontal, Heart, Loader2, Music, CloudOff, CheckSquare, Filter,
 } from 'lucide-vue-next';
 
 const SKELETON_ROWS = 8;
-import { usePlayerStore, type Album } from '../../stores/player';
+import { usePlayerStore, ALBUM_MIN_TRACK_COUNT, ARTIST_MIN_TRACK_COUNT, type Album } from '../../stores/player';
 import { useUiStore } from '../../stores/ui';
 import { useVirtualList } from '../../composables/useVirtualList';
 import { useBatchSelect } from '../../composables/useBatchSelect';
@@ -279,15 +279,42 @@ onMounted(() => {
             <h1 class="text-[32px] font-bold text-text-primary tracking-tight leading-none mb-2">{{ pageTitle }}</h1>
             <p class="text-[12px] text-text-muted leading-relaxed font-mono">{{ metaText }}</p>
           </div>
-          <div class="relative w-[240px]">
-            <Search class="w-[14px] h-[14px] text-text-muted absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-            <input
-              v-model="searchInput"
-              @input="onSearchInput"
-              type="text"
-              placeholder="搜索歌曲、艺术家、专辑…"
-              class="w-full h-[32px] pl-8 pr-3 text-[12px] bg-bg-canvas border border-border-color rounded-[8px] text-text-primary placeholder:text-text-muted transition-colors-smooth focus:border-brand-orange/50"
-            />
+          <div class="flex items-center gap-2 flex-shrink-0">
+            <!-- 专辑/艺人网格过滤开关：隐藏低曲目数条目（选择持久化在 store） -->
+            <button
+              v-if="isAlbumGridView"
+              class="h-[32px] px-3 rounded-[8px] text-[12px] border transition-colors-smooth whitespace-nowrap"
+              :class="playerStore.hideSmallAlbums ? 'bg-list-selected text-text-primary border-transparent' : 'text-text-secondary border-border-color hover:bg-list-hover'"
+              :title="`不加载曲目数少于 ${ALBUM_MIN_TRACK_COUNT} 首的专辑（过滤单曲/零星收录）`"
+              @click="playerStore.toggleHideSmallAlbums()"
+            >
+              <span class="flex items-center gap-1.5">
+                <Filter class="w-3.5 h-3.5" />
+                隐藏少于{{ ALBUM_MIN_TRACK_COUNT }}首的专辑
+              </span>
+            </button>
+            <button
+              v-if="isArtistGridView"
+              class="h-[32px] px-3 rounded-[8px] text-[12px] border transition-colors-smooth whitespace-nowrap"
+              :class="playerStore.hideMinorArtists ? 'bg-list-selected text-text-primary border-transparent' : 'text-text-secondary border-border-color hover:bg-list-hover'"
+              :title="`不加载曲目数少于 ${ARTIST_MIN_TRACK_COUNT} 首的艺术家（过滤零星合作艺人）`"
+              @click="playerStore.toggleHideMinorArtists()"
+            >
+              <span class="flex items-center gap-1.5">
+                <Filter class="w-3.5 h-3.5" />
+                隐藏少于{{ ARTIST_MIN_TRACK_COUNT }}首的艺术家
+              </span>
+            </button>
+            <div class="relative w-[240px]">
+              <Search class="w-[14px] h-[14px] text-text-muted absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                v-model="searchInput"
+                @input="onSearchInput"
+                type="text"
+                placeholder="搜索歌曲、艺术家、专辑…"
+                class="w-full h-[32px] pl-8 pr-3 text-[12px] bg-bg-canvas border border-border-color rounded-[8px] text-text-primary placeholder:text-text-muted transition-colors-smooth focus:border-brand-orange/50"
+              />
+            </div>
           </div>
         </div>
       </div>

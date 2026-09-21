@@ -21,16 +21,16 @@ export function libraryGetTracks(limit: number, offset: number, searchKeyword?: 
   return invoke('library_get_tracks', { limit, offset, searchKeyword });
 }
 
-export function libraryGetAlbums(limit: number, offset: number, searchKeyword?: string): Promise<AlbumDTO[]> {
-  return invoke('library_get_albums', { limit, offset, searchKeyword });
+export function libraryGetAlbums(limit: number, offset: number, searchKeyword?: string, minTrackCount?: number): Promise<AlbumDTO[]> {
+  return invoke('library_get_albums', { limit, offset, searchKeyword, minTrackCount });
 }
 
-export function libraryGetAlbumCount(searchKeyword?: string): Promise<number> {
-  return invoke('library_get_album_count', { searchKeyword });
+export function libraryGetAlbumCount(searchKeyword?: string, minTrackCount?: number): Promise<number> {
+  return invoke('library_get_album_count', { searchKeyword, minTrackCount });
 }
 
-export function libraryGetArtists(limit: number, offset: number, searchKeyword?: string): Promise<ArtistListResult> {
-  return invoke('library_get_artists', { limit, offset, searchKeyword });
+export function libraryGetArtists(limit: number, offset: number, searchKeyword?: string, minTrackCount?: number): Promise<ArtistListResult> {
+  return invoke('library_get_artists', { limit, offset, searchKeyword, minTrackCount });
 }
 
 export function libraryGetAlbumById(albumId: number): Promise<AlbumDTO | null> {
@@ -88,8 +88,8 @@ export function libraryGetInsights(): Promise<LibraryInsightsDTO> {
 }
 
 /** 启动数据包：counts/playlists/albums/albums 总数/artists/play_queue 一次 IPC 拿回 */
-export function libraryGetStartupBundle(): Promise<StartupBundleDTO> {
-  return invoke('library_get_startup_bundle');
+export function libraryGetStartupBundle(albumMinTrackCount?: number, artistMinTrackCount?: number): Promise<StartupBundleDTO> {
+  return invoke('library_get_startup_bundle', { albumMinTrackCount, artistMinTrackCount });
 }
 
 export function libraryGetPlaylists(): Promise<PlaylistDTOBackend[]> {

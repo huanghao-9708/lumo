@@ -171,6 +171,10 @@ interface PlaylistDetails extends Playlist {
   isLoadingTracks: boolean;
 }
 
+// 列表过滤阈值：开关打开时，曲目数低于该值的专辑/艺人不会被加载
+export const ALBUM_MIN_TRACK_COUNT = 3;
+export const ARTIST_MIN_TRACK_COUNT = 10;
+
 function toBackendPlayMode(mode: 'normal' | 'repeat' | 'repeat-one' | 'shuffle'): BackendPlayMode {
   switch (mode) {
     case 'repeat': return 'repeatAll';
@@ -1044,6 +1048,30 @@ const albums = shallowRef<Album[]>([]);
   const isErrorAlbums = ref(false);
   const hasMoreAlbums = ref(true);
 
+  // ============ 列表过滤：隐藏低曲目数的专辑/艺人（选择跨会话持久化）============
+  const HIDE_SMALL_ALBUMS_KEY = 'lumo_hide_small_albums';
+  const HIDE_MINOR_ARTISTS_KEY = 'lumo_hide_minor_artists';
+  const hideSmallAlbums = ref(localStorage.getItem(HIDE_SMALL_ALBUMS_KEY) === '1');
+  const hideMinorArtists = ref(localStorage.getItem(HIDE_MINOR_ARTISTS_KEY) === '1');
+
+  function albumMinTrackCount() {
+    return hideSmallAlbums.value ? ALBUM_MIN_TRACK_COUNT : undefined;
+  }
+  function artistMinTrackCount() {
+    return hideMinorArtists.value ? ARTIST_MIN_TRACK_COUNT : undefined;
+  }
+
+  function toggleHideSmallAlbums() {
+    hideSmallAlbums.value = !hideSmallAlbums.value;
+    localStorage.setItem(HIDE_SMALL_ALBUMS_KEY, hideSmallAlbums.value ? '1' : '0');
+    fetchAlbums(true);
+  }
+  function toggleHideMinorArtists() {
+    hideMinorArtists.value = !hideMinorArtists.value;
+    localStorage.setItem(HIDE_MINOR_ARTISTS_KEY, hideMinorArtists.value ? '1' : '0');
+    fetchArtists(true);
+  }
+
   async function fetchAlbums(reset: boolean = false) {
     if (reset) {
       albumsOffset = 0;
@@ -1054,9 +1082,10 @@ const albums = shallowRef<Album[]>([]);
     try {
       isErrorAlbums.value = false;
       const needCount = reset || albumsTotalCount.value === 0;
+      const minTrackCount = albumMinTrackCount();
 
-      const fetchList = libraryGetAlbums(albumsPageSize, albumsOffset, searchQuery.value || undefined);
-      const fetchCount = needCount ? libraryGetAlbumCount(searchQuery.value || undefined) : Promise.resolve(albumsTotalCount.value);
+      const fetchList = libraryGetAlbums(albumsPageSize, albumsOffset, searchQuery.value || undefined, minTrackCount);
+      const fetchCount = needCount ? libraryGetAlbumCount(searchQuery.value || undefined, minTrackCount) : Promise.resolve(albumsTotalCount.value);
 
       const [result, count] = await Promise.all([fetchList, fetchCount]);
       albumsTotalCount.value = count;
@@ -1106,7 +1135,8 @@ const albums = shallowRef<Album[]>([]);
       const { artists: result, total } = await libraryGetArtists(
           artistsLimit,
           artistsOffset,
-          searchQuery.value || undefined
+          searchQuery.value || undefined,
+          artistMinTrackCount()
       );
       artistsTotalCount.value = total;
       if (result.length < artistsLimit) {
@@ -1549,7 +1579,7 @@ const albums = shallowRef<Album[]>([]);
   // 自动回退到旧的逐个 IPC 路径。
   async function fetchStartupBundle(): Promise<StartupBundleDTO | null> {
     try {
-      const b = await libraryGetStartupBundle();
+      const b = await libraryGetStartupBundle(albumMinTrackCount(), artistMinTrackCount());
 
       Object.assign(libraryCounts, b.counts);
       tracksTotalCount.value = b.counts.tracks;
@@ -2181,6 +2211,10 @@ const albums = shallowRef<Album[]>([]);
     fetchTracks,
     fetchAlbums,
     fetchArtists,
+    hideSmallAlbums,
+    hideMinorArtists,
+    toggleHideSmallAlbums,
+    toggleHideMinorArtists,
     fetchArtistTracks,
     fetchArtistAlbums,
     fetchPlaylists,
