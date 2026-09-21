@@ -153,8 +153,10 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
+      # G-22：v3 默认要装 Google 已下架的 `tools` 包，sdkmanager 直接 exit 1。
+      # v4 默认只装 platform-tools（显式请求 tools 也只告警跳过），CI 侧无需其他改动。
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       - name: Setup node
         uses: actions/setup-node@v4
