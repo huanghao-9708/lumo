@@ -351,6 +351,35 @@ impl TrackRepo {
             format!("{}\\", rel.trim_end_matches('\\'))
         };
 
+        // 一条按第一层目录名分组的聚合查询取回所有子目录的音频计数，
+        // 代替原先"每个子目录一条 COUNT + 大小写不敏感 LIKE 走不了索引"的 N+1 扫描。
+        // deep 标志 = 该子目录下半层之后还有 '\\'，即存在含音频的孙目录。
+        let upper = format!("{}\u{10FFFF}", relative_prefix);
+        let start = relative_prefix.chars().count() + 1;
+        let mut stmt = conn.prepare("
+                SELECT seg1, SUM(cnt), MAX(deep) FROM (
+                    SELECT substr(rest, 1, instr(rest, '\\') - 1) AS seg1,
+                           COUNT(*) AS cnt,
+                           CASE WHEN instr(substr(rest, instr(rest, '\\') + 1), '\\') > 0
+                                THEN 1 ELSE 0 END AS deep
+                    FROM (SELECT substr(normalized_path, ?1) AS rest
+                          FROM media_files
+                          WHERE source_id = ?2 AND availability = 'available'
+                          AND normalized_path >= ?3 AND normalized_path < ?4)
+                    WHERE instr(rest, '\\') > 0
+                    GROUP BY seg1, deep
+                ) GROUP BY seg1")?;
+        let stats: std::collections::HashMap<String, (i64, bool)> = stmt
+            .query_map(
+                rusqlite::params![start as i64, source_id, &relative_prefix, &upper],
+                |row| {
+                    let seg: String = row.get(0)?;
+                    Ok((seg, (row.get::<_, i64>(1)?, row.get::<_, i64>(2)? != 0)))
+                },
+            )?
+            .filter_map(Result::ok)
+            .collect();
+
         let mut children = Vec::new();
 
         if let Ok(read_dir) = std::fs::read_dir(folder_path) {
@@ -366,16 +395,17 @@ impl TrackRepo {
             }
 
             for (name, path) in dirs {
-                let dir_normalized = format!("{}{}\\", relative_prefix, name.to_lowercase());
-                let audio_count: i64 = conn.query_row(
-                        "SELECT COUNT(*) FROM media_files WHERE source_id = ?1 AND normalized_path LIKE ?2 AND availability = 'available'",
-                        rusqlite::params![source_id, format!("{}%", dir_normalized)],
-                        |row| row.get(0),
-                    ).unwrap_or(0);
+                let (audio_count, has_audio_subdirs) = stats
+                    .get(&name.to_lowercase())
+                    .copied()
+                    .unwrap_or((0, false));
 
-                let has_subdirs = std::fs::read_dir(&path)
-                    .map(|rd| rd.filter_map(|e| e.ok()).any(|e| e.path().is_dir()))
-                    .unwrap_or(false);
+                // 库里已能看到含音频的孙目录就不再开目录句柄；否则 read_dir 兜底
+                // 找出不含音频的空子目录（DB 里看不到），保持与原实现相同的展开箭头
+                let has_subdirs = has_audio_subdirs
+                    || std::fs::read_dir(&path)
+                        .map(|rd| rd.filter_map(|e| e.ok()).any(|e| e.path().is_dir()))
+                        .unwrap_or(false);
 
                 let rel_path = if relative_prefix.is_empty() {
                     name.clone()
@@ -415,21 +445,40 @@ impl TrackRepo {
             .to_string_lossy()
             .to_lowercase();
         let relative = relative.trim_end_matches('\\');
-        let pattern = if relative.is_empty() {
-            "%".to_string()
+        // [lower, upper) 范围扫描代替 LIKE '前缀%'：大小写不敏感的 LIKE 无法利用
+        // idx_media_files_path 的路径前缀（会退化成扫全 source），范围扫描既走索引
+        // 又天然按 normalized_path 有序，使 ORDER BY + LIMIT/OFFSET 免排序。
+        let (lower, upper) = if relative.is_empty() {
+            (String::new(), '\u{10FFFF}'.to_string())
         } else {
-            format!("{}\\", relative)
+            let lower = format!("{}\\", relative);
+            let upper = format!("{}\u{10FFFF}", lower);
+            (lower, upper)
         };
 
-        let total: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM tracks t WHERE COALESCE(t.primary_file_id, -1) IN (
-                    SELECT m.id FROM media_files m WHERE m.source_id = ?1 AND m.normalized_path LIKE ?2 AND m.availability = 'available'
-                )",
-                rusqlite::params![source_id, format!("{}%", pattern)],
-                |row| row.get(0),
-            )?;
+        let from = "
+                FROM media_files m
+                JOIN tracks t ON t.id = m.track_id";
+        let where_clause = "
+                WHERE m.source_id = ?1 AND m.availability = 'available'
+                AND m.normalized_path >= ?2 AND m.normalized_path < ?3
+                AND (t.primary_file_id = m.id
+                     OR (t.primary_file_id IS NULL AND m.id = (
+                            SELECT mf.id FROM media_files mf
+                            WHERE mf.track_id = t.id ORDER BY mf.id LIMIT 1)))";
+        // LEFT JOIN 只服务分页查询的展示列，COUNT 不带以减少每行开销
+        let joins = "
+                LEFT JOIN albums al ON t.album_id = al.id
+                LEFT JOIN favorite_tracks ft ON t.id = ft.track_id";
+        let page_from = format!("{}{}", from, joins);
 
-        let mut stmt = conn.prepare("
+        let total: i64 = conn.query_row(
+            &format!("SELECT COUNT(*) {} {}", from, where_clause),
+            rusqlite::params![source_id, lower, upper],
+            |row| row.get(0),
+        )?;
+
+        let mut stmt = conn.prepare(&format!("
                 SELECT t.id, t.title,
                     (SELECT artist_id FROM track_artists WHERE track_id = t.id ORDER BY position LIMIT 1) AS artist_id,
                     (SELECT GROUP_CONCAT(a.name, ', ') FROM track_artists ta JOIN artists a ON ta.artist_id = a.id WHERE ta.track_id = t.id ORDER BY ta.position) AS artist_name,
@@ -439,20 +488,14 @@ impl TrackRepo {
                     ft.track_id IS NOT NULL AS is_favorite,
                     al.cover_artwork_id,
                     m.file_size,
-                    (SELECT s.kind FROM sources s JOIN media_files mf ON mf.source_id = s.id WHERE mf.id = m.id) AS source_kind
-                FROM tracks t
-                JOIN media_files m ON m.id = COALESCE(t.primary_file_id, (SELECT mf.id FROM media_files mf WHERE mf.track_id = t.id ORDER BY mf.id LIMIT 1))
-                LEFT JOIN albums al ON t.album_id = al.id
-                LEFT JOIN favorite_tracks ft ON t.id = ft.track_id
-                WHERE m.source_id = ?1 AND m.normalized_path LIKE ?2
-                AND m.availability = 'available'
+                    (SELECT s.kind FROM sources s WHERE s.id = m.source_id) AS source_kind
+                {} {}
                 ORDER BY m.normalized_path ASC
-                LIMIT ?3 OFFSET ?4
-            ")?;
-        tracing::info!("请求参数pattern={}", pattern);
+                LIMIT ?4 OFFSET ?5
+            ", page_from, where_clause))?;
 
         let rows = stmt.query_map(
-            rusqlite::params![source_id, format!("{}%", pattern), limit, offset],
+            rusqlite::params![source_id, lower, upper, limit, offset],
             crate::repositories::map_track_row,
         )?;
         let mut tracks = Vec::new();
