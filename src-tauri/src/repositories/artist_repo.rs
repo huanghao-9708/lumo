@@ -9,6 +9,7 @@ impl ArtistRepo {
         limit: u32,
         offset: u32,
         search_keyword: Option<String>,
+        min_track_count: Option<i64>,
     ) -> rusqlite::Result<ArtistListResult> {
         // 直接读 artists.track_count 冗余字段（迁移 V2 维护），去掉子查询。
         let mut sql = "
@@ -27,59 +28,58 @@ impl ArtistRepo {
             "
         .to_string();
 
-        let keyword_pattern = if let Some(keyword) = search_keyword {
-            let kw = keyword.trim();
-            if !kw.is_empty() {
-                let clause = " AND ar.name LIKE ?";
-                sql.push_str(clause);
-                count_sql.push_str(clause);
-                Some(format!("%{}%", kw))
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        let keyword_pattern = search_keyword
+            .as_deref()
+            .map(str::trim)
+            .filter(|kw| !kw.is_empty())
+            .map(|kw| format!("%{}%", kw));
+        if keyword_pattern.is_some() {
+            let clause = " AND ar.name LIKE ?";
+            sql.push_str(clause);
+            count_sql.push_str(clause);
+        }
+        if min_track_count.is_some() {
+            let clause = " AND ar.track_count >= ?";
+            sql.push_str(clause);
+            count_sql.push_str(clause);
+        }
 
         // 用 normalized_name（已有索引）代替 COLLATE NOCASE，避免函数排序
         // 加 ar.id 作 tiebreaker，避免相同 normalized_name 时分页结果重叠
         sql.push_str(" ORDER BY ar.normalized_name ASC, ar.id ASC LIMIT ? OFFSET ?");
 
-        let total: i64 = if let Some(pattern) = &keyword_pattern {
-            let mut stmt = conn.prepare(&count_sql)?;
-            stmt.query_row(params![pattern], |row| row.get(0))?
-        } else {
-            let mut stmt = conn.prepare(&count_sql)?;
-            stmt.query_row([], |row| row.get(0))?
+        let filter_args: Vec<&dyn rusqlite::ToSql> = {
+            let mut args: Vec<&dyn rusqlite::ToSql> = Vec::new();
+            if let Some(pattern) = &keyword_pattern {
+                args.push(pattern);
+            }
+            if let Some(min) = &min_track_count {
+                args.push(min);
+            }
+            args
         };
 
+        let mut count_stmt = conn.prepare(&count_sql)?;
+        let total: i64 = count_stmt
+            .query_row(rusqlite::params_from_iter(filter_args.iter()), |row| {
+                row.get(0)
+            })?;
+
+        let mut args = filter_args;
+        args.push(&limit);
+        args.push(&offset);
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(args.iter()), |row| {
+            Ok(ArtistDTO {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                track_count: row.get(2)?,
+                avatar_artwork_id: row.get(3)?,
+            })
+        })?;
         let mut result = Vec::new();
-        if let Some(pattern) = keyword_pattern {
-            let mut stmt = conn.prepare(&sql)?;
-            let rows = stmt.query_map(params![pattern, limit, offset], |row| {
-                Ok(ArtistDTO {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    track_count: row.get(2)?,
-                    avatar_artwork_id: row.get(3)?,
-                })
-            })?;
-            for r in rows {
-                result.push(r?);
-            }
-        } else {
-            let mut stmt = conn.prepare(&sql)?;
-            let rows = stmt.query_map(params![limit, offset], |row| {
-                Ok(ArtistDTO {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    track_count: row.get(2)?,
-                    avatar_artwork_id: row.get(3)?,
-                })
-            })?;
-            for r in rows {
-                result.push(r?);
-            }
+        for r in rows {
+            result.push(r?);
         }
         Ok(ArtistListResult {
             artists: result,

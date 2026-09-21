@@ -8,29 +8,34 @@ impl AlbumRepo {
     pub fn get_album_count(
         conn: &Connection,
         search_keyword: Option<String>,
+        min_track_count: Option<i64>,
     ) -> rusqlite::Result<i64> {
         let mut sql = "SELECT COUNT(*) FROM albums al WHERE 1=1".to_string();
-        let keyword_pattern = if let Some(keyword) = search_keyword {
-            let kw = keyword.trim();
-            if !kw.is_empty() {
-                sql.push_str(" AND (al.normalized_title LIKE ? OR EXISTS (SELECT 1 FROM album_artists aa JOIN artists ar ON aa.artist_id = ar.id WHERE aa.album_id = al.id AND ar.name LIKE ?))");
-                Some(format!("%{}%", kw.to_lowercase()))
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        if let Some(pattern) = keyword_pattern {
-            let mut stmt = conn.prepare(&sql)?;
-            let count: i64 = stmt.query_row(params![pattern, pattern], |row| row.get(0))?;
-            Ok(count)
-        } else {
-            let mut stmt = conn.prepare(&sql)?;
-            let count: i64 = stmt.query_row([], |row| row.get(0))?;
-            Ok(count)
+        let keyword_pattern = search_keyword
+            .as_deref()
+            .map(str::trim)
+            .filter(|kw| !kw.is_empty())
+            .map(|kw| format!("%{}%", kw.to_lowercase()));
+        if keyword_pattern.is_some() {
+            sql.push_str(" AND (al.normalized_title LIKE ? OR EXISTS (SELECT 1 FROM album_artists aa JOIN artists ar ON aa.artist_id = ar.id WHERE aa.album_id = al.id AND ar.name LIKE ?))");
         }
+        if min_track_count.is_some() {
+            sql.push_str(" AND al.track_count >= ?");
+        }
+
+        let mut args: Vec<&dyn rusqlite::ToSql> = Vec::new();
+        if let Some(pattern) = &keyword_pattern {
+            args.push(pattern);
+            args.push(pattern);
+        }
+        if let Some(min) = &min_track_count {
+            args.push(min);
+        }
+
+        let mut stmt = conn.prepare(&sql)?;
+        let count: i64 =
+            stmt.query_row(rusqlite::params_from_iter(args.iter()), |row| row.get(0))?;
+        Ok(count)
     }
 
     pub fn get_albums_paginated(
@@ -38,6 +43,7 @@ impl AlbumRepo {
         limit: u32,
         offset: u32,
         search_keyword: Option<String>,
+        min_track_count: Option<i64>,
     ) -> rusqlite::Result<Vec<AlbumDTO>> {
         // 性能说明：本查询只取 30 行且命中 idx_albums_normalized_title_covering，
         // 实测 <1ms；之前内联的 [PERF] 诊断日志在确认无慢查询后移除。
@@ -57,19 +63,30 @@ impl AlbumRepo {
                 WHERE 1=1
             ".to_string();
 
-        let keyword_pattern = if let Some(keyword) = search_keyword {
-            let kw = keyword.trim();
-            if !kw.is_empty() {
-                sql.push_str(" AND (al.normalized_title LIKE ? OR EXISTS (SELECT 1 FROM album_artists aa3 JOIN artists aa4 ON aa3.artist_id = aa4.id WHERE aa3.album_id = al.id AND aa4.name LIKE ?))");
-                Some(format!("%{}%", kw.to_lowercase()))
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        let keyword_pattern = search_keyword
+            .as_deref()
+            .map(str::trim)
+            .filter(|kw| !kw.is_empty())
+            .map(|kw| format!("%{}%", kw.to_lowercase()));
+        if keyword_pattern.is_some() {
+            sql.push_str(" AND (al.normalized_title LIKE ? OR EXISTS (SELECT 1 FROM album_artists aa3 JOIN artists aa4 ON aa3.artist_id = aa4.id WHERE aa3.album_id = al.id AND aa4.name LIKE ?))");
+        }
+        if min_track_count.is_some() {
+            sql.push_str(" AND al.track_count >= ?");
+        }
 
         sql.push_str(" ORDER BY al.normalized_title ASC, al.id ASC LIMIT ? OFFSET ?");
+
+        let mut args: Vec<&dyn rusqlite::ToSql> = Vec::new();
+        if let Some(pattern) = &keyword_pattern {
+            args.push(pattern);
+            args.push(pattern);
+        }
+        if let Some(min) = &min_track_count {
+            args.push(min);
+        }
+        args.push(&limit);
+        args.push(&offset);
 
         let mut result = Vec::new();
 
@@ -83,38 +100,20 @@ impl AlbumRepo {
             })
         };
 
-        if let Some(pattern) = keyword_pattern {
-            let mut stmt = conn.prepare(&sql)?;
-            let rows = stmt.query_map(params![pattern, pattern, limit, offset], |row| {
-                let thumb: Option<Vec<u8>> = row.get(5)?;
-                Ok(AlbumDTO {
-                    id: row.get(0)?,
-                    title: row.get(1)?,
-                    artist_name: row.get(2)?,
-                    cover_artwork_id: row.get(3)?,
-                    track_count: row.get(4)?,
-                    cover_thumbnail_base64: blob_to_data_url(thumb),
-                })
-            })?;
-            for r in rows {
-                result.push(r?);
-            }
-        } else {
-            let mut stmt = conn.prepare(&sql)?;
-            let rows = stmt.query_map(params![limit, offset], |row| {
-                let thumb: Option<Vec<u8>> = row.get(5)?;
-                Ok(AlbumDTO {
-                    id: row.get(0)?,
-                    title: row.get(1)?,
-                    artist_name: row.get(2)?,
-                    cover_artwork_id: row.get(3)?,
-                    track_count: row.get(4)?,
-                    cover_thumbnail_base64: blob_to_data_url(thumb),
-                })
-            })?;
-            for r in rows {
-                result.push(r?);
-            }
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(args.iter()), |row| {
+            let thumb: Option<Vec<u8>> = row.get(5)?;
+            Ok(AlbumDTO {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                artist_name: row.get(2)?,
+                cover_artwork_id: row.get(3)?,
+                track_count: row.get(4)?,
+                cover_thumbnail_base64: blob_to_data_url(thumb),
+            })
+        })?;
+        for r in rows {
+            result.push(r?);
         }
 
         Ok(result)

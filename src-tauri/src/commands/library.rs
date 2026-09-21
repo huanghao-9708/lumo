@@ -37,6 +37,7 @@ pub fn library_get_albums(
     limit: u32,
     offset: u32,
     search_keyword: Option<String>,
+    min_track_count: Option<i64>,
 ) -> Result<Vec<AlbumDTO>, AppError> {
     let _trace = ipc_trace!("library_get_albums");
     let conn = db_state.db.get()?;
@@ -45,6 +46,7 @@ pub fn library_get_albums(
         limit,
         offset,
         search_keyword,
+        min_track_count,
     )
     .map_err(|e| e.into())
 }
@@ -53,11 +55,16 @@ pub fn library_get_albums(
 pub fn library_get_album_count(
     db_state: State<'_, DbState>,
     search_keyword: Option<String>,
+    min_track_count: Option<i64>,
 ) -> Result<i64, AppError> {
     let _trace = ipc_trace!("library_get_album_count");
     let conn = db_state.db.get()?;
-    crate::repositories::album_repo::AlbumRepo::get_album_count(&conn, search_keyword)
-        .map_err(|e| e.into())
+    crate::repositories::album_repo::AlbumRepo::get_album_count(
+        &conn,
+        search_keyword,
+        min_track_count,
+    )
+    .map_err(|e| e.into())
 }
 
 #[tauri::command(async)]
@@ -66,6 +73,7 @@ pub fn library_get_artists(
     limit: u32,
     offset: u32,
     search_keyword: Option<String>,
+    min_track_count: Option<i64>,
 ) -> Result<ArtistListResult, AppError> {
     let _trace = ipc_trace!("library_get_artists");
     let conn = db_state.db.get()?;
@@ -74,6 +82,7 @@ pub fn library_get_artists(
         limit,
         offset,
         search_keyword,
+        min_track_count,
     )
     .map_err(|e| e.into())
 }
@@ -381,7 +390,7 @@ pub async fn library_get_lyrics(
                 t.title,
                 (SELECT GROUP_CONCAT(a.name, ', ') FROM track_artists ta JOIN artists a ON ta.artist_id = a.id WHERE ta.track_id = t.id ORDER BY ta.position),
                 (SELECT title FROM albums WHERE id = t.album_id),
-                (SELECT duration_ms FROM media_files WHERE track_id = t.id ORDER BY CASE WHEN id = t.primary_file_id THEN 0 ELSE 1 END, id LIMIT 1)
+                (SELECT mf.duration_ms FROM media_files mf WHERE mf.id = COALESCE(t.primary_file_id, (SELECT mf2.id FROM media_files mf2 WHERE mf2.track_id = t.id ORDER BY mf2.id LIMIT 1)))
             FROM tracks t WHERE t.id = ?1
         ")?;
         use rusqlite::OptionalExtension;
@@ -886,6 +895,8 @@ pub fn library_set_favorite_batch(
 #[tauri::command(async)]
 pub fn library_get_startup_bundle(
     db_state: State<'_, DbState>,
+    album_min_track_count: Option<i64>,
+    artist_min_track_count: Option<i64>,
 ) -> Result<crate::models::StartupBundle, AppError> {
     let _trace = ipc_trace!("library_get_startup_bundle");
     let conn = db_state.db.get()?;
@@ -916,12 +927,13 @@ pub fn library_get_startup_bundle(
 
     // 专辑网格第一页 30 条 / 艺人第一页 50 条——与前端 albumsPageSize / artistsLimit 一致，
     // 前端据此续接增量加载。缩略图/计数等参数与各自独立命令完全同形。
-    let albums = AlbumRepo::get_albums_paginated(&conn, 30, 0, None)
+    let albums = AlbumRepo::get_albums_paginated(&conn, 30, 0, None, album_min_track_count)
         .map_err(|e| AppError::Internal(e.to_string()))?;
-    let album_total =
-        AlbumRepo::get_album_count(&conn, None).map_err(|e| AppError::Internal(e.to_string()))?;
-    let ArtistListResult { artists, total } = ArtistRepo::get_artists_paginated(&conn, 50, 0, None)
+    let album_total = AlbumRepo::get_album_count(&conn, None, album_min_track_count)
         .map_err(|e| AppError::Internal(e.to_string()))?;
+    let ArtistListResult { artists, total } =
+        ArtistRepo::get_artists_paginated(&conn, 50, 0, None, artist_min_track_count)
+            .map_err(|e| AppError::Internal(e.to_string()))?;
 
     Ok(crate::models::StartupBundle {
         counts,
