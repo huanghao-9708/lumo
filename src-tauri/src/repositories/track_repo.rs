@@ -356,7 +356,8 @@ impl TrackRepo {
         // deep 标志 = 该子目录下半层之后还有 '\\'，即存在含音频的孙目录。
         let upper = format!("{}\u{10FFFF}", relative_prefix);
         let start = relative_prefix.chars().count() + 1;
-        let mut stmt = conn.prepare("
+        let mut stmt = conn.prepare(
+            "
                 SELECT seg1, SUM(cnt), MAX(deep) FROM (
                     SELECT substr(rest, 1, instr(rest, '\\') - 1) AS seg1,
                            COUNT(*) AS cnt,
@@ -368,7 +369,8 @@ impl TrackRepo {
                           AND normalized_path >= ?3 AND normalized_path < ?4)
                     WHERE instr(rest, '\\') > 0
                     GROUP BY seg1, deep
-                ) GROUP BY seg1")?;
+                ) GROUP BY seg1",
+        )?;
         let stats: std::collections::HashMap<String, (i64, bool)> = stmt
             .query_map(
                 rusqlite::params![start as i64, source_id, &relative_prefix, &upper],
