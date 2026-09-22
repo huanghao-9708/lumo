@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { ref, watch, nextTick, computed } from 'vue';
+import { ref, watch, nextTick, computed, onMounted, onBeforeUnmount } from 'vue';
 import { usePlayerStore } from '../../stores/player';
 
 /**
  * 可复用的同步歌词视图。
  *
- * - 自动滚动到当前播放行（scrollIntoView smooth center）
+ * - 自动平滑滚动到当前播放行（自绘 rAF 动画，见下方说明）
  * - 点击任意行 seek 到该行时间
  * - 当前行 / 已唱行 / 未唱行三态着色
  *
@@ -23,17 +23,130 @@ const playerStore = usePlayerStore();
 
 const lyricsContainer = ref<HTMLElement | null>(null);
 
-function scrollToActiveLyric() {
-  if (!lyricsContainer.value) return;
-  const el = lyricsContainer.value.querySelector('[data-active-lyric="true"]') as HTMLElement | null;
-  if (el) {
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+/* ===================== 平滑滚动 =====================
+ *
+ * 为什么不用 `scrollIntoView({ behavior: 'smooth' })`：
+ *   1. 副歌那种连续的短句，行间跳变很快，原生动画被下一次调用打断时会直接"跳"过去，
+ *      看起来就是生硬地闪一下；
+ *   2. 无法干预它的滚动条表现——浏览器把程序化滚动同样算作"正在滚动"，
+ *      全局 auto-hide 逻辑会给容器加 .scrolling，thumb 无预兆地闪出来。
+ * 自绘 rAF 动画可以：从当前位置续接（不跳）、按距离给时长、并在动画期间
+ * 给容器打上 data-suppress-scrollbar，让滚动条保持隐藏。
+ */
+const SCROLL_MIN_MS = 260;
+const SCROLL_MAX_MS = 620;
+/** 动画结束后再保留一小段抑制窗口：最后一次 scrollTop 写入的 scroll 事件是异步派发的 */
+const SUPPRESS_TAIL_MS = 160;
+
+let rafId = 0;
+let suppressTimer: ReturnType<typeof setTimeout> | null = null;
+
+function releaseSuppress() {
+  if (suppressTimer) {
+    clearTimeout(suppressTimer);
+    suppressTimer = null;
   }
+  const el = lyricsContainer.value;
+  if (el?.dataset.suppressScrollbar) delete el.dataset.suppressScrollbar;
 }
+
+function scheduleSuppressRelease() {
+  if (suppressTimer) clearTimeout(suppressTimer);
+  suppressTimer = setTimeout(releaseSuppress, SUPPRESS_TAIL_MS);
+}
+
+function stopAnimation() {
+  if (rafId) {
+    cancelAnimationFrame(rafId);
+    rafId = 0;
+  }
+  releaseSuppress();
+}
+
+/** 当前行中线对齐到容器中线的目标 scrollTop（用 rect 算，不依赖 offsetParent） */
+function activeLineTargetTop(sc: HTMLElement, line: HTMLElement): number {
+  const scRect = sc.getBoundingClientRect();
+  const lineRect = line.getBoundingClientRect();
+  const delta = (lineRect.top + lineRect.height / 2) - (scRect.top + sc.clientHeight / 2);
+  const max = Math.max(0, sc.scrollHeight - sc.clientHeight);
+  return Math.min(Math.max(0, sc.scrollTop + delta), max);
+}
+
+/** 立即定位（不播动画），用于换歌回到开头 */
+function jumpTo(top: number) {
+  const sc = lyricsContainer.value;
+  if (!sc) return;
+  stopAnimation();
+  sc.dataset.suppressScrollbar = '1';
+  sc.scrollTop = top;
+  scheduleSuppressRelease();
+}
+
+function scrollToActiveLyric() {
+  const sc = lyricsContainer.value;
+  if (!sc) return;
+  const line = sc.querySelector('[data-active-lyric="true"]') as HTMLElement | null;
+  if (!line) return;
+
+  const from = sc.scrollTop;
+  const to = activeLineTargetTop(sc, line);
+  const distance = Math.abs(to - from);
+  if (distance < 1) return;
+
+  if (rafId) cancelAnimationFrame(rafId);
+  // 距离越长给越多时间，但收敛在 [260, 620]ms：长跳不拖沓、短跳不突兀
+  const duration = Math.min(SCROLL_MAX_MS, SCROLL_MIN_MS + distance * 0.35);
+  const startedAt = performance.now();
+  sc.dataset.suppressScrollbar = '1';
+
+  const step = (now: number) => {
+    const node = lyricsContainer.value;
+    if (!node) {
+      rafId = 0;
+      return;
+    }
+    const t = Math.min(1, (now - startedAt) / duration);
+    const eased = 1 - Math.pow(1 - t, 3); // easeOutCubic：起步利落、收尾稳
+    node.scrollTop = from + (to - from) * eased;
+    if (t < 1) {
+      rafId = requestAnimationFrame(step);
+    } else {
+      rafId = 0;
+      scheduleSuppressRelease();
+    }
+  };
+  rafId = requestAnimationFrame(step);
+}
+
+/** 用户一旦自己滚（滚轮/触摸/按住拖动），立刻让出控制权，不跟用户抢 */
+function onUserScrollIntent() {
+  stopAnimation();
+}
+
+onMounted(() => {
+  const sc = lyricsContainer.value;
+  sc?.addEventListener('wheel', onUserScrollIntent, { passive: true });
+  sc?.addEventListener('touchstart', onUserScrollIntent, { passive: true });
+  sc?.addEventListener('pointerdown', onUserScrollIntent, { passive: true });
+});
+
+onBeforeUnmount(() => {
+  stopAnimation();
+  const sc = lyricsContainer.value;
+  sc?.removeEventListener('wheel', onUserScrollIntent);
+  sc?.removeEventListener('touchstart', onUserScrollIntent);
+  sc?.removeEventListener('pointerdown', onUserScrollIntent);
+});
 
 watch(
   () => playerStore.activeLyricIndex,
   () => nextTick(scrollToActiveLyric),
+);
+
+// 换歌：立刻回到开头（不播动画），避免上一首的滚动位置残留到新歌词上
+watch(
+  () => playerStore.currentTrack?.id,
+  () => nextTick(() => jumpTo(0)),
 );
 
 /* variant → 样式映射 */

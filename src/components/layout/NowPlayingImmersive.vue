@@ -4,7 +4,7 @@ import type { CSSProperties } from 'vue';
 import {
   Shuffle, SkipBack, Play, Pause, SkipForward, Repeat, Repeat1,
   ChevronDown, Disc3, Heart, Volume, Volume1, Volume2,
-  Minus, Square, X,
+  Minus, Square, X, ListPlus,
 } from 'lucide-vue-next';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { usePlayerStore } from '../../stores/player';
@@ -13,6 +13,7 @@ import { useArtworkSrc } from '../../composables/useArtworkSrc';
 import { useCoverColor } from '../../composables/useCoverColor';
 import { playbackGetLevel } from '../../api/playback';
 import LyricsView from '../shared/LyricsView.vue';
+import PlaylistPickerModal from '../shared/PlaylistPickerModal.vue';
 
 const playerStore = usePlayerStore();
 const uiStore = useUiStore();
@@ -156,24 +157,50 @@ function onVolumeWheel(e: WheelEvent) {
   playerStore.setVolume(Math.max(0, Math.min(100, playerStore.volume + delta)));
 }
 
-/* ============ 当前轨道信息 ============ */
-function fileInfoText(): string {
-  const fi = playerStore.currentTrackFileInfo as any;
-  const parts: string[] = [];
-  if (fi?.release_year) parts.push(String(fi.release_year));
-  if (playerStore.currentTrack?.format) parts.push(playerStore.currentTrack.format);
-  if (fi?.bit_depth && fi?.sample_rate) {
-    parts.push(`${fi.bit_depth}bit / ${(fi.sample_rate / 1000).toFixed(0)}kHz`);
+/* ============ 当前轨道信息（音质 / 文件大小） ============ */
+function formatBytes(bytes: number | null | undefined): string {
+  if (bytes == null || bytes <= 0) return '';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let value = bytes;
+  let i = 0;
+  while (value >= 1024 && i < units.length - 1) {
+    value /= 1024;
+    i += 1;
   }
-  return parts.join(' · ');
+  return `${value >= 100 || i === 0 ? Math.round(value) : value.toFixed(1)} ${units[i]}`;
 }
 
-/* ============ 收藏 ============ */
+/** 音质：格式 + 位深/采样率（无损）或码率（有损）+ 声道 */
+const qualityText = computed(() => {
+  const track = playerStore.currentTrack;
+  const fi = playerStore.currentTrackFileInfo;
+  const parts: string[] = [];
+  if (track?.format) parts.push(track.format);
+  if (fi?.bit_depth && fi?.sample_rate) {
+    const khz = fi.sample_rate % 1000 === 0 ? (fi.sample_rate / 1000).toFixed(0) : (fi.sample_rate / 1000).toFixed(1);
+    parts.push(`${fi.bit_depth}bit / ${khz}kHz`);
+  } else if (fi?.bitrate) {
+    parts.push(`${Math.round(fi.bitrate / 1000)} kbps`);
+  }
+  if (fi?.channels === 1) parts.push('单声道');
+  else if (fi?.channels === 2) parts.push('立体声');
+  else if (fi?.channels) parts.push(`${fi.channels} 声道`);
+  return parts.join(' · ');
+});
+
+/** 文件大小：优先物理文件信息，回退到曲目上缓存的值 */
+const fileSizeText = computed(() =>
+  formatBytes(playerStore.currentTrackFileInfo?.file_size ?? playerStore.currentTrack?.fileSize ?? null)
+);
+
+/* ============ 收藏 / 添加到歌单 ============ */
 const trackIsFav = computed(() => playerStore.currentTrack?.isFavorite ?? false);
 function toggleFav() {
   const t = playerStore.currentTrack;
   if (t) playerStore.toggleFavorite(t.id);
 }
+
+const showPlaylistPicker = ref(false);
 
 /* ============ 退出（进入/退出动画由 App.vue 的 <Transition> 控制） ============ */
 function exit() {
@@ -279,20 +306,37 @@ onUnmounted(() => {
         </h1>
         <p class="text-[15px] text-white/85 truncate w-full">{{ playerStore.currentTrack.artist }}</p>
         <p class="text-[13px] text-white/55 truncate w-full">{{ playerStore.currentTrack.album }}</p>
-        <p v-if="fileInfoText()" class="text-[11px] font-mono uppercase tracking-wider text-white/45 w-full">
-          {{ fileInfoText() }}
+
+        <!-- 音质 / 文件大小 -->
+        <p v-if="qualityText" class="mt-1 text-[11px] font-mono uppercase tracking-wider text-white/45 w-full">
+          {{ qualityText }}
+        </p>
+        <p v-if="fileSizeText" class="text-[11px] font-mono tracking-wider text-white/40 w-full">
+          {{ fileSizeText }}
         </p>
 
-        <button
-          class="mt-3 flex items-center gap-2 text-white/80 hover:text-white transition-colors-smooth text-[13px] font-medium"
-          @click="toggleFav"
-        >
-          <Heart
-            class="w-[18px] h-[18px]"
-            :class="trackIsFav ? 'text-brand-orange fill-current' : ''"
-          />
-          {{ trackIsFav ? '已收藏' : '收藏' }}
-        </button>
+        <div class="mt-3 flex items-center gap-5">
+          <button
+            class="flex items-center gap-2 text-white/80 hover:text-white transition-colors-smooth text-[13px] font-medium"
+            :title="trackIsFav ? '取消收藏' : '收藏'"
+            @click="toggleFav"
+          >
+            <Heart
+              class="w-[18px] h-[18px]"
+              :class="trackIsFav ? 'text-brand-orange fill-current' : ''"
+            />
+            {{ trackIsFav ? '已收藏' : '收藏' }}
+          </button>
+
+          <button
+            class="flex items-center gap-2 text-white/80 hover:text-white transition-colors-smooth text-[13px] font-medium"
+            title="添加到歌单"
+            @click="showPlaylistPicker = true"
+          >
+            <ListPlus class="w-[18px] h-[18px]" />
+            添加到歌单
+          </button>
+        </div>
       </div>
 
       <!-- 中：封面（正方形四边羽化，唯一视觉焦点） -->
@@ -413,6 +457,14 @@ onUnmounted(() => {
         <span class="text-[10px] font-mono text-white/60 w-7 tabular-nums">{{ playerStore.volume }}</span>
       </div>
     </div>
+
+    <!-- 添加到歌单（AppModal 走 Teleport，放在这一层里不会影响布局，也不会被 z-200 压住） -->
+    <PlaylistPickerModal
+      v-if="showPlaylistPicker && playerStore.currentTrack"
+      :track-ids="[playerStore.currentTrack.id]"
+      :track-title="playerStore.currentTrack.title"
+      @close="showPlaylistPicker = false"
+    />
   </div>
 </template>
 

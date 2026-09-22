@@ -1,4 +1,4 @@
-use crate::services::metadata::AudioMetadata;
+use crate::services::metadata::{normalize_artist_name, AudioMetadata};
 use rusqlite::{params, Connection, OptionalExtension};
 
 /// 扫描 worker 预处理好的封面信息：哈希、缓存路径、缩略图全部在事务外算好，
@@ -25,25 +25,6 @@ pub struct PreparedFile {
     pub artwork: PreparedArtwork,
     /// 同目录同名 .lrc 的预读内容（None = 没有 lrc 或远程源；index_file 内再回退内嵌歌词）
     pub lrc_content: Option<String>,
-}
-
-/// 归一化艺人/标题字符串：去掉首尾空白、折叠中间多个空白为单个空格。
-/// 仅用于展示与去重的"原值"清理；做唯一键时再额外 `.to_lowercase()`。
-fn normalize_artist_name(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut prev_space = false;
-    for ch in s.trim().chars() {
-        if ch.is_whitespace() {
-            if !prev_space {
-                out.push(' ');
-                prev_space = true;
-            }
-        } else {
-            out.push(ch);
-            prev_space = false;
-        }
-    }
-    out
 }
 
 /// 提供本地曲库核心交互的服务类，处理所有文件入库解析以及前端歌曲数据的拉取
@@ -359,20 +340,13 @@ impl LibraryService {
         )
     }
 
-    /// 切分多位艺人字符串（支持 feat./&/;/、等分隔符），逐个 upsert 并返回 ID 列表。
+    /// 切分多位艺人字符串（支持 feat./&/;/、/| 等分隔符），逐个 upsert 并返回 ID 列表。
     /// 若解析结果为空（全是分隔符或空白），则回退使用 "Unknown Artist"。
+    /// 分隔符清单一律走 services::metadata，与存量数据迁移（db 的 V5/V11）保持同源。
     fn split_and_upsert_artists(conn: &Connection, raw: &str) -> rusqlite::Result<Vec<i64>> {
-        let cleaned = raw
-            .replace(" feat. ", "/")
-            .replace(" ft. ", "/")
-            .replace(" Feat. ", "/")
-            .replace(" Ft. ", "/")
-            .replace(" & ", "/")
-            .replace(['&', ';', '；', '、', '，', ','], "/");
-
         let mut ids = Vec::new();
-        for part in cleaned.split('/').map(str::trim).filter(|s| !s.is_empty()) {
-            ids.push(Self::upsert_artist(conn, part)?);
+        for part in crate::services::metadata::split_artist_names(raw) {
+            ids.push(Self::upsert_artist(conn, &part)?);
         }
         if ids.is_empty() {
             ids.push(Self::upsert_artist(conn, "Unknown Artist")?);
