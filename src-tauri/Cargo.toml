@@ -27,7 +27,11 @@ r2d2 = "0.8"
 r2d2_sqlite = "0.25"
 lofty = "0.21"
 symphonia = { version = "0.5.4", features = ["all"] }
-rodio = "0.19"
+# ADR-2：rodio 默认特性用的是 claxon(FLAC)/lewton(Vorbis) 原生解码器，
+# 而这两个解码器的 `try_seek` 是空实现（直接返回 NotSupported）——
+# 后果就是 FLAC/OGG 拖进度条完全没反应（WAV/MP3 正常，容易误判成"偶发"）。
+# 改用 symphonia 全家桶：FLAC/OGG/MP3/WAV/M4A(AAC) 都支持 seek。
+rodio = { version = "0.19", default-features = false, features = ["symphonia-all"] }
 tauri-plugin-dialog = "2"
 tracing = "0.1"
 tracing-subscriber = "0.3"

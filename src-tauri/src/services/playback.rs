@@ -2,8 +2,52 @@ use rodio::{Decoder, OutputStream, Sink, Source};
 use std::fs::File;
 use std::io::BufReader;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tracing::info;
+
+/// 播放速率下限/上限（前端只提供 0.5–1.5 五档，这里留一点余量做防御）
+const SPEED_MIN: f32 = 0.25;
+const SPEED_MAX: f32 = 2.0;
+
+/// rodio 的 `Sink::get_pos()` 返回的是**播放时间轴**，不是曲目内容位置：
+/// 速率 1.5x 时它 1 秒才走 1 秒，而曲目内容已经走了 1.5 秒
+/// （rodio 把 Speed 的 sample_rate 乘上了 factor，位置按该采样率折算）。
+/// 所以内容位置必须自己累：`content += Δwall × speed`。
+///
+/// 为什么不能简单地 `content = wall × speed`：用户中途改速率时，
+/// 之前那段已经按旧速率播过，直接乘会让进度条整体跳一下。
+#[derive(Debug, Default)]
+struct PositionTracker {
+    /// 曲目内容位置（ms）
+    content_ms: f64,
+    /// 上次同步时的播放时间轴位置（ms）
+    wall_ms: f64,
+}
+
+impl PositionTracker {
+    /// 把时间轴推进到 `wall_now_ms`，按 `speed` 折算进内容位置。
+    fn sync(&mut self, wall_now_ms: f64, speed: f64) {
+        if wall_now_ms < self.wall_ms {
+            // 时间轴回退 = 换了新音源（gapless 无缝切歌）或 seek 后 rodio 重算：
+            // 视为新一段，内容位置直接跟时间轴对齐，别把上一首的时长算进来。
+            self.content_ms = wall_now_ms * speed;
+        } else {
+            self.content_ms += (wall_now_ms - self.wall_ms) * speed;
+        }
+        self.wall_ms = wall_now_ms;
+    }
+
+    /// 对齐到指定内容位置（seek 成功后调用，避免进度条假跳）
+    fn align(&mut self, content_ms: f64, wall_ms: f64) {
+        self.content_ms = content_ms;
+        self.wall_ms = wall_ms;
+    }
+
+    fn reset(&mut self) {
+        self.content_ms = 0.0;
+        self.wall_ms = 0.0;
+    }
+}
 
 /// 集中管理音频输出流与播放 Sink。
 ///
@@ -34,6 +78,11 @@ pub struct PlaybackManager {
     /// 当前音频能量（f32 的位模式），由 `LevelSource` 在音频线程逐窗写入。
     /// 用原子量而非 Mutex：音频回调路径上绝不能阻塞。
     level: Arc<AtomicU32>,
+    /// 播放速率。写进 rodio 的 `Sink::set_speed`——音频线程每 5ms 读一次该值，
+    /// 所以改速率立即生效、不需要重建音源（变速=重采样，会有音高变化，这是无时间拉伸依赖下的取舍）。
+    speed: Mutex<f32>,
+    /// 播放时间轴 → 曲目内容位置的换算（见 `PositionTracker`）
+    position: Mutex<PositionTracker>,
 }
 
 impl PlaybackManager {
@@ -51,7 +100,31 @@ impl PlaybackManager {
             sink,
             active: AtomicBool::new(false),
             level: Arc::new(AtomicU32::new(0)),
+            speed: Mutex::new(1.0),
+            position: Mutex::new(PositionTracker::default()),
         })
+    }
+
+    /// 播放速率（1.0 为原速）
+    pub fn get_speed(&self) -> f32 {
+        *self.speed.lock().unwrap()
+    }
+
+    /// 设置播放速率。立即生效（rodio 音频线程每 5ms 取一次该值）。
+    pub fn set_speed(&self, speed: f32) {
+        if !speed.is_finite() {
+            return;
+        }
+        let speed = speed.clamp(SPEED_MIN, SPEED_MAX);
+        // 先把「改速率之前」的进度按旧速率折算掉，否则进度条会跳
+        let previous = self.get_speed();
+        let wall_ms = self.sink.get_pos().as_millis() as f64;
+        if let Ok(mut tracker) = self.position.lock() {
+            tracker.sync(wall_ms, previous as f64);
+        }
+        *self.speed.lock().unwrap() = speed;
+        self.sink.set_speed(speed);
+        info!("Playback speed set to {:.2}x", speed);
     }
 
     pub fn play_file(&self, path: &std::path::Path) -> Result<Option<u64>, String> {
@@ -70,6 +143,11 @@ impl PlaybackManager {
         let duration = decoder.total_duration().map(|d| d.as_millis() as u64);
 
         self.sink.stop(); // 清掉旧队列，避免叠加
+        if let Ok(mut tracker) = self.position.lock() {
+            tracker.reset();
+        }
+        // 速率设置要重新下发：rodio 的 speed 是挂在「被 append 的音源」上的
+        self.sink.set_speed(self.get_speed());
                           // convert_samples 把解码器的 i16 样本统一成 f32（LevelSource 按 f32 度量能量）；
                           // 该转换器由 rodio 实现，会把 try_seek 原样透传给解码器，因此拖拽进度条语义不变。
         self.sink.append(LevelSource::new(
@@ -142,20 +220,42 @@ impl PlaybackManager {
         info!("Playback stopped");
         self.sink.stop();
         self.level.store(0f32.to_bits(), Ordering::Relaxed);
+        if let Ok(mut tracker) = self.position.lock() {
+            tracker.reset();
+        }
     }
 
     pub fn set_volume(&self, volume: f32) {
         self.sink.set_volume(volume);
     }
 
+    /// 当前曲目内容位置（ms）。
+    ///
+    /// 注意不是直接返回 `Sink::get_pos()`：那个是「播放时间轴」，变速后两者不一致
+    /// （详见 `PositionTracker`）。
     pub fn get_pos(&self) -> u64 {
-        self.sink.get_pos().as_millis() as u64
+        let speed = self.get_speed() as f64;
+        let wall_ms = self.sink.get_pos().as_millis() as f64;
+        let Ok(mut tracker) = self.position.lock() else {
+            return wall_ms as u64;
+        };
+        tracker.sync(wall_ms, speed);
+        tracker.content_ms.max(0.0) as u64
     }
 
+    /// 跳转到曲目内的 `position_ms`（内容位置）。
     pub fn try_seek(&self, position_ms: u64) -> Result<(), String> {
+        let speed = self.get_speed().max(0.01) as f64;
+        // rodio 的 seek 接受的是「播放时间轴」上的位置，需要按速率换算回内容位置
+        let wall_ms = position_ms as f64 / speed;
         self.sink
-            .try_seek(std::time::Duration::from_millis(position_ms))
-            .map_err(|e| format!("Failed to seek: {:?}", e))
+            .try_seek(std::time::Duration::from_millis(wall_ms as u64))
+            .map_err(|e| format!("Failed to seek: {:?}", e))?;
+        // 成功后再对齐累计器；失败时不动，避免进度条假跳
+        if let Ok(mut tracker) = self.position.lock() {
+            tracker.align(position_ms as f64, wall_ms);
+        }
+        Ok(())
     }
 
     /// 当前是否已播放完毕（解码队列为空）。前端在时长未知时也能据此自动切下一首。

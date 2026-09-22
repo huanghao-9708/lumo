@@ -28,6 +28,15 @@ export function playbackSetVolume(volume: number): Promise<void> {
   return invoke('playback_set_volume', { volume });
 }
 
+/** 设置播放速率（1.0 原速）。对正在播放的曲目立即生效。 */
+export function playbackSetSpeed(speed: number): Promise<void> {
+  return invoke('playback_set_speed', { speed });
+}
+
+export function playbackGetSpeed(): Promise<number> {
+  return invoke('playback_get_speed');
+}
+
 export function playbackGetPos(): Promise<number> {
   return invoke('playback_get_pos');
 }

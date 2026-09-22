@@ -290,7 +290,7 @@ CREATE TABLE IF NOT EXISTS artwork (
 /// 当前代码支持的 schema 版本上界（= apply_migrations 的最后一个版本块）。
 /// 恢复云端快照时用它做下界校验：版本高于本机的快照说明来自更新版本的 Lumo，
 /// 就地迁移会写出本机读不懂的 schema，必须拒绝而不是强行升级。
-pub const TARGET_SCHEMA_VERSION: i64 = 11;
+pub const TARGET_SCHEMA_VERSION: i64 = 12;
 
 /// 读取当前已应用到的迁移版本（0 表示全新库）
 fn get_current_version(conn: &Connection) -> Result<i64> {
@@ -362,6 +362,8 @@ fn split_combined_artists(conn: &Connection) -> Result<()> {
     }
     // LIKE 对 ASCII 默认不区分大小写，"%feat%" 已覆盖 feat./Feat./FEAT.
     sql.push_str(" OR name LIKE '%feat%' OR name LIKE '%ft.%' OR name LIKE '%ft %'");
+    // 加号是「两侧空白才算分隔符」（保护 C++ / ++），粗筛同样只匹配 ' + '
+    sql.push_str(" OR name LIKE '% + %'");
 
     let combined: Vec<(i64, String)> = {
         let mut stmt = conn.prepare(&sql)?;
@@ -822,6 +824,22 @@ fn apply_migrations(conn: &Connection, app_dir: &std::path::Path) -> Result<()> 
         tracing::info!("数据库迁移：已升级至 V11（多艺人分隔符补全 + 组合艺人重新拆分）");
     }
 
+    // ===== V12: 再补一批多艺人分隔符（全角斜杠 ／、半角顿号 ､、两侧带空格的加号 +）=====
+    // 背景：实测曲库里还有 "张玉华／李圣杰"、"米津玄师 + 池田エライザ" 这类写法。
+    // 与 V11 共用 split_combined_artists（分隔符清单已扩容），所以这里只需要再跑一遍。
+    // 单独发行一个版本号是为了「已经跑过 V11 的库」也能补上——V11 的清单当时还没这几项。
+    if current < 12 {
+        // 整个版本块在一个事务内完成：语句与 schema_migrations 版本号原子提交，
+        // 中途失败（断电/进程被杀/唯一约束冲突）一律回滚，不留半迁移状态。
+        let __tx = conn.unchecked_transaction()?;
+        let conn: &Connection = &__tx;
+        split_combined_artists(conn)?;
+        mark_migration_applied(conn, 12)?;
+        __tx.commit()?;
+        current = 12;
+        tracing::info!("数据库迁移：已升级至 V12（多艺人分隔符再补全：／ ､ + ）");
+    }
+
     let _ = current;
     Ok(())
 }
@@ -991,15 +1009,15 @@ mod tests {
         assert_required_tables(&conn);
     }
 
-    /// V11：多艺人分隔符补全（竖线 `|` 等）。
+    /// V11/V12：多艺人分隔符补全（竖线 `|` / 全角斜杠 `／` / 两侧带空格的 `+` 等）。
     /// 组合艺人被拆成独立艺人、引用重指、收藏迁移，组合那条空壳记录被清掉。
     #[test]
-    fn migration_v11_splits_combined_artists_with_pipe_separator() {
+    fn migration_v11_v12_split_combined_artists() {
         let dir = TempDir::new("db_v11_split");
         let pool = init_db(dir.db_path()).expect("初始化失败");
         let conn = pool.get().unwrap();
 
-        // 造一条「扫描时按竖线分隔」的组合艺人，并挂上曲目与收藏
+        // 造「扫描时按竖线分隔」的组合艺人，并挂上曲目与收藏
         conn.execute(
             "INSERT INTO artists (name, normalized_name, sort_name) VALUES ('周杰伦|方文山', '周杰伦|方文山', '周杰伦|方文山')",
             [],
@@ -1025,10 +1043,31 @@ mod tests {
         )
         .unwrap();
 
-        // 回退版本号后重跑迁移，等价于升级到 V11 的那次启动
-        conn.execute("DELETE FROM schema_migrations WHERE version = 11", [])
+        // V12 才覆盖的两种写法：全角斜杠、两侧带空格的加号
+        for (combined, title) in [("张玉华／李圣杰", "合唱一"), ("米津玄师 + 池田エライザ", "合唱二")] {
+            conn.execute(
+                "INSERT INTO artists (name, normalized_name, sort_name) VALUES (?1, ?1, ?1)",
+                rusqlite::params![combined],
+            )
             .unwrap();
-        apply_migrations(&conn, dir.path()).expect("重跑 V11 失败");
+            let aid = conn.last_insert_rowid();
+            conn.execute(
+                "INSERT INTO tracks (title, normalized_title) VALUES (?1, ?1)",
+                rusqlite::params![title],
+            )
+            .unwrap();
+            let tid = conn.last_insert_rowid();
+            conn.execute(
+                "INSERT INTO track_artists (track_id, artist_id, role, position) VALUES (?1, ?2, 'main', 0)",
+                rusqlite::params![tid, aid],
+            )
+            .unwrap();
+        }
+
+        // 回退版本号后重跑迁移，等价于升级到 V12 的那次启动
+        conn.execute("DELETE FROM schema_migrations WHERE version >= 11", [])
+            .unwrap();
+        apply_migrations(&conn, dir.path()).expect("重跑迁移失败");
 
         // 组合记录消失，两个真实艺人出现
         let combined_left: i64 = conn
@@ -1044,6 +1083,13 @@ mod tests {
             )
             .unwrap();
         assert_eq!(split_artist_count, 2, "竖线分隔的艺人没有被拆成两位");
+
+        for name in ["张玉华", "李圣杰", "米津玄师", "池田エライザ"] {
+            let n: i64 = conn
+                .query_row("SELECT COUNT(*) FROM artists WHERE name = ?1", [name], |r| r.get(0))
+                .unwrap();
+            assert_eq!(n, 1, "{} 没有被拆出来", name);
+        }
 
         // 曲目的艺人引用改挂到拆分后的两条记录上
         let refs_on_combined: i64 = conn

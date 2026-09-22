@@ -460,6 +460,8 @@ pub fn run() {
             crate::commands::playback::playback_resume,
             crate::commands::playback::playback_stop,
             crate::commands::playback::playback_set_volume,
+            crate::commands::playback::playback_set_speed,
+            crate::commands::playback::playback_get_speed,
             crate::commands::playback::playback_get_pos,
             crate::commands::playback::playback_get_level,
             crate::commands::playback::playback_seek,

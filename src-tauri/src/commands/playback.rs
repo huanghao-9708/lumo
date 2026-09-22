@@ -499,6 +499,31 @@ pub fn playback_set_volume(
     Ok(())
 }
 
+/// 设置播放速率（1.0 原速；前端提供 0.5/0.8/1/1.2/1.5）。
+/// 立即生效，且对正在播放的曲目同样有效（rodio 音频线程每 5ms 取一次该值）。
+#[tauri::command]
+pub fn playback_set_speed(
+    playback_state: State<'_, PlaybackState>,
+    speed: f32,
+) -> Result<(), AppError> {
+    let _trace = ipc_trace!("playback_set_speed");
+    let manager = playback_state
+        .manager
+        .lock()
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+    manager.set_speed(speed);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn playback_get_speed(playback_state: State<'_, PlaybackState>) -> Result<f32, AppError> {
+    let manager = playback_state
+        .manager
+        .lock()
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+    Ok(manager.get_speed())
+}
+
 #[tauri::command]
 pub fn playback_get_pos(playback_state: State<'_, PlaybackState>) -> Result<u64, AppError> {
     let manager = playback_state

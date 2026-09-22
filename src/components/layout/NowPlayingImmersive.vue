@@ -14,6 +14,7 @@ import { useCoverColor } from '../../composables/useCoverColor';
 import { playbackGetLevel } from '../../api/playback';
 import LyricsView from '../shared/LyricsView.vue';
 import PlaylistPickerModal from '../shared/PlaylistPickerModal.vue';
+import PlaybackRateButton from '../shared/PlaybackRateButton.vue';
 
 const playerStore = usePlayerStore();
 const uiStore = useUiStore();
@@ -120,7 +121,22 @@ function startReactiveLoop() {
 }
 
 /* ============ 进度条 ============ */
-const currentTimeText = computed(() => formatMs(playerStore.progressMs));
+/**
+ * 拖拽进度条时只更新本地预览值，松手（change）才真正 seek。
+ * 原生 range 的 input 事件是逐像素触发的，每一次都发一次 IPC 会把通道打满
+ * （详见 IPC 性能一节），而且后端 seek 本身要等音频线程，卡顿会非常明显。
+ */
+const scrubMs = ref<number | null>(null);
+
+function commitScrub() {
+  if (scrubMs.value == null) return;
+  playerStore.seek(scrubMs.value);
+  // seek 会立刻把 progressMs 设为目标值，这里清掉预览值不会造成回跳
+  scrubMs.value = null;
+}
+
+const displayProgressMs = computed(() => scrubMs.value ?? playerStore.progressMs);
+const currentTimeText = computed(() => formatMs(displayProgressMs.value));
 const totalTimeText = computed(() => formatMs(playerStore.durationMs));
 
 function formatMs(ms: number): string {
@@ -433,17 +449,19 @@ onUnmounted(() => {
             type="range"
             min="0"
             :max="playerStore.durationMs || 0"
-            :value="playerStore.progressMs"
+            :value="scrubMs ?? playerStore.progressMs"
             class="immersive-progress flex-1"
             :disabled="!playerStore.durationMs"
-            @input="playerStore.seek(Math.floor(Number(($event.target as HTMLInputElement).value)))"
+            @input="scrubMs = Math.floor(Number(($event.target as HTMLInputElement).value))"
+            @change="commitScrub"
           />
           <span class="text-[10px] font-mono text-white/60 w-9 text-left tabular-nums">{{ totalTimeText }}</span>
         </div>
       </div>
 
-      <!-- 右：音量 -->
-      <div class="flex items-center gap-3 flex-shrink-0 w-[200px] justify-end">
+      <!-- 右：播放速度 + 音量 -->
+      <div class="flex items-center gap-3 flex-shrink-0 w-[260px] justify-end">
+        <PlaybackRateButton variant="light" />
         <component :is="volumeIcon" class="w-[16px] h-[16px] text-white/60" />
         <input
           type="range"

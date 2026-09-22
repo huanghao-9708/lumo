@@ -9,7 +9,7 @@ import shutil
 import sqlite3
 import tempfile
 
-SEPARATORS = set('&＆;；、，,|｜')
+SEPARATORS = set('&＆;；、，,|｜／､')
 KEYWORDS = ["featuring", "feat.", "feat", "ft.", "ft"]
 
 
@@ -22,6 +22,15 @@ def split_artist_names(raw: str):
             buf = ""
             i += 1
             continue
+        # 加号只在两侧都是空白时才当分隔符（保护 C++ / ++）
+        if ch == "+":
+            prev_ws = bool(buf) and buf[-1].isspace()
+            next_ws = i + 1 < len(raw) and raw[i + 1].isspace()
+            if prev_ws and next_ws:
+                flush(out, buf)
+                buf = ""
+                i += 1
+                continue
         at_word_start = (buf == "") or buf[-1].isspace()
         kw_len = match_keyword(raw[i:], at_word_start)
         if kw_len:
@@ -83,6 +92,7 @@ sql = "SELECT id, name FROM artists WHERE 0 = 1"
 for ch in SEPARATORS:
     sql += " OR name LIKE '%{}%'".format(ch)
 sql += " OR name LIKE '%feat%' OR name LIKE '%ft.%' OR name LIKE '%ft %'"
+sql += " OR name LIKE '% + %'"
 
 rows = cur.execute(sql).fetchall()
 print("粗筛命中 artist 行数:", len(rows))

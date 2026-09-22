@@ -16,7 +16,8 @@ import {
   libraryGetStartupBundle,
 } from '../api/library';
 import {
-  playbackPlay, playbackPause, playbackResume, playbackSetVolume, playbackSeek
+  playbackPlay, playbackPause, playbackResume, playbackSetVolume, playbackSeek,
+  playbackSetSpeed,
 } from '../api/playback';
 import {
   sourceAddLocal, sourceAddWebdav, sourceList, sourceRemove, sourceScan,
@@ -269,6 +270,11 @@ export const usePlayerStore = defineStore("player", () => {
   const isPlaying = ref(false);
   const isBuffering = ref(false);
   const volume = ref(75);
+
+  /** 可选的播放速率档位（UI 与校验共用） */
+  const PLAYBACK_RATES = [0.5, 0.8, 1, 1.2, 1.5] as const;
+  /** 播放速率（1 = 原速）。持久化在 localStorage，切歌与重启都保持。 */
+  const playbackRate = ref<number>(1);
 
   const queue = ref<Track[]>([]);
   const currentIndex = ref(-1);
@@ -1812,6 +1818,15 @@ const albums = shallowRef<Album[]>([]);
         }
       }
 
+      // 3.5 恢复播放速率（后端每次启动都是 1.0，需要显式下发）
+      const savedRate = localStorage.getItem('lumo_playback_rate');
+      if (savedRate !== null) {
+        const rate = parseFloat(savedRate);
+        if (!isNaN(rate) && rate >= 0.5 && rate <= 1.5) {
+          await setPlaybackRate(rate);
+        }
+      }
+
       // 4. 恢复当前曲目索引（处于暂停/载入锁状态）
       const savedIdx = localStorage.getItem('lumo_current_index');
       if (savedIdx !== null) {
@@ -2096,6 +2111,22 @@ const albums = shallowRef<Album[]>([]);
     }
   }
 
+  /**
+   * 设置播放速率（0.5–1.5）。后端立即生效（rodio 音频线程每 5ms 取一次该值），
+   * 且进度条位置会按速率换算，所以变速后时间显示不会漂。
+   * 变速是纯重采样，会有音高变化（无时间拉伸依赖下的取舍）。
+   */
+  async function setPlaybackRate(rate: number) {
+    const clamped = Math.min(1.5, Math.max(0.5, Number(rate) || 1));
+    playbackRate.value = clamped;
+    localStorage.setItem('lumo_playback_rate', String(clamped));
+    try {
+      await playbackSetSpeed(clamped);
+    } catch (e) {
+      console.error('Failed to set playback speed:', e);
+    }
+  }
+
   async function seek(positionMs: number) {
     try {
       await playbackSeek(positionMs);
@@ -2262,6 +2293,12 @@ const albums = shallowRef<Album[]>([]);
       if (foundArtist) foundArtist.avatar_artwork_id = artwork_id;
       if (currentArtistDetailsData.value?.id === target_id) {
         currentArtistDetailsData.value.avatar_artwork_id = artwork_id;
+      }
+      // 收藏的歌手列表是独立数组，不跟着 artists 走（收藏页补头像就靠这里回填）
+      const favArtist = favoriteArtists.value.find(a => a.id === target_id);
+      if (favArtist) {
+        favArtist.avatar_artwork_id = artwork_id;
+        favoriteArtists.value = [...favoriteArtists.value];
       }
     });
   }
@@ -2442,6 +2479,10 @@ const albums = shallowRef<Album[]>([]);
     prevTrack,
     setVolume,
     seek,
+    // 播放速率（0.5–1.5）
+    playbackRate,
+    PLAYBACK_RATES,
+    setPlaybackRate,
     addSource,
     addLocalSource,
     removeSource,

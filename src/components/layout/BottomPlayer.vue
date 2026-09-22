@@ -8,18 +8,23 @@ import { usePlayerStore } from '../../stores/player';
 import { useUiStore } from '../../stores/ui';
 import { useArtworkSrc } from '../../composables/useArtworkSrc';
 import { libraryAddToPlaylist } from '../../api/library';
+import PlaybackRateButton from '../shared/PlaybackRateButton.vue';
 
 const playerStore = usePlayerStore();
 const uiStore = useUiStore();
 const coverSrc = useArtworkSrc(() => playerStore.currentTrack?.cover_artwork_id ?? null);
 
 /* ============ 进度条 ============ */
+/** 拖拽中的本地预览位置：拖动期间不动后端，松手才 seek 一次（见下方注释） */
+const dragMs = ref<number | null>(null);
+const displayProgressMs = computed(() => dragMs.value ?? playerStore.progressMs);
+
 const progressPercent = computed(() => {
   const total = playerStore.durationMs;
   if (!total) return 0;
-  return Math.min(100, Math.max(0, (playerStore.progressMs / total) * 100));
+  return Math.min(100, Math.max(0, (displayProgressMs.value / total) * 100));
 });
-const currentTimeText = computed(() => formatMs(playerStore.progressMs));
+const currentTimeText = computed(() => formatMs(displayProgressMs.value));
 const totalTimeText = computed(() => formatMs(playerStore.durationMs));
 
 function formatMs(ms: number): string {
@@ -32,22 +37,38 @@ function formatMs(ms: number): string {
 const isDraggingProgress = ref(false);
 const progressRef = ref<HTMLElement | null>(null);
 
-function seekFromEvent(clientX: number) {
+/** 鼠标横坐标 → 目标毫秒（超出范围时夹到两端） */
+function msFromEvent(clientX: number): number | null {
   const el = progressRef.value;
-  if (!el || playerStore.durationMs <= 0) return;
+  if (!el || playerStore.durationMs <= 0) return null;
   const rect = el.getBoundingClientRect();
   const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-  playerStore.seek(Math.floor(pct * playerStore.durationMs));
+  return Math.floor(pct * playerStore.durationMs);
 }
+
+/**
+ * 拖拽过程只在本地预览，松手才 seek。
+ * mousemove 是逐像素触发的，每次都发 IPC 会把通道打满（本项目最大的坑），
+ * 而后端 seek 还要等音频线程确认，卡顿会被放大得很明显。
+ */
 function onProgressDown(e: MouseEvent) {
+  const ms = msFromEvent(e.clientX);
+  if (ms == null) return;
   isDraggingProgress.value = true;
-  seekFromEvent(e.clientX);
+  dragMs.value = ms;
 }
 function onProgressMove(e: MouseEvent) {
   if (!isDraggingProgress.value) return;
-  seekFromEvent(e.clientX);
+  const ms = msFromEvent(e.clientX);
+  if (ms != null) dragMs.value = ms;
 }
-function onProgressUp() { isDraggingProgress.value = false; }
+function onProgressUp() {
+  if (!isDraggingProgress.value) return;
+  isDraggingProgress.value = false;
+  const ms = dragMs.value;
+  dragMs.value = null;
+  if (ms != null) playerStore.seek(ms);
+}
 
 /* ============ 播放模式 ============ */
 function cycleMode() {
@@ -255,6 +276,8 @@ async function addCurrentToPlaylist(playlistId: number) {
 
     <!-- Actions: Favorite + Add to Playlist -->
     <div v-if="playerStore.currentTrack" class="flex items-center gap-3 flex-shrink-0 mr-2">
+      <!-- 播放速度（0.5–1.5） -->
+      <PlaybackRateButton />
       <button title="收藏" @click="toggleFav">
         <Heart v-if="trackIsFav" class="w-[16px] h-[16px] text-brand-orange fill-current cursor-pointer transition-colors-smooth" />
         <Heart v-else class="w-[16px] h-[16px] text-text-muted hover:text-text-primary cursor-pointer transition-colors-smooth" />

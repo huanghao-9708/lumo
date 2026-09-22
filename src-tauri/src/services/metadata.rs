@@ -11,7 +11,9 @@ use std::path::Path;
 // 现在唯一的清单 + 唯一的拆分函数都放在这里。
 
 /// 多艺人标签的分隔符集合。
-pub const ARTIST_SEPARATORS: &[char] = &['&', '＆', ';', '；', '、', '，', ',', '|', '｜'];
+pub const ARTIST_SEPARATORS: &[char] = &[
+    '&', '＆', ';', '；', '、', '，', ',', '|', '｜', '／', '､',
+];
 
 /// 连接词（需自成词、大小写不敏感）：`feat.` / `ft.` / `featuring`
 const COLLAB_KEYWORDS: &[&str] = &["featuring", "feat.", "feat", "ft.", "ft"];
@@ -58,6 +60,18 @@ pub fn split_artist_names(raw: &str) -> Vec<String> {
             flush_part(&mut out, &mut buf);
             i += ch.len_utf8();
             continue;
+        }
+
+        // 加号只在「两侧都是空白」时才算分隔符：
+        // 曲库里真实的合作标签写作 "A + B"；而 C++ / ++ 这类名字不能被切坏。
+        if ch == '+' {
+            let prev_ws = buf.ends_with(char::is_whitespace);
+            let next_ws = raw[i + 1..].starts_with(char::is_whitespace);
+            if prev_ws && next_ws {
+                flush_part(&mut out, &mut buf);
+                i += 1;
+                continue;
+            }
         }
 
         // 连接词必须自成词：前面是空白/串首，后面是空白/串尾，
@@ -241,6 +255,21 @@ mod tests {
         assert_eq!(split_artist_names("A，B"), vec!["A", "B"]);
         assert_eq!(split_artist_names("A＆B"), vec!["A", "B"]);
         assert_eq!(split_artist_names("A|B|C|D"), vec!["A", "B", "C", "D"]);
+        // 全角斜杠、半角顿号
+        assert_eq!(split_artist_names("张玉华／李圣杰"), vec!["张玉华", "李圣杰"]);
+        assert_eq!(split_artist_names("A､B"), vec!["A", "B"]);
+    }
+
+    /// 加号只在两侧都是空白时才算分隔符，别把 C++ / ++ 这类名字切坏
+    #[test]
+    fn plus_needs_whitespace_on_both_sides() {
+        assert_eq!(
+            split_artist_names("米津玄师 + 池田エライザ"),
+            vec!["米津玄师", "池田エライザ"]
+        );
+        assert_eq!(split_artist_names("C++"), vec!["C++"]);
+        assert_eq!(split_artist_names("A+B"), vec!["A+B"]);
+        assert_eq!(split_artist_names("!!! + Friends"), vec!["!!!", "Friends"]);
     }
 
     #[test]
