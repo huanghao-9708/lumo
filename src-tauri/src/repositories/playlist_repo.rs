@@ -16,14 +16,37 @@ impl PlaylistRepo {
         Ok(conn.last_insert_rowid())
     }
 
+    /// 歌单列表。
+    ///
+    /// 封面策略（与主流播放器一致）：取歌单内**第一首歌曲**所属专辑的封面。
+    /// 由于部分曲目可能没有专辑（或专辑没有封面），这里优先取「第一首有封面的曲目」，
+    /// 全部都没有时才回落到第一首曲目的 album.cover_artwork_id（可能为 NULL）。
+    /// 缩略图单独用主键查询 artwork 表，避免在一条 SQL 里做多层相关子查询。
     pub fn get_playlists(conn: &Connection) -> rusqlite::Result<Vec<PlaylistDTO>> {
         let mut stmt = conn.prepare(
             "
-                SELECT 
-                    p.id, 
+                SELECT
+                    p.id,
                     p.name,
                     p.description,
-                    COUNT(pi.id) as track_count
+                    COUNT(pi.id) AS track_count,
+                    COALESCE(
+                        (SELECT al.cover_artwork_id
+                           FROM playlist_items pi2
+                           JOIN tracks t2 ON t2.id = pi2.track_id
+                           JOIN albums al ON al.id = t2.album_id
+                          WHERE pi2.playlist_id = p.id
+                            AND al.cover_artwork_id IS NOT NULL
+                          ORDER BY pi2.position ASC
+                          LIMIT 1),
+                        (SELECT al2.cover_artwork_id
+                           FROM playlist_items pi3
+                           JOIN tracks t3 ON t3.id = pi3.track_id
+                           LEFT JOIN albums al2 ON al2.id = t3.album_id
+                          WHERE pi3.playlist_id = p.id
+                          ORDER BY pi3.position ASC
+                          LIMIT 1)
+                    ) AS cover_artwork_id
                 FROM playlists p
                 LEFT JOIN playlist_items pi ON p.id = pi.playlist_id
                 GROUP BY p.id
@@ -32,17 +55,41 @@ impl PlaylistRepo {
         )?;
 
         let rows = stmt.query_map([], |row| {
-            Ok(PlaylistDTO {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                description: row.get(2)?,
-                track_count: row.get(3)?,
-            })
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, Option<i64>>(4)?,
+            ))
         })?;
 
-        let mut result = Vec::new();
-        for r in rows {
-            result.push(r?);
+        // 先收集所有行，再把 stmt 归还给 conn，之后才能按 artwork id 查缩略图
+        let base_rows = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(stmt);
+
+        let mut thumb_stmt = conn.prepare(
+            "SELECT thumbnail_blob FROM artwork WHERE id = ?1",
+        )?;
+
+        let mut result = Vec::with_capacity(base_rows.len());
+        for (id, name, description, track_count, cover_artwork_id) in base_rows {
+            let cover_thumbnail_base64 = match cover_artwork_id {
+                Some(aid) => thumb_stmt
+                    .query_row(params![aid], |row| row.get::<_, Option<Vec<u8>>>(0))
+                    .unwrap_or(None),
+                None => None,
+            };
+            result.push(PlaylistDTO {
+                id,
+                name,
+                description,
+                track_count,
+                cover_artwork_id,
+                cover_thumbnail_base64: crate::repositories::thumbnail_to_data_url(
+                    cover_thumbnail_base64,
+                ),
+            });
         }
         Ok(result)
     }

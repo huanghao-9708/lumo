@@ -60,6 +60,10 @@ export interface Playlist {
   name: string;
   count: number;
   description?: string | null;
+  /** 歌单封面 = 歌单内第一首歌曲所属专辑的封面（artwork ID） */
+  cover_artwork_id?: number | null;
+  /** 封面的 200x200 缩略图 data URL；有值时直接 <img src> 渲染 */
+  cover_thumb?: string | null;
 }
 
 export interface Album {
@@ -155,6 +159,9 @@ interface ArtistDetails extends Artist {
   stats: ArtistStatsDTO;
   tracks: Track[];
   albums: Album[];
+  /** 详情页子标签：'tracks' 全部歌曲 / 'albums' 全部专辑。
+   *  提升到 store 而非组件局部状态，返回详情页时才能回到原来的分栏。 */
+  subTab: 'tracks' | 'albums';
   tracksOffset: number;
   albumsOffset: number;
   hasMoreTracks: boolean;
@@ -514,6 +521,10 @@ export const usePlayerStore = defineStore("player", () => {
     await fetchFolderTracks(sourceId, folderPath, false);
   }
 
+  /** 下一次加载艺人详情时是否把子标签重置为「全部歌曲」。
+   *  显式导航进入某位艺人时重置；历史前进/后退（返回详情页）时保留原分栏。 */
+  let resetArtistSubTabOnLoad = false;
+
   // 页面导航历史栈
   interface HistoryState {
     tab: string;
@@ -538,12 +549,18 @@ export const usePlayerStore = defineStore("player", () => {
     }
     const [oldTab, oldAlbumId, oldArtistId, oldPlaylistId] = oldVals;
     if (oldTab) {
-      historyStack.value.push({
-        tab: oldTab as string,
-        albumId: oldAlbumId as number | null,
-        artistId: oldArtistId as number | null,
-        playlistId: oldPlaylistId as number | null
-      });
+      // 不记录指向已删除歌单的历史：删歌单时 activePlaylistId 置空会触发一次记录，
+      // 若不拦，后退会回到一个不存在的歌单详情页。
+      const stalePlaylist =
+        oldPlaylistId != null && !playlists.value.some(p => p.id === oldPlaylistId);
+      if (!stalePlaylist) {
+        historyStack.value.push({
+          tab: oldTab as string,
+          albumId: oldAlbumId as number | null,
+          artistId: oldArtistId as number | null,
+          playlistId: oldPlaylistId as number | null
+        });
+      }
     }
     forwardStack.value = [];
   });
@@ -604,6 +621,8 @@ export const usePlayerStore = defineStore("player", () => {
   /** 进艺人详情页（id 与 tab 同 tick 修改，只记一条历史） */
   function navigateToArtist(artistId: number | null | undefined) {
     if (!artistId) return;
+    // 显式换艺人：详情页子标签回到「全部歌曲」；返回同一艺人（goBack）时保留原分栏
+    if (activeArtistId.value !== artistId) resetArtistSubTabOnLoad = true;
     activeAlbumId.value = null;
     activePlaylistId.value = null;
     activeArtistId.value = artistId;
@@ -806,7 +825,9 @@ const albums = shallowRef<Album[]>([]);
         id: p.id,
         name: p.name,
         description: p.description,
-        count: p.track_count
+        count: p.track_count,
+        cover_artwork_id: p.cover_artwork_id,
+        cover_thumb: p.cover_thumbnail_base64
       }));
     } catch (e) {
       console.error(e);
@@ -1258,7 +1279,8 @@ const albums = shallowRef<Album[]>([]);
   };
 
   async function refreshCurrentPlaylistTracks(playlistId: number) {
-    const playlist = playlists.value.find(p => p.id === playlistId) || { id: playlistId, name: '未知歌单', count: 0, description: '' };
+    const playlist = playlists.value.find(p => p.id === playlistId)
+      || { id: playlistId, name: '未知歌单', count: 0, description: '', cover_artwork_id: null, cover_thumb: null };
     if (!currentPlaylistDetailsData.value) {
       currentPlaylistDetailsData.value = { ...playlist, tracks: [], isLoadingTracks: true };
     } else {
@@ -1440,8 +1462,48 @@ const albums = shallowRef<Album[]>([]);
     goToArtistAlbumsPage(cur - 1);
   }
 
-  watch(activeArtistId, async (newId) => {
+  /**
+   * 艺人详情缓存（LRU，上限 8 位艺人）。
+   *
+   * 动机：activeArtistId 在「详情 → 某首歌的专辑名 → 返回」这类路径中会被清空，
+   * 原来的实现每次都会重建详情对象（分页回到第 1 页、子标签回到全部歌曲）。
+   * 这里把离开时的详情整体留下，返回同一艺人时直接复用，实现「原页面 + 原分页」。
+   */
+  const artistDetailsCache = new Map<number, ArtistDetails>();
+  const ARTIST_DETAILS_CACHE_MAX = 8;
+
+  function cacheArtistDetails(id: number, data: ArtistDetails) {
+    if (!data.tracks || data.tracks.length === 0) return; // 空壳不缓存
+    artistDetailsCache.delete(id);
+    artistDetailsCache.set(id, data);
+    while (artistDetailsCache.size > ARTIST_DETAILS_CACHE_MAX) {
+      const oldest = artistDetailsCache.keys().next().value;
+      if (oldest === undefined) break;
+      artistDetailsCache.delete(oldest);
+    }
+  }
+
+  watch(activeArtistId, async (newId, oldId) => {
+    // 1. 离开上一位艺人：留下详情（保留分页与子标签），供返回时复用
+    if (oldId) {
+      const prev = currentArtistDetailsData.value;
+      if (prev && prev.id === oldId) cacheArtistDetails(oldId, prev);
+    }
+
     if (newId) {
+      // 2. 命中缓存：直接复用，不重置分页、不重拉
+      const cached = artistDetailsCache.get(newId);
+      if (cached) {
+        // LRU 触达
+        artistDetailsCache.delete(newId);
+        artistDetailsCache.set(newId, cached);
+        if (resetArtistSubTabOnLoad) cached.subTab = 'tracks';
+        resetArtistSubTabOnLoad = false;
+        currentArtistDetailsData.value = cached;
+        return;
+      }
+      resetArtistSubTabOnLoad = false;
+
       let artist = artists.value.find(a => a.id === newId);
 
       // 如果内存列表里找不到，从后端查询
@@ -1478,6 +1540,7 @@ const albums = shallowRef<Album[]>([]);
         albums: [],
         tracks: [],
         stats: { track_count: 0, album_count: 0 },
+        subTab: 'tracks',
         tracksOffset: 0,
         albumsOffset: 0,
         albumsCurrentPage: 1,
@@ -1488,6 +1551,7 @@ const albums = shallowRef<Album[]>([]);
         isLoadingTracks: false,
         isLoadingAlbums: false
       } as ArtistDetails;
+      resetArtistSubTabOnLoad = false;
 
       try {
         if (artist.avatar_artwork_id == null && uiStore.fetchCoversOnline) {
@@ -1516,6 +1580,11 @@ const albums = shallowRef<Album[]>([]);
   const currentAlbumDetails = computed(() => currentAlbumDetailsData.value);
   const currentArtistDetails = computed(() => currentArtistDetailsData.value);
   const currentPlaylistDetails = computed(() => currentPlaylistDetailsData.value);
+
+  /** 切换艺人详情页子标签（全部歌曲 / 全部专辑），状态挂在上，返回时才能回到原分栏 */
+  function setArtistDetailSubTab(tab: 'tracks' | 'albums') {
+    if (currentArtistDetailsData.value) currentArtistDetailsData.value.subTab = tab;
+  }
 
   const localSources = computed(() => {
     return sources.value.filter(s => s.kind === 'local');
@@ -1588,7 +1657,9 @@ const albums = shallowRef<Album[]>([]);
         id: p.id,
         name: p.name,
         description: p.description,
-        count: p.track_count
+        count: p.track_count,
+        cover_artwork_id: p.cover_artwork_id,
+        cover_thumb: p.cover_thumbnail_base64
       }));
 
       const newAlbums: Album[] = b.albums.map((a) => ({
@@ -1690,6 +1761,9 @@ const albums = shallowRef<Album[]>([]);
     try {
       await libraryDeletePlaylist(playlistId);
       await fetchPlaylists();
+      // 历史里指向该歌单的条目一并清掉（后退/前进都不该回到已删除的歌单）
+      historyStack.value = historyStack.value.filter(s => s.playlistId !== playlistId);
+      forwardStack.value = forwardStack.value.filter(s => s.playlistId !== playlistId);
       if (activePlaylistId.value === playlistId) {
         activePlaylistId.value = null;
         activeLibraryTab.value = '全部歌曲';
@@ -1704,8 +1778,9 @@ const albums = shallowRef<Album[]>([]);
   async function removeTrackFromPlaylist(playlistId: number, trackId: number) {
     try {
       await libraryRemovePlaylistItem(playlistId, trackId);
-      await refreshCurrentPlaylistTracks(playlistId);
+      // 先刷新歌单列表（封面取首曲，删掉第一首后封面会变），再重建详情
       await fetchPlaylists();
+      await refreshCurrentPlaylistTracks(playlistId);
     } catch (e) {
       console.error("Failed to remove track from playlist:", e);
       throw e;
@@ -2312,6 +2387,8 @@ const albums = shallowRef<Album[]>([]);
     nextArtistAlbumsPage,
     prevArtistAlbumsPage,
     goToArtistAlbumsPage,
+    // 艺人详情页子标签（全部歌曲 / 全部专辑）
+    setArtistDetailSubTab,
     // 智能歌单
     activeSmartPlaylistKind,
     smartPlaylistTracks,

@@ -219,6 +219,12 @@ pub struct PlaylistDTO {
     pub description: Option<String>,
     /// 歌单内的歌曲总数
     pub track_count: i64,
+    /// 歌单封面对应的 artwork ID
+    /// （取歌单内第一首歌曲所属专辑的封面，与主流播放器行为一致）
+    pub cover_artwork_id: Option<i64>,
+    /// 封面的 200x200 缩略图（base64 data URL）。
+    /// 有值时前端直接 <img src> 渲染，不再走 lumo://artwork 协议（避免 N+1 IPC）。
+    pub cover_thumbnail_base64: Option<String>,
 }
 
 /// 传输给前端的艺人统计数据对象

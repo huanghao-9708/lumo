@@ -1,13 +1,21 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import {
-  Play, Shuffle, Loader2, ListMusic, Heart, MoreHorizontal, Clock, CheckSquare,
+  Play, Shuffle, Loader2, ListMusic, Heart, MoreHorizontal, Clock, CheckSquare, Trash2,
 } from 'lucide-vue-next';
 import { usePlayerStore, type Track } from '../../stores/player';
+import { useUiStore } from '../../stores/ui';
 import { useBatchSelect } from '../../composables/useBatchSelect';
+import { useScrollRestore } from '../../composables/useScrollRestore';
+import { useArtworkSrc } from '../../composables/useArtworkSrc';
 import BatchActionBar from '../shared/BatchActionBar.vue';
+import ConfirmDialog from '../shared/ConfirmDialog.vue';
 
 const playerStore = usePlayerStore();
+const uiStore = useUiStore();
+
+/** 曲目列表滚动位置记忆（同一歌单返回时还原） */
+const listScrollEl = useScrollRestore(() => `playlist-detail:${playerStore.activePlaylistId ?? 0}`);
 
 /* ============ 批量选择（本视图一份实例） ============ */
 const batch = useBatchSelect();
@@ -18,6 +26,37 @@ function onToggleSelectAll() {
 }
 
 const detail = computed(() => playerStore.currentPlaylistDetails);
+
+/**
+ * 歌单封面 = 歌单内第一首歌曲所属专辑的封面（后端已解析好 artwork id）。
+ * 优先用 200x200 缩略图（列表 IPC 内联的 base64，零额外请求）；
+ * 缩略图缺失时退回 artwork 协议按需拉取（详情页只有一张，不构成 N+1）。
+ */
+const artworkSrc = useArtworkSrc(
+  () => detail.value?.cover_artwork_id ?? detail.value?.tracks?.[0]?.cover_artwork_id ?? null
+);
+const coverSrc = computed(() => detail.value?.cover_thumb || artworkSrc.value || '');
+
+/* ============ 删除歌单 ============ */
+const showDeleteConfirm = ref(false);
+const isDeleting = ref(false);
+
+async function confirmDelete() {
+  const playlistId = playerStore.activePlaylistId;
+  if (!playlistId) return;
+  const name = detail.value?.name ?? '歌单';
+  isDeleting.value = true;
+  try {
+    await playerStore.deletePlaylist(playlistId);
+    uiStore.showToast(`已删除歌单「${name}」`);
+  } catch (e) {
+    console.error('Failed to delete playlist:', e);
+    uiStore.showToast('删除失败，请重试');
+  } finally {
+    isDeleting.value = false;
+    showDeleteConfirm.value = false;
+  }
+}
 
 const tracks = computed<Track[]>(() => detail.value?.tracks ?? []);
 const isLoading = computed(() => detail.value?.isLoadingTracks ?? false);
@@ -74,9 +113,10 @@ function toggleFav(trackId: number, e: Event) {
       <!-- 歌单头部 -->
       <div class="px-8 pt-8 pb-4 flex-shrink-0">
         <div class="flex items-start gap-8">
-          <!-- 封面（歌单无真实封面，用 ListMusic 占位） -->
+          <!-- 封面：歌单内第一首歌曲的专辑封面（无封面时退回图标占位） -->
           <div class="w-[180px] h-[180px] rounded-[10px] overflow-hidden flex-shrink-0 bg-bg-hover flex items-center justify-center">
-            <ListMusic class="w-12 h-12 text-text-disabled" />
+            <img v-if="coverSrc" :src="coverSrc" class="w-full h-full object-cover" alt="cover" />
+            <ListMusic v-else class="w-12 h-12 text-text-disabled" />
           </div>
 
           <!-- 标题 + 元数据 + 按钮 -->
@@ -110,6 +150,16 @@ function toggleFav(trackId: number, e: Event) {
                 <CheckSquare class="w-[14px] h-[14px]" />
                 {{ batch.isActive ? '取消多选' : '多选' }}
               </button>
+
+              <!-- 删除歌单（二次确认） -->
+              <button
+                class="h-[34px] px-4 rounded-full border border-border-solid text-[13px] font-medium text-text-secondary flex items-center gap-2 transition-colors-smooth hover:bg-list-hover hover:text-status-error hover:border-status-error/40"
+                title="删除这个歌单"
+                @click="showDeleteConfirm = true"
+              >
+                <Trash2 class="w-[14px] h-[14px]" />
+                删除歌单
+              </button>
             </div>
           </div>
         </div>
@@ -119,7 +169,7 @@ function toggleFav(trackId: number, e: Event) {
       <div class="h-px bg-border-color mx-8"></div>
 
       <!-- 轨道列表 -->
-      <div class="flex-1 overflow-y-auto px-8">
+      <div ref="listScrollEl" class="flex-1 overflow-y-auto px-8">
         <!-- 表头 -->
           <div class="flex items-center text-[10px] text-text-muted uppercase tracking-wider py-2 border-b border-border-color sticky top-0 bg-bg-content z-10">
             <div class="w-10 text-center shrink-0">#</div>
@@ -228,4 +278,16 @@ function toggleFav(trackId: number, e: Event) {
       />
     </template>
   </div>
+
+  <!-- 删除歌单二次确认 -->
+  <ConfirmDialog
+    v-if="showDeleteConfirm"
+    title="删除歌单"
+    :message="`确定删除歌单「${detail?.name ?? '歌单'}」吗？歌单里的歌曲不会从曲库中移除。此操作不可撤销。`"
+    confirm-text="删除"
+    danger
+    :busy="isDeleting"
+    @confirm="confirmDelete"
+    @cancel="showDeleteConfirm = false"
+  />
 </template>

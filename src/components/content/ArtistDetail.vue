@@ -5,6 +5,7 @@ import {
 } from 'lucide-vue-next';
 import { usePlayerStore, type Album, type Track } from '../../stores/player';
 import { getArtworkUrl } from '../../utils';
+import { useScrollRestore } from '../../composables/useScrollRestore';
 
 const props = defineProps<{
   artistId: number | null;
@@ -15,7 +16,18 @@ const props = defineProps<{
 const playerStore = usePlayerStore();
 
 const detail = computed(() => playerStore.currentArtistDetails);
-const activeSubTab = ref<'tracks' | 'albums'>('tracks');
+
+/**
+ * 子标签读写都落在 store 的详情对象上（而不是组件局部 ref）：
+ * 进入专辑详情再返回时组件会重建，局部状态会丢，store 上的状态才能保持原分栏。
+ */
+const activeSubTab = computed<'tracks' | 'albums'>({
+  get: () => detail.value?.subTab ?? 'tracks',
+  set: (tab) => playerStore.setArtistDetailSubTab(tab),
+});
+
+/** 列表滚动位置记忆：切子标签 / 进详情返回都各记一份，key 里带艺人 id 避免串位 */
+const listScrollEl = useScrollRestore(() => `artist-detail:${props.artistId ?? 0}:${activeSubTab.value}`);
 
 /** 是否已收藏该歌手 */
 const isArtistFavorited = computed(() =>
@@ -231,7 +243,7 @@ function onScroll(e: Event) {
 
       <div class="h-px bg-border-color mx-8"></div>
 
-      <div class="flex-1 overflow-y-auto px-8" @scroll="onScroll">
+      <div ref="listScrollEl" class="flex-1 overflow-y-auto px-8" @scroll="onScroll">
 
         <template v-if="activeSubTab === 'tracks'">
           <div class="flex items-center text-[10px] text-text-muted uppercase tracking-wider py-2 border-b border-border-color sticky top-0 bg-bg-content z-10">

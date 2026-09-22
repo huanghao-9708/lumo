@@ -4,6 +4,13 @@ pub mod playlist_repo;
 pub mod track_repo;
 
 use crate::models::TrackDTO;
+use base64::{engine::general_purpose, Engine as _};
+
+/// 把 artwork.thumbnail_blob 转成前端可直接渲染的 base64 data URL。
+/// 与专辑/艺人网格共用同一约定：列表 IPC 内联缩略图，前端不再逐个发 lumo://artwork 请求。
+pub fn thumbnail_to_data_url(blob: Option<Vec<u8>>) -> Option<String> {
+    blob.map(|b| format!("data:image/jpeg;base64,{}", general_purpose::STANDARD.encode(&b)))
+}
 
 /// 转义 SQLite LIKE 模式串中的特殊字符（`%` / `_` / `\`），避免路径里这些字符被当通配符。
 /// 转义符是反斜杠，调用方需配合 `LIKE ? ESCAPE '\'` 使用（见 playlist_repo 的用法）。

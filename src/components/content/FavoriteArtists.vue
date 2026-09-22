@@ -2,6 +2,7 @@
 import { computed } from 'vue';
 import { User, Star, Loader2 } from 'lucide-vue-next';
 import { usePlayerStore } from '../../stores/player';
+import { useScrollRestore } from '../../composables/useScrollRestore';
 import FooterStatus from '../shared/FooterStatus.vue';
 
 const playerStore = usePlayerStore();
@@ -9,9 +10,12 @@ const playerStore = usePlayerStore();
 const artists = computed(() => playerStore.favoriteArtists);
 const isLoading = computed(() => false);
 
+/** 滚动位置记忆：从歌手详情返回时还原 */
+const scrollContainer = useScrollRestore(() => 'favorite-artists');
+
 function selectArtist(artistId: number) {
-  playerStore.activeLibraryTab = '艺术家';
-  playerStore.activeArtistId = artistId;
+  // 走 store 导航函数：同 tick 改 tab+id（只记一条历史），并让详情页子标签回到默认分栏
+  playerStore.navigateToArtist(artistId);
 }
 
 function toggleFav(artistId: number, e: Event) {
@@ -22,7 +26,7 @@ function toggleFav(artistId: number, e: Event) {
 
 <template>
   <div class="flex-1 flex flex-col overflow-hidden">
-    <div class="flex-1 overflow-y-auto px-8">
+    <div ref="scrollContainer" class="flex-1 overflow-y-auto px-8">
       <!-- 加载态 -->
       <div v-if="isLoading && artists.length === 0" class="flex items-center justify-center py-20 text-text-muted">
         <Loader2 class="w-4 h-4 animate-spin text-brand-orange" />

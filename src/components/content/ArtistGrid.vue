@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
+import { computed, onMounted, onBeforeUnmount, ref } from 'vue';
 import { User, Loader2 } from 'lucide-vue-next';
 import { usePlayerStore } from '../../stores/player';
 import { getArtworkUrl } from '../../utils';
+import { useScrollRestore } from '../../composables/useScrollRestore';
 
 const playerStore = usePlayerStore();
 
@@ -11,7 +12,8 @@ const isLoading = computed(() => playerStore.isLoadingArtists);
 const hasMore = computed(() => playerStore.hasMoreArtists);
 
 function selectArtist(artistId: number) {
-  playerStore.activeArtistId = artistId;
+  // 走 store 的导航函数（同 tick 改 id+tab，只记一条历史），返回时可精确还原
+  playerStore.navigateToArtist(artistId);
 }
 
 function getColorClass(color: string): string {
@@ -19,7 +21,10 @@ function getColorClass(color: string): string {
 }
 
 /** IntersectionObserver: 滚动到底部自动加载下一批 */
-const scrollContainer = ref<HTMLElement | null>(null);
+// 滚动位置记忆：返回列表时还原到原位置（key 带上过滤条件，避免过滤后错位）
+const scrollContainer = useScrollRestore(
+  () => `artist-grid:${playerStore.hideMinorArtists ? 1 : 0}:${playerStore.searchQuery}`
+);
 const sentinelRef = ref<HTMLElement | null>(null);
 let observer: IntersectionObserver | null = null;
 

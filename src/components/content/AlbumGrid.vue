@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
+import { computed, onMounted, onBeforeUnmount, ref } from 'vue';
 import { Play, Loader2, Disc3 } from 'lucide-vue-next';
 import { usePlayerStore, type Album } from '../../stores/player';
 import { getArtworkUrl } from '../../utils';
 import { libraryGetAlbumTracks } from '../../api/library';
+import { useScrollRestore } from '../../composables/useScrollRestore';
 
 const playerStore = usePlayerStore();
 
@@ -61,7 +62,10 @@ const isError = computed(() => playerStore.isErrorAlbums);
 const hasMoreAlbums = computed(() => playerStore.hasMoreAlbums);
 
 /** IntersectionObserver: 滚动到底部自动加载下一批 */
-const gridContainer = ref<HTMLElement | null>(null);
+// 滚动位置记忆：从专辑详情返回时还原到原位置（key 带上过滤条件，避免过滤后错位）
+const gridContainer = useScrollRestore(
+  () => `album-grid:${playerStore.hideSmallAlbums ? 1 : 0}:${playerStore.searchQuery}`
+);
 const sentinelRef = ref<HTMLElement | null>(null);
 let observer: IntersectionObserver | null = null;
 

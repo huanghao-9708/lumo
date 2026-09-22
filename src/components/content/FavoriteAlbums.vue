@@ -3,12 +3,16 @@ import { computed } from 'vue';
 import { Disc3, Heart, Loader2 } from 'lucide-vue-next';
 import { usePlayerStore, type Album } from '../../stores/player';
 import { getArtworkUrl } from '../../utils';
+import { useScrollRestore } from '../../composables/useScrollRestore';
 import FooterStatus from '../shared/FooterStatus.vue';
 
 const playerStore = usePlayerStore();
 
 const albums = computed(() => playerStore.favoriteAlbums);
 const isLoading = computed(() => false);
+
+/** 滚动位置记忆：从专辑详情返回时还原 */
+const scrollContainer = useScrollRestore(() => 'favorite-albums');
 
 function getCoverSrc(album: Album): string {
   if (album.cover_thumb) return album.cover_thumb;
@@ -17,8 +21,8 @@ function getCoverSrc(album: Album): string {
 }
 
 function selectAlbum(album: Album) {
-  playerStore.activeLibraryTab = '专辑';
-  playerStore.activeAlbumId = album.id;
+  // 走 store 导航函数：同 tick 改 tab+id（只记一条历史），并清掉其它详情选中态
+  playerStore.navigateToAlbum(album.id);
 }
 
 function toggleFav(album: Album, e: Event) {
@@ -29,7 +33,7 @@ function toggleFav(album: Album, e: Event) {
 
 <template>
   <div class="flex-1 flex flex-col overflow-hidden">
-    <div class="flex-1 overflow-y-auto px-8">
+    <div ref="scrollContainer" class="flex-1 overflow-y-auto px-8">
       <!-- 加载态 -->
       <div v-if="isLoading && albums.length === 0" class="flex items-center justify-center py-20 text-text-muted">
         <Loader2 class="w-4 h-4 animate-spin text-brand-orange" />

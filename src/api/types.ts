@@ -46,6 +46,10 @@ export interface PlaylistDTOBackend {
   name: string;
   description: string | null;
   track_count: number;
+  /** 歌单封面 = 歌单内第一首歌曲所属专辑的封面（后端解析） */
+  cover_artwork_id: number | null;
+  /** 200x200 缩略图 data URL；有值时直接 <img src> 渲染 */
+  cover_thumbnail_base64: string | null;
 }
 
 export interface FolderContentsResultDTO {

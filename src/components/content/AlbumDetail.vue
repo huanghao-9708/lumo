@@ -6,6 +6,7 @@ import {
 import { usePlayerStore, type Track } from '../../stores/player';
 import { useArtworkSrc } from '../../composables/useArtworkSrc';
 import { useBatchSelect } from '../../composables/useBatchSelect';
+import { useScrollRestore } from '../../composables/useScrollRestore';
 import BatchActionBar from '../shared/BatchActionBar.vue';
 
 const props = defineProps<{
@@ -13,6 +14,9 @@ const props = defineProps<{
 }>();
 
 const playerStore = usePlayerStore();
+
+/** 曲目列表滚动位置记忆（同一专辑返回时还原） */
+const listScrollEl = useScrollRestore(() => `album-detail:${props.albumId ?? 0}`);
 
 /* ============ 批量选择（本视图一份实例；切换专辑自动退出） ============ */
 const batch = useBatchSelect();
@@ -172,7 +176,7 @@ function toggleFav(trackId: number, e: Event) {
       <div class="h-px bg-border-color mx-8"></div>
 
       <!-- 轨道列表 -->
-      <div class="flex-1 overflow-y-auto px-8">
+      <div ref="listScrollEl" class="flex-1 overflow-y-auto px-8">
         <!-- 表头 -->
         <div class="flex items-center text-[10px] text-text-muted uppercase tracking-wider py-2 border-b border-border-color sticky top-0 bg-bg-content z-10">
           <div class="w-10 text-center shrink-0">#</div>
