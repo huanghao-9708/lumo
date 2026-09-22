@@ -282,6 +282,15 @@ impl PlaybackManager {
         f32::from_bits(self.level.load(Ordering::Relaxed))
     }
 
+    /// 能量原子量的共享句柄。
+    ///
+    /// 给 `PlaybackState` 存一份，让 `playback_get_level` 命令**不经过 manager 锁**
+    /// 直接读：这个命令是 30Hz 高频采样，一旦和播放/解码抢同一把锁，
+    /// 某条命令卡住时采样会在 IPC 通道里无限堆积（实测 186 个在飞、整条通道堵死）。
+    pub fn level_handle(&self) -> Arc<AtomicU32> {
+        self.level.clone()
+    }
+
     /// [MA0 Spike] 播放正弦测试音，验证移动端音频输出链路。
     /// 刻意与正式播放共用 PlaybackManager 的初始化与 Sink 路径，
     /// 使 Spike 的结论（能否出声、采样率是否正确）可直接迁移到正式链路。

@@ -290,8 +290,10 @@ pub fn run() {
             app.manage(DbState { db: pool });
 
             let playback_manager = PlaybackManager::new().expect("Failed to init playback");
+            let playback_level = playback_manager.level_handle();
             app.manage(PlaybackState {
                 manager: Mutex::new(playback_manager),
+                level: playback_level,
             });
 
             let mut playback_queue = crate::services::queue::PlaybackQueue::new();

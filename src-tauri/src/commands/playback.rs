@@ -6,11 +6,16 @@ use crate::services::playback::PlaybackManager;
 use crate::services::webdav::WebdavClient;
 use rusqlite::OptionalExtension;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU32, Ordering};
 use tauri::{Manager, State};
 
 pub struct PlaybackState {
     pub manager: Mutex<PlaybackManager>,
+    /// 音频能量的原子量（与 manager 内部共享同一份）。
+    /// `playback_get_level` 是 30Hz 高频采样，必须**绕过 manager 锁**直接读，
+    /// 否则任何一条慢命令（远端流解码等）都会把采样全部堵在锁上。
+    pub level: Arc<AtomicU32>,
 }
 
 /// 解析媒体文件到可播放的源。
@@ -281,7 +286,7 @@ pub fn spawn_background_cache_download(
     });
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn playback_play(
     app: tauri::AppHandle,
     playback_state: State<'_, PlaybackState>,
@@ -342,7 +347,7 @@ pub fn playback_play(
     Ok(duration)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn playback_enqueue_next(
     app: tauri::AppHandle,
     playback_state: State<'_, PlaybackState>,
@@ -403,7 +408,7 @@ pub fn playback_enqueue_next(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn playback_get_queue_len(playback_state: State<'_, PlaybackState>) -> Result<usize, AppError> {
     let manager = playback_state
         .manager
@@ -412,7 +417,7 @@ pub fn playback_get_queue_len(playback_state: State<'_, PlaybackState>) -> Resul
     Ok(manager.get_queue_len())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn playback_pause(
     playback_state: State<'_, PlaybackState>,
     queue_state: State<'_, crate::services::queue::QueueState>,
@@ -439,7 +444,7 @@ pub fn playback_pause(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn playback_resume(
     playback_state: State<'_, PlaybackState>,
     queue_state: State<'_, crate::services::queue::QueueState>,
@@ -466,7 +471,7 @@ pub fn playback_resume(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn playback_stop(
     playback_state: State<'_, PlaybackState>,
     queue_state: State<'_, crate::services::queue::QueueState>,
@@ -486,7 +491,7 @@ pub fn playback_stop(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn playback_set_volume(
     playback_state: State<'_, PlaybackState>,
     volume: f32,
@@ -501,7 +506,7 @@ pub fn playback_set_volume(
 
 /// 设置播放速率（1.0 原速；前端提供 0.5/0.8/1/1.2/1.5）。
 /// 立即生效，且对正在播放的曲目同样有效（rodio 音频线程每 5ms 取一次该值）。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn playback_set_speed(
     playback_state: State<'_, PlaybackState>,
     speed: f32,
@@ -515,7 +520,7 @@ pub fn playback_set_speed(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn playback_get_speed(playback_state: State<'_, PlaybackState>) -> Result<f32, AppError> {
     let manager = playback_state
         .manager
@@ -524,7 +529,7 @@ pub fn playback_get_speed(playback_state: State<'_, PlaybackState>) -> Result<f3
     Ok(manager.get_speed())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn playback_get_pos(playback_state: State<'_, PlaybackState>) -> Result<u64, AppError> {
     let manager = playback_state
         .manager
@@ -535,18 +540,21 @@ pub fn playback_get_pos(playback_state: State<'_, PlaybackState>) -> Result<u64,
 
 /// 读取当前音频能量（RMS，0.0–1.0），用于沉浸式播放页的封面「随音乐呼吸」。
 ///
-/// 仅在沉浸式页可见且正在播放时由前端以约 30Hz 采样，非播放态不采样，
-/// 以免给既有的 IPC 通道增加无谓负载。
-#[tauri::command]
+/// 仅在沉浸式页可见且正在播放时由前端以约 30Hz 采样，非播放态不采样。
+///
+/// 两个刻意的设计（缺一不可，缺了就会出现 186 个采样堆在通道里的事故）：
+/// 1. `#[tauri::command(async)]`：不占主线程。同步命令在主线程串行执行，
+///    任何一条慢命令都会让排在后面的采样全部堆积。
+/// 2. **不经过 manager 锁**（直接读原子量）：远端流解码等操作会长时间持有
+///    manager 锁，采样一旦去抢锁就会逐个卡住、把整条 IPC 通道堵死。
+#[tauri::command(async)]
 pub fn playback_get_level(playback_state: State<'_, PlaybackState>) -> Result<f32, AppError> {
-    let manager = playback_state
-        .manager
-        .lock()
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-    Ok(manager.get_level())
+    Ok(f32::from_bits(
+        playback_state.level.load(Ordering::Relaxed),
+    ))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn playback_seek(
     playback_state: State<'_, PlaybackState>,
     position_ms: u64,
@@ -562,7 +570,7 @@ pub fn playback_seek(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn playback_is_finished(playback_state: State<'_, PlaybackState>) -> Result<bool, AppError> {
     let manager = playback_state
         .manager
@@ -574,7 +582,7 @@ pub fn playback_is_finished(playback_state: State<'_, PlaybackState>) -> Result<
 /// 查询某首曲目是否已缓存到本地（前端用于离线置灰判断）。
 /// 与播放路径同口径校验文件大小：只判存在会把截断缓存报成"已缓存"，
 /// 用户离线时才发现放不出来。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn playback_is_cached(
     db_state: State<'_, DbState>,
     cache_state: State<'_, AudioCacheState>,
@@ -598,7 +606,7 @@ pub fn playback_is_cached(
 }
 
 /// 清空全部音频缓存，返回释放的字节数。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn playback_clear_audio_cache(
     cache_state: State<'_, AudioCacheState>,
 ) -> Result<u64, AppError> {
@@ -610,7 +618,7 @@ pub fn playback_clear_audio_cache(
 }
 
 /// 获取音频缓存总大小（字节），用于设置页显示。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn playback_get_audio_cache_size(
     cache_state: State<'_, AudioCacheState>,
 ) -> Result<u64, AppError> {

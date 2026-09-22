@@ -288,7 +288,7 @@ pub fn internal_enqueue_next(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn playback_set_queue(
     app: AppHandle,
     queue_state: State<'_, QueueState>,
@@ -313,7 +313,7 @@ pub fn playback_set_queue(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn playback_queue_state(
     queue_state: State<'_, QueueState>,
     playback_state: State<'_, PlaybackState>,
@@ -335,7 +335,7 @@ pub fn playback_queue_state(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn playback_advance(
     app: AppHandle,
     queue_state: State<'_, QueueState>,
@@ -356,7 +356,7 @@ pub fn playback_advance(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn playback_set_mode(
     queue_state: State<'_, QueueState>,
     mode: PlayMode,

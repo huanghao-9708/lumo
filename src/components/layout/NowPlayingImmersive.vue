@@ -78,13 +78,22 @@ let lastSampleAt = 0;
 let rawLevel = 0;
 let env = 0;
 
+/** 是否有一发 get_level 还在路上：**未返回前不再发下一发**。
+ *  这个命令一旦因后端繁忙迟迟不回，30Hz 的循环会把 IPC 通道堆满
+ *  （实测 186 个在飞、连歌词/收藏列表都排不进来，整个应用巨卡）。
+ *  限制为最多一个在飞后，最坏情况也只是呼吸动效暂时冻结，不再殃及其它功能。 */
+let levelInFlight = false;
+
 function reactiveTick(now: number) {
   rafId = requestAnimationFrame(reactiveTick);
 
-  if (!playerStore.isPlaying) {
+  // 页面被最小化/切走时（document.hidden）rAF 会被浏览器节流甚至暂停，
+  // 但保险起见显式跳过采样：看不见的动效不值得占用 IPC。
+  if (!playerStore.isPlaying || document.hidden) {
     rawLevel = 0;
-  } else if (now - lastSampleAt >= SAMPLE_INTERVAL_MS) {
+  } else if (!levelInFlight && now - lastSampleAt >= SAMPLE_INTERVAL_MS) {
     lastSampleAt = now;
+    levelInFlight = true;
     playbackGetLevel()
       .then((lv) => {
         rawLevel = typeof lv === 'number' && lv > 0 ? lv : 0;
@@ -92,6 +101,9 @@ function reactiveTick(now: number) {
       })
       .catch(() => {
         rawLevel = 0;
+      })
+      .finally(() => {
+        levelInFlight = false;
       });
   }
 
