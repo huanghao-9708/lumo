@@ -6,6 +6,7 @@ import {
 import { usePlayerStore } from '../../stores/player';
 import { getArtworkUrl } from '../../utils';
 import { libraryGetTracks, libraryGetAlbums, libraryGetArtists } from '../../api/library';
+import { useScrollRestore } from '../../composables/useScrollRestore';
 import type { TrackDTO, AlbumDTO, ArtistDTO } from '../../api/types';
 
 const playerStore = usePlayerStore();
@@ -48,7 +49,9 @@ async function firstLoadAll(q: string) {
     hasMore.tracks = tracks.length >= PAGE_SIZE.tracks;
     hasMore.albums = albums.length >= PAGE_SIZE.albums;
     hasMore.artists = artistResult.artists.length >= PAGE_SIZE.artists;
-    scrollContainer.value?.scrollTo({ top: 0 });
+    // 换了查询词才回顶部；同一词（历史还原、或挂载首屏）保留滚动位置
+    if (q !== lastAppliedQuery) scrollContainer.value?.scrollTo({ top: 0 });
+    lastAppliedQuery = q;
   } catch (e) {
     console.error('Search failed:', e);
   } finally {
@@ -103,9 +106,17 @@ async function pumpMore() {
 }
 
 /* 结果滚动容器 + 底部哨兵：进入视口（提前 240px）即续拉当前 tab 下一页 */
-const scrollContainer = ref<HTMLElement | null>(null);
+// 滚动位置记忆：从结果点进详情、再后退回来时回到原来的位置（按搜索词分别记）
+const scrollContainer = useScrollRestore(() => `global-search:${playerStore.globalSearchQuery.trim()}`);
 const sentinelRef = ref<HTMLElement | null>(null);
 let observer: IntersectionObserver | null = null;
+
+/**
+ * 挂载首屏那次查询是否要回顶部：不要。
+ * 组件由「非空查询」触发挂载——正常输入新词时该词的记忆位置为空、回不回顶都一样；
+ * 而历史后退回来时记忆位置是有值的，此时若还执行 scrollTo(0) 会把恢复的位置冲掉。
+ */
+let lastAppliedQuery = playerStore.globalSearchQuery.trim();
 
 onMounted(() => {
   if (!scrollContainer.value || !sentinelRef.value) return;
@@ -181,13 +192,11 @@ function playTrack(index: number, dto: TrackDTO) {
 }
 
 function selectAlbum(album: AlbumDTO) {
-  // 统一走 store 导航函数（清掉其它详情选中态、取消历史还原标志、只记一条历史）
-  playerStore.globalSearchQuery = '';
+  // 统一走 store 导航函数：它会先快照搜索词（供返回时复现本页）、再清空搜索词进详情
   playerStore.navigateToAlbum(album.id);
 }
 
 function selectArtist(artist: ArtistDTO) {
-  playerStore.globalSearchQuery = '';
   playerStore.navigateToArtist(artist.id);
 }
 

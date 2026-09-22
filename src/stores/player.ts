@@ -543,7 +543,24 @@ export const usePlayerStore = defineStore("player", () => {
     albumId: number | null;
     artistId: number | null;
     playlistId: number | null;
+    /** 离开该页时生效的全局搜索词。非空表示这一页是全局搜索结果页，
+     *  后退回来时要重现（搜索态也是页面状态的一部分）。 */
+    searchQuery: string;
   }
+
+  /**
+   * 导航前对「即将离开的页面」的全局搜索词做一次快照。
+   *
+   * 为什么不用 globalSearchQuery 的当前值：点搜索结果进详情时，导航函数会先把
+   * globalSearchQuery 清空（否则搜索视图会盖住详情页），等 history watcher 真正 push 时
+   * 读到的已经是空串了，搜索页就进不了历史栈。所以必须在清空之前取一次。
+   */
+  let leavingSearchQuery = '';
+
+  function takeSearchSnapshot() {
+    leavingSearchQuery = globalSearchQuery.value.trim();
+  }
+
   const historyStack = ref<HistoryState[]>([]);
   const isGoingBack = ref(false);
   const forwardStack = ref<HistoryState[]>([]);
@@ -571,10 +588,13 @@ export const usePlayerStore = defineStore("player", () => {
           tab: oldTab as string,
           albumId: oldAlbumId as number | null,
           artistId: oldArtistId as number | null,
-          playlistId: oldPlaylistId as number | null
+          playlistId: oldPlaylistId as number | null,
+          searchQuery: leavingSearchQuery
         });
       }
     }
+    // 快照是一次性的：这次导航已经用掉（或本来就不需要）
+    leavingSearchQuery = '';
     forwardStack.value = [];
   });
 
@@ -587,7 +607,8 @@ export const usePlayerStore = defineStore("player", () => {
         tab: activeLibraryTab.value,
         albumId: activeAlbumId.value,
         artistId: activeArtistId.value,
-        playlistId: activePlaylistId.value
+        playlistId: activePlaylistId.value,
+        searchQuery: globalSearchQuery.value.trim()
       });
       isGoingBack.value = true;
       isHistoryRestore.value = true;
@@ -596,6 +617,8 @@ export const usePlayerStore = defineStore("player", () => {
       activeAlbumId.value = state.albumId;
       activeArtistId.value = state.artistId;
       activePlaylistId.value = state.playlistId;
+      // 搜索结果页也是页面：还原搜索词即可让 GlobalSearch 重新挂载并复现结果
+      globalSearchQuery.value = state.searchQuery ?? '';
     }
   }
 
@@ -605,7 +628,8 @@ export const usePlayerStore = defineStore("player", () => {
         tab: activeLibraryTab.value,
         albumId: activeAlbumId.value,
         artistId: activeArtistId.value,
-        playlistId: activePlaylistId.value
+        playlistId: activePlaylistId.value,
+        searchQuery: globalSearchQuery.value.trim()
       });
       isGoingForward.value = true;
       isHistoryRestore.value = true;
@@ -614,6 +638,7 @@ export const usePlayerStore = defineStore("player", () => {
       activeAlbumId.value = state.albumId;
       activeArtistId.value = state.artistId;
       activePlaylistId.value = state.playlistId;
+      globalSearchQuery.value = state.searchQuery ?? '';
     }
   }
 
@@ -622,6 +647,30 @@ export const usePlayerStore = defineStore("player", () => {
 
   /** 切换到某个一级页面（清空详情选中态） */
   function navigateToTab(tab: string) {
+    // 搜索中点了侧边栏/首页等显式导航：先快照搜索词（后退能回到搜索结果页），再关掉搜索视图，
+    // 否则搜索结果会盖住刚点开的页面、看起来像"点了没反应"。没在搜索时行为不变。
+    if (globalSearchQuery.value.trim()) {
+      takeSearchSnapshot();
+      // 若这次导航最终没有改变任何导航状态（点的就是当前所在的一级入口），
+      // nav watcher 不会触发、搜索页就进不了历史栈 —— 这里手动补一条。
+      const willChange =
+        tab !== activeLibraryTab.value ||
+        activeAlbumId.value !== null ||
+        activeArtistId.value !== null ||
+        activePlaylistId.value !== null;
+      if (!willChange) {
+        historyStack.value.push({
+          tab: activeLibraryTab.value,
+          albumId: null,
+          artistId: null,
+          playlistId: null,
+          searchQuery: leavingSearchQuery
+        });
+        forwardStack.value = [];
+        leavingSearchQuery = '';
+      }
+      globalSearchQuery.value = '';
+    }
     isHistoryRestore.value = false;
     activeAlbumId.value = null;
     activeArtistId.value = null;
@@ -637,7 +686,10 @@ export const usePlayerStore = defineStore("player", () => {
   /** 进艺人详情页（id 与 tab 同 tick 修改，只记一条历史） */
   function navigateToArtist(artistId: number | null | undefined) {
     if (!artistId) return;
+    takeSearchSnapshot();
     isHistoryRestore.value = false;
+    // 从搜索结果页点进详情：先记住搜索词（快照已取），再清空——否则搜索视图会盖住详情页
+    globalSearchQuery.value = '';
     // 显式换艺人：详情页子标签回到「全部歌曲」；返回同一艺人（goBack）时保留原分栏
     if (activeArtistId.value !== artistId) resetArtistSubTabOnLoad = true;
     activeAlbumId.value = null;
@@ -649,7 +701,9 @@ export const usePlayerStore = defineStore("player", () => {
   /** 进专辑详情页（id 与 tab 同 tick 修改，只记一条历史） */
   function navigateToAlbum(albumId: number | null | undefined) {
     if (!albumId) return;
+    takeSearchSnapshot();
     isHistoryRestore.value = false;
+    globalSearchQuery.value = '';
     activeArtistId.value = null;
     activePlaylistId.value = null;
     activeAlbumId.value = albumId;
