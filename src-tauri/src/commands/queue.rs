@@ -98,7 +98,7 @@ pub fn internal_play_item(
         .map_err(|e| AppError::Internal(e.to_string()))?;
     let _duration = if let Some(reader) = webdav_reader {
         let buffered_reader = std::io::BufReader::with_capacity(64 * 1024, reader);
-        let dur = manager.play_stream(buffered_reader)?;
+        let dur = manager.play_stream(buffered_reader, webdav_info.expected_size)?;
         if let (Some(client), Some(url)) = (webdav_info.webdav_client, webdav_info.file_url) {
             let expected_size = webdav_info.expected_size;
             drop(manager);
@@ -266,7 +266,7 @@ pub fn internal_enqueue_next(
         .map_err(|e| AppError::Internal(e.to_string()))?;
     if let Some(reader) = webdav_reader {
         let buffered_reader = std::io::BufReader::with_capacity(64 * 1024, reader);
-        manager.enqueue_next_stream(buffered_reader)?;
+        manager.enqueue_next_stream(buffered_reader, webdav_info.expected_size)?;
         if let (Some(client), Some(url)) = (webdav_info.webdav_client, webdav_info.file_url) {
             let expected_size = webdav_info.expected_size;
             drop(manager);

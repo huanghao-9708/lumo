@@ -1936,7 +1936,14 @@ const albums = shallowRef<Album[]>([]);
             hasLoadedCurrentFile.value = true;
 
             if (progressMs.value > 0) {
-              await playbackSeek(progressMs.value);
+              // 恢复上次听到的地方。seek 失败（个别格式的解码器不支持 seek）只记日志，
+              // 绝不能把整个播放动作带崩——从头播也比点播放没反应强。
+              try {
+                await playbackSeek(progressMs.value);
+              } catch (seekErr) {
+                console.warn('Resume seek failed, playing from start:', seekErr);
+                progressMs.value = 0;
+              }
             }
             // 同步系统媒体通知
             updateMediaSessionMetadata(track);

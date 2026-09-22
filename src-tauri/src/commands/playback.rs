@@ -315,9 +315,9 @@ pub fn playback_play(
         .lock()
         .map_err(|e| AppError::Internal(e.to_string()))?;
     let duration = if let Some(reader) = webdav_reader {
-        // WebDAV 流播
+        // WebDAV 流播（expected_size 作为 byte_len 传给 symphonia，否则 seek 会报 Unseekable）
         let buffered_reader = std::io::BufReader::with_capacity(64 * 1024, reader);
-        let dur = manager.play_stream(buffered_reader)?;
+        let dur = manager.play_stream(buffered_reader, webdav_info.expected_size)?;
 
         // 后台异步下载缓存（不影响当前播放）
         if let (Some(client), Some(url)) = (webdav_info.webdav_client, webdav_info.file_url) {
@@ -378,7 +378,7 @@ pub fn playback_enqueue_next(
     if let Some(reader) = webdav_reader {
         // WebDAV 流式 gapless：直接 append 到 sink（不 stop，无缝衔接）
         let buffered_reader = std::io::BufReader::with_capacity(64 * 1024, reader);
-        manager.enqueue_next_stream(buffered_reader)?;
+        manager.enqueue_next_stream(buffered_reader, webdav_info.expected_size)?;
 
         // 后台异步下载缓存
         if let (Some(client), Some(url)) = (webdav_info.webdav_client, webdav_info.file_url) {

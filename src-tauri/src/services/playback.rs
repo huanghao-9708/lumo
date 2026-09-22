@@ -1,6 +1,5 @@
-use rodio::{Decoder, OutputStream, Sink, Source};
+use rodio::{Decoder, OutputStreamBuilder, Sink, Source};
 use std::fs::File;
-use std::io::BufReader;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use tracing::info;
@@ -87,13 +86,12 @@ pub struct PlaybackManager {
 
 impl PlaybackManager {
     pub fn new() -> Result<Self, String> {
-        let (stream, stream_handle) = OutputStream::try_default()
+        let stream = OutputStreamBuilder::open_default_stream()
             .map_err(|e| format!("Failed to get default audio output: {}", e))?;
-        // 详见类型注释：stream 被钉死在堆上保活，避免 Sink 悬空
+        let sink = Sink::connect_new(stream.mixer());
+        // 详见类型注释：Sink 只持有 mixer 句柄，stream 一旦 drop 就没有输出，
+        // 所以把 stream 钉死在堆上保活。
         Box::leak(Box::new(stream));
-
-        let sink = Sink::try_new(&stream_handle)
-            .map_err(|e| format!("Failed to create audio sink: {}", e))?;
 
         info!("Initialized default audio output stream");
         Ok(Self {
@@ -127,18 +125,39 @@ impl PlaybackManager {
         info!("Playback speed set to {:.2}x", speed);
     }
 
+    /// 构建解码器。
+    ///
+    /// **必须带上 `byte_len`**：symphonia 的 FLAC / MP3 / MP4 解复用器在 seek 时要先知道
+    /// 流的总字节数（`bundle-flac/demuxer.rs`、`bundle-mp3/demuxer.rs` 里都是
+    /// `reader.byte_len().ok_or(SeekError::Unseekable)`），拿不到就直接报 Unseekable。
+    /// rodio 0.19 的 `ReadSeekSource::byte_len()` 恒为 `None`，所以那些格式根本拖不动
+    /// 进度条；0.21 支持通过 `with_byte_len` 显式提供（顺带会把 is_seekable 置真）。
+    fn build_decoder<R>(reader: R, byte_len: Option<u64>) -> Result<Decoder<R>, String>
+    where
+        R: std::io::Read + std::io::Seek + Send + Sync + 'static,
+    {
+        let mut builder = Decoder::builder().with_data(reader);
+        if let Some(len) = byte_len {
+            builder = builder.with_byte_len(len);
+        }
+        builder
+            .build()
+            .map_err(|e| format!("Failed to decode stream: {}", e))
+    }
+
     pub fn play_file(&self, path: &std::path::Path) -> Result<Option<u64>, String> {
         info!("Playing file: {:?}", path);
         let file = File::open(path).map_err(|e| format!("Failed to open file: {}", e))?;
-        self.play_stream(file)
+        let byte_len = std::fs::metadata(path).ok().map(|m| m.len());
+        self.play_stream(file, byte_len)
     }
 
     pub fn play_stream<R: std::io::Read + std::io::Seek + Send + Sync + 'static>(
         &self,
         reader: R,
+        byte_len: Option<u64>,
     ) -> Result<Option<u64>, String> {
-        let decoder = Decoder::new(BufReader::new(reader))
-            .map_err(|e| format!("Failed to decode stream: {}", e))?;
+        let decoder = Self::build_decoder(reader, byte_len)?;
 
         let duration = decoder.total_duration().map(|d| d.as_millis() as u64);
 
@@ -148,12 +167,7 @@ impl PlaybackManager {
         }
         // 速率设置要重新下发：rodio 的 speed 是挂在「被 append 的音源」上的
         self.sink.set_speed(self.get_speed());
-                          // convert_samples 把解码器的 i16 样本统一成 f32（LevelSource 按 f32 度量能量）；
-                          // 该转换器由 rodio 实现，会把 try_seek 原样透传给解码器，因此拖拽进度条语义不变。
-        self.sink.append(LevelSource::new(
-            decoder.convert_samples::<f32>(),
-            self.level.clone(),
-        ));
+        self.sink.append(LevelSource::new(decoder, self.level.clone()));
         self.sink.play();
         self.active.store(true, Ordering::Relaxed);
         Ok(duration)
@@ -167,12 +181,9 @@ impl PlaybackManager {
         info!("Enqueuing next file for gapless playback: {:?}", path);
         let file =
             File::open(path).map_err(|e| format!("Failed to open file for enqueuing: {}", e))?;
-        let decoder = Decoder::new(BufReader::new(file))
-            .map_err(|e| format!("Failed to decode stream for enqueuing: {}", e))?;
-        self.sink.append(LevelSource::new(
-            decoder.convert_samples::<f32>(),
-            self.level.clone(),
-        ));
+        let byte_len = std::fs::metadata(path).ok().map(|m| m.len());
+        let decoder = Self::build_decoder(file, byte_len)?;
+        self.sink.append(LevelSource::new(decoder, self.level.clone()));
         Ok(())
     }
 
@@ -183,14 +194,11 @@ impl PlaybackManager {
     pub fn enqueue_next_stream<R: std::io::Read + std::io::Seek + Send + Sync + 'static>(
         &self,
         reader: R,
+        byte_len: Option<u64>,
     ) -> Result<(), String> {
         info!("Enqueuing next stream for gapless playback");
-        let decoder = Decoder::new(BufReader::new(reader))
-            .map_err(|e| format!("Failed to decode stream for enqueuing: {}", e))?;
-        self.sink.append(LevelSource::new(
-            decoder.convert_samples::<f32>(),
-            self.level.clone(),
-        ));
+        let decoder = Self::build_decoder(reader, byte_len)?;
+        self.sink.append(LevelSource::new(decoder, self.level.clone()));
         Ok(())
     }
 
@@ -351,15 +359,16 @@ impl<S> rodio::Source for LevelSource<S>
 where
     S: rodio::Source<Item = f32>,
 {
-    fn current_frame_len(&self) -> Option<usize> {
-        self.inner.current_frame_len()
+    // rodio 0.21 把 current_frame_len 改名成 current_span_len（语义不变）
+    fn current_span_len(&self) -> Option<usize> {
+        self.inner.current_span_len()
     }
 
-    fn channels(&self) -> u16 {
+    fn channels(&self) -> rodio::ChannelCount {
         self.inner.channels()
     }
 
-    fn sample_rate(&self) -> u32 {
+    fn sample_rate(&self) -> rodio::SampleRate {
         self.inner.sample_rate()
     }
 
@@ -398,15 +407,15 @@ impl Iterator for DebugTone {
 
 #[cfg(debug_assertions)]
 impl rodio::Source for DebugTone {
-    fn current_frame_len(&self) -> Option<usize> {
+    fn current_span_len(&self) -> Option<usize> {
         None
     }
 
-    fn channels(&self) -> u16 {
+    fn channels(&self) -> rodio::ChannelCount {
         1
     }
 
-    fn sample_rate(&self) -> u32 {
+    fn sample_rate(&self) -> rodio::SampleRate {
         self.sample_rate
     }
 

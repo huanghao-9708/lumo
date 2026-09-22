@@ -27,11 +27,16 @@ r2d2 = "0.8"
 r2d2_sqlite = "0.25"
 lofty = "0.21"
 symphonia = { version = "0.5.4", features = ["all"] }
-# ADR-2：rodio 默认特性用的是 claxon(FLAC)/lewton(Vorbis) 原生解码器，
-# 而这两个解码器的 `try_seek` 是空实现（直接返回 NotSupported）——
-# 后果就是 FLAC/OGG 拖进度条完全没反应（WAV/MP3 正常，容易误判成"偶发"）。
-# 改用 symphonia 全家桶：FLAC/OGG/MP3/WAV/M4A(AAC) 都支持 seek。
-rodio = { version = "0.19", default-features = false, features = ["symphonia-all"] }
+# ADR-2：进度条 seek 的根因链
+#   1) rodio 0.19 默认用 claxon(FLAC)/lewton(Vorbis) 解码，这两个的 try_seek 直接
+#      返回 NotSupported（decoder/flac.rs:85、vorbis.rs:89）；
+#   2) 改用 symphonia 后仍然 seek 不了 —— 因为 0.19 的 `ReadSeekSource::byte_len()`
+#      恒为 None，而 symphonia 的 FLAC/MP3/MP4 解复用器 seek 时必须知道字节长度
+#      （bundle-flac/demuxer.rs:235、bundle-mp3/demuxer.rs:397 → SeekError::Unseekable）；
+#   3) 上游已修：新版 ReadSeekSource 支持 Settings{ byte_len, is_seekable }，默认走 symphonia。
+# 所以这里升到 0.21（默认特性已全部走 symphonia），并在解码时显式提供 byte_len
+# （见 services/playback.rs::build_decoder）。
+rodio = { version = "0.21", features = ["symphonia-all"] }
 tauri-plugin-dialog = "2"
 tracing = "0.1"
 tracing-subscriber = "0.3"
