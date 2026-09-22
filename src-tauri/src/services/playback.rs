@@ -1,5 +1,4 @@
 use rodio::{Decoder, OutputStreamBuilder, Sink, Source};
-use std::fs::File;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use tracing::info;
@@ -125,14 +124,17 @@ impl PlaybackManager {
         info!("Playback speed set to {:.2}x", speed);
     }
 
-    /// 构建解码器。
+    /// 构建解码器（**耗时操作，必须在 manager 锁外调用**）。
     ///
     /// **必须带上 `byte_len`**：symphonia 的 FLAC / MP3 / MP4 解复用器在 seek 时要先知道
     /// 流的总字节数（`bundle-flac/demuxer.rs`、`bundle-mp3/demuxer.rs` 里都是
     /// `reader.byte_len().ok_or(SeekError::Unseekable)`），拿不到就直接报 Unseekable。
     /// rodio 0.19 的 `ReadSeekSource::byte_len()` 恒为 `None`，所以那些格式根本拖不动
     /// 进度条；0.21 支持通过 `with_byte_len` 显式提供（顺带会把 is_seekable 置真）。
-    fn build_decoder<R>(reader: R, byte_len: Option<u64>) -> Result<Decoder<R>, String>
+    ///
+    /// 远端流的探测/解码可能耗时数十秒 —— 这正是它必须在锁外的原因：
+    /// 否则 seek / 进度查询全都要排在它后面。
+    pub fn build_decoder<R>(reader: R, byte_len: Option<u64>) -> Result<(Decoder<R>, Option<u64>), String>
     where
         R: std::io::Read + std::io::Seek + Send + Sync + 'static,
     {
@@ -140,27 +142,21 @@ impl PlaybackManager {
         if let Some(len) = byte_len {
             builder = builder.with_byte_len(len);
         }
-        builder
+        let decoder = builder
             .build()
-            .map_err(|e| format!("Failed to decode stream: {}", e))
-    }
-
-    pub fn play_file(&self, path: &std::path::Path) -> Result<Option<u64>, String> {
-        info!("Playing file: {:?}", path);
-        let file = File::open(path).map_err(|e| format!("Failed to open file: {}", e))?;
-        let byte_len = std::fs::metadata(path).ok().map(|m| m.len());
-        self.play_stream(file, byte_len)
-    }
-
-    pub fn play_stream<R: std::io::Read + std::io::Seek + Send + Sync + 'static>(
-        &self,
-        reader: R,
-        byte_len: Option<u64>,
-    ) -> Result<Option<u64>, String> {
-        let decoder = Self::build_decoder(reader, byte_len)?;
-
+            .map_err(|e| format!("Failed to decode stream: {}", e))?;
         let duration = decoder.total_duration().map(|d| d.as_millis() as u64);
+        Ok((decoder, duration))
+    }
 
+    /// 把已构建好的解码器接上 Sink 开始播放。
+    ///
+    /// **在 manager 锁内调用**，只做微秒级的换源操作（stop/reset/append/play），
+    /// 任何耗时的准备工作都应在 `build_decoder`（锁外）完成。
+    pub fn play_prepared<R: std::io::Read + std::io::Seek + Send + Sync + 'static>(
+        &self,
+        decoder: Decoder<R>,
+    ) -> Result<(), String> {
         self.sink.stop(); // 清掉旧队列，避免叠加
         if let Ok(mut tracker) = self.position.lock() {
             tracker.reset();
@@ -170,34 +166,14 @@ impl PlaybackManager {
         self.sink.append(LevelSource::new(decoder, self.level.clone()));
         self.sink.play();
         self.active.store(true, Ordering::Relaxed);
-        Ok(duration)
-    }
-
-    /// [Gapless Playback] 将下一首曲目直接加入到当前播放队列的末尾。
-    ///
-    /// 与 `play_file` 不同，此方法不会调用 `self.sink.stop()`。
-    /// rodio 的 Sink 会在当前曲目播放完毕后，立刻无缝开始播放这首曲目。
-    pub fn enqueue_next_file(&self, path: &std::path::Path) -> Result<(), String> {
-        info!("Enqueuing next file for gapless playback: {:?}", path);
-        let file =
-            File::open(path).map_err(|e| format!("Failed to open file for enqueuing: {}", e))?;
-        let byte_len = std::fs::metadata(path).ok().map(|m| m.len());
-        let decoder = Self::build_decoder(file, byte_len)?;
-        self.sink.append(LevelSource::new(decoder, self.level.clone()));
         Ok(())
     }
 
-    /// [Gapless Playback] 流式版本：将 WebDAV 等远程流的下一首曲目加入队列末尾。
-    ///
-    /// 与 `enqueue_next_file` 对称，区别是数据源是任意 `Read+Seek` 流而非本地文件。
-    /// 缓存命中时走 `enqueue_next_file`，未命中走此方法，两种情况都实现无缝切歌。
-    pub fn enqueue_next_stream<R: std::io::Read + std::io::Seek + Send + Sync + 'static>(
+    /// gapless：把已构建好的解码器排到队尾（不 stop，**锁内微秒级**）。
+    pub fn enqueue_prepared<R: std::io::Read + std::io::Seek + Send + Sync + 'static>(
         &self,
-        reader: R,
-        byte_len: Option<u64>,
+        decoder: Decoder<R>,
     ) -> Result<(), String> {
-        info!("Enqueuing next stream for gapless playback");
-        let decoder = Self::build_decoder(reader, byte_len)?;
         self.sink.append(LevelSource::new(decoder, self.level.clone()));
         Ok(())
     }

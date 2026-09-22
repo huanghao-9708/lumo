@@ -2134,12 +2134,32 @@ const albums = shallowRef<Album[]>([]);
     }
   }
 
+  /**
+   * seek 的在飞合并：上一发没回来时，新目标只覆盖「待发」值，上一发回来后再补发最新的。
+   * 拖进度条松手会连发多次，而后端 seek 可能因切歌解码而排队 —— 不合并的话
+   * 请求会越积越多（实测 7 个 seek 排队 22 秒），而且排队的里面只有最后一个有意义。
+   */
+  let seekInFlight = false;
+  let pendingSeekMs: number | null = null;
+
   async function seek(positionMs: number) {
+    if (seekInFlight) {
+      pendingSeekMs = positionMs;
+      return;
+    }
+    seekInFlight = true;
     try {
       await playbackSeek(positionMs);
       progressMs.value = positionMs;
     } catch (e) {
-      console.error(e);
+      console.error('Seek failed:', e);
+    } finally {
+      seekInFlight = false;
+      if (pendingSeekMs != null) {
+        const next = pendingSeekMs;
+        pendingSeekMs = null;
+        void seek(next);
+      }
     }
   }
 

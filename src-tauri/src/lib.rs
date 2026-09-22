@@ -294,6 +294,7 @@ pub fn run() {
             app.manage(PlaybackState {
                 manager: Mutex::new(playback_manager),
                 level: playback_level,
+                play_lock: Mutex::new(()),
             });
 
             let mut playback_queue = crate::services::queue::PlaybackQueue::new();

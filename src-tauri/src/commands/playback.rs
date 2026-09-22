@@ -2,9 +2,11 @@ use crate::db::DbState;
 use crate::error::AppError;
 use crate::ipc_trace;
 use crate::services::cache::{AudioCache, AudioCacheState, DownloadGuard, DEFAULT_MAX_BYTES};
-use crate::services::playback::PlaybackManager;
+// queue.rs 也要用 PlaybackManager::build_decoder（锁外解码），所以这里 re-export
+pub use crate::services::playback::PlaybackManager;
 use crate::services::webdav::WebdavClient;
 use rusqlite::OptionalExtension;
+use std::fs::File;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -16,6 +18,11 @@ pub struct PlaybackState {
     /// `playback_get_level` 是 30Hz 高频采样，必须**绕过 manager 锁**直接读，
     /// 否则任何一条慢命令（远端流解码等）都会把采样全部堵在锁上。
     pub level: Arc<AtomicU32>,
+    /// 播放串行锁：把「解析 → 解码 → 换源」整段串行化。
+    /// 解码（尤其远端流）可能耗时数十秒，且不能和 manager 锁互相等待 ——
+    /// 这把锁**只有播放/入队会拿**，seek / 进度 / 能量采样都不碰它，
+    /// 所以切歌再慢也不会拖住进度条。
+    pub play_lock: Mutex<()>,
 }
 
 /// 解析媒体文件到可播放的源。
@@ -315,19 +322,31 @@ pub fn playback_play(
     )?;
     drop(audio_cache); // 释放缓存锁，不阻塞后续播放
 
-    let manager = playback_state
-        .manager
+    // 串行化「解析 → 解码 → 换源」：解码（尤其远端流）可能耗时数十秒，
+    // 不串行的话两次快速切歌可能乱序接上（旧曲后到反而盖掉新曲）。
+    // seek / 进度查询**不拿这把锁**，因此不会被播放阻塞。
+    let _play_serial = playback_state
+        .play_lock
         .lock()
         .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    // 解码在 manager 锁外做（可能几十秒），锁内只做微秒级的换源操作
     let duration = if let Some(reader) = webdav_reader {
         // WebDAV 流播（expected_size 作为 byte_len 传给 symphonia，否则 seek 会报 Unseekable）
         let buffered_reader = std::io::BufReader::with_capacity(64 * 1024, reader);
-        let dur = manager.play_stream(buffered_reader, webdav_info.expected_size)?;
+        let (decoder, dur) =
+            PlaybackManager::build_decoder(buffered_reader, webdav_info.expected_size)?;
+
+        let manager = playback_state
+            .manager
+            .lock()
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        manager.play_prepared(decoder)?;
+        drop(manager); // 释放播放锁再 spawn 后台下载
 
         // 后台异步下载缓存（不影响当前播放）
         if let (Some(client), Some(url)) = (webdav_info.webdav_client, webdav_info.file_url) {
             let expected_size = webdav_info.expected_size;
-            drop(manager); // 释放播放锁再 spawn
             spawn_background_cache_download(
                 &cache_state,
                 media_file_id,
@@ -339,7 +358,17 @@ pub fn playback_play(
         dur
     } else if let Some(path) = path_buf {
         // 本地文件或缓存命中
-        manager.play_file(&path)?
+        let file =
+            File::open(&path).map_err(|e| AppError::Internal(format!("Failed to open file: {}", e)))?;
+        let byte_len = std::fs::metadata(&path).ok().map(|m| m.len());
+        let (decoder, dur) = PlaybackManager::build_decoder(file, byte_len)?;
+
+        let manager = playback_state
+            .manager
+            .lock()
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        manager.play_prepared(decoder)?;
+        dur
     } else {
         return Err(AppError::Internal("No playable source found".to_string()));
     };
@@ -376,19 +405,28 @@ pub fn playback_enqueue_next(
     )?;
     drop(audio_cache);
 
-    let manager = playback_state
-        .manager
+    // 与 playback_play 同一把串行锁：解析 → 解码 → 入队 全程串行（见上文说明）
+    let _play_serial = playback_state
+        .play_lock
         .lock()
         .map_err(|e| AppError::Internal(e.to_string()))?;
+
     if let Some(reader) = webdav_reader {
         // WebDAV 流式 gapless：直接 append 到 sink（不 stop，无缝衔接）
         let buffered_reader = std::io::BufReader::with_capacity(64 * 1024, reader);
-        manager.enqueue_next_stream(buffered_reader, webdav_info.expected_size)?;
+        let (decoder, _dur) =
+            PlaybackManager::build_decoder(buffered_reader, webdav_info.expected_size)?;
+
+        let manager = playback_state
+            .manager
+            .lock()
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        manager.enqueue_prepared(decoder)?;
+        drop(manager);
 
         // 后台异步下载缓存
         if let (Some(client), Some(url)) = (webdav_info.webdav_client, webdav_info.file_url) {
             let expected_size = webdav_info.expected_size;
-            drop(manager);
             spawn_background_cache_download(
                 &cache_state,
                 media_file_id,
@@ -399,9 +437,16 @@ pub fn playback_enqueue_next(
         }
     } else if let Some(path) = path_buf {
         // 本地文件或缓存命中 → 标准 gapless
-        manager
-            .enqueue_next_file(&path)
+        let file =
+            File::open(&path).map_err(|e| AppError::Internal(format!("Failed to open file: {}", e)))?;
+        let byte_len = std::fs::metadata(&path).ok().map(|m| m.len());
+        let (decoder, _dur) = PlaybackManager::build_decoder(file, byte_len)?;
+
+        let manager = playback_state
+            .manager
+            .lock()
             .map_err(|e| AppError::Internal(e.to_string()))?;
+        manager.enqueue_prepared(decoder)?;
     } else {
         return Err(AppError::Internal("No playable source found".to_string()));
     }

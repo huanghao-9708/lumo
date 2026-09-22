@@ -1,5 +1,5 @@
 use crate::commands::playback::{
-    resolve_media_file, spawn_background_cache_download, PlaybackState,
+    resolve_media_file, spawn_background_cache_download, PlaybackManager, PlaybackState,
 };
 use crate::db::DbState;
 use crate::error::AppError;
@@ -92,16 +92,29 @@ pub fn internal_play_item(
     )?;
     drop(audio_cache);
 
-    let manager = playback_state
-        .manager
+    // 串行化「解析 → 解码 → 换源」全过程：解码（尤其远端流）可能耗时数十秒，
+    // 不串行的话两次快速切歌可能乱序接上（旧曲后到反而盖掉新曲）。
+    // seek / 进度查询**不拿这把锁**，因此切歌再慢也不会拖住进度条。
+    let _play_serial = playback_state
+        .play_lock
         .lock()
         .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    // 解码在 manager 锁外做（可能几十秒），锁内只做微秒级的换源操作
     let _duration = if let Some(reader) = webdav_reader {
         let buffered_reader = std::io::BufReader::with_capacity(64 * 1024, reader);
-        let dur = manager.play_stream(buffered_reader, webdav_info.expected_size)?;
+        let (decoder, dur) =
+            PlaybackManager::build_decoder(buffered_reader, webdav_info.expected_size)?;
+
+        {
+            let manager = playback_state
+                .manager
+                .lock()
+                .map_err(|e| AppError::Internal(e.to_string()))?;
+            manager.play_prepared(decoder)?;
+        }
         if let (Some(client), Some(url)) = (webdav_info.webdav_client, webdav_info.file_url) {
             let expected_size = webdav_info.expected_size;
-            drop(manager);
             spawn_background_cache_download(
                 &cache_state,
                 effective_media_file_id,
@@ -112,7 +125,17 @@ pub fn internal_play_item(
         }
         dur
     } else if let Some(path) = path_buf {
-        manager.play_file(&path)?
+        let file = std::fs::File::open(&path)
+            .map_err(|e| AppError::Internal(format!("Failed to open file: {}", e)))?;
+        let byte_len = std::fs::metadata(&path).ok().map(|m| m.len());
+        let (decoder, dur) = PlaybackManager::build_decoder(file, byte_len)?;
+
+        let manager = playback_state
+            .manager
+            .lock()
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        manager.play_prepared(decoder)?;
+        dur
     } else {
         return Err(AppError::Internal("No playable source found".to_string()));
     };
@@ -260,16 +283,26 @@ pub fn internal_enqueue_next(
     )?;
     drop(audio_cache);
 
-    let manager = playback_state
-        .manager
+    // 与 internal_play_item 同一把串行锁：解析 → 解码 → 入队 全程串行（见上文说明）
+    let _play_serial = playback_state
+        .play_lock
         .lock()
         .map_err(|e| AppError::Internal(e.to_string()))?;
+
     if let Some(reader) = webdav_reader {
         let buffered_reader = std::io::BufReader::with_capacity(64 * 1024, reader);
-        manager.enqueue_next_stream(buffered_reader, webdav_info.expected_size)?;
+        let (decoder, _dur) =
+            PlaybackManager::build_decoder(buffered_reader, webdav_info.expected_size)?;
+
+        {
+            let manager = playback_state
+                .manager
+                .lock()
+                .map_err(|e| AppError::Internal(e.to_string()))?;
+            manager.enqueue_prepared(decoder)?;
+        }
         if let (Some(client), Some(url)) = (webdav_info.webdav_client, webdav_info.file_url) {
             let expected_size = webdav_info.expected_size;
-            drop(manager);
             spawn_background_cache_download(
                 &cache_state,
                 effective_media_file_id,
@@ -279,9 +312,16 @@ pub fn internal_enqueue_next(
             );
         }
     } else if let Some(path) = path_buf {
-        manager
-            .enqueue_next_file(&path)
+        let file = std::fs::File::open(&path)
+            .map_err(|e| AppError::Internal(format!("Failed to open file: {}", e)))?;
+        let byte_len = std::fs::metadata(&path).ok().map(|m| m.len());
+        let (decoder, _dur) = PlaybackManager::build_decoder(file, byte_len)?;
+
+        let manager = playback_state
+            .manager
+            .lock()
             .map_err(|e| AppError::Internal(e.to_string()))?;
+        manager.enqueue_prepared(decoder)?;
     } else {
         return Err(AppError::Internal("No playable source found".to_string()));
     }
