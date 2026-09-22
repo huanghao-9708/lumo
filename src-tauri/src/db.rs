@@ -1044,7 +1044,10 @@ mod tests {
         .unwrap();
 
         // V12 才覆盖的两种写法：全角斜杠、两侧带空格的加号
-        for (combined, title) in [("张玉华／李圣杰", "合唱一"), ("米津玄师 + 池田エライザ", "合唱二")] {
+        for (combined, title) in [
+            ("张玉华／李圣杰", "合唱一"),
+            ("米津玄师 + 池田エライザ", "合唱二"),
+        ] {
             conn.execute(
                 "INSERT INTO artists (name, normalized_name, sort_name) VALUES (?1, ?1, ?1)",
                 rusqlite::params![combined],
@@ -1071,7 +1074,11 @@ mod tests {
 
         // 组合记录消失，两个真实艺人出现
         let combined_left: i64 = conn
-            .query_row("SELECT COUNT(*) FROM artists WHERE id = ?1", [combined_id], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM artists WHERE id = ?1",
+                [combined_id],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(combined_left, 0, "组合艺人空壳记录没有被清掉");
 
@@ -1086,7 +1093,11 @@ mod tests {
 
         for name in ["张玉华", "李圣杰", "米津玄师", "池田エライザ"] {
             let n: i64 = conn
-                .query_row("SELECT COUNT(*) FROM artists WHERE name = ?1", [name], |r| r.get(0))
+                .query_row(
+                    "SELECT COUNT(*) FROM artists WHERE name = ?1",
+                    [name],
+                    |r| r.get(0),
+                )
                 .unwrap();
             assert_eq!(n, 1, "{} 没有被拆出来", name);
         }

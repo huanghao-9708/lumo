@@ -34,3 +34,7 @@ export function playbackAdvance(direction: number): Promise<void> {
 export function playbackSetMode(mode: BackendPlayMode): Promise<void> {
   return invoke('playback_set_mode', { mode });
 }
+
+export function playbackPlayIndex(index: number): Promise<void> {
+  return invoke('playback_play_index', { index });
+}

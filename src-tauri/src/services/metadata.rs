@@ -11,9 +11,8 @@ use std::path::Path;
 // 现在唯一的清单 + 唯一的拆分函数都放在这里。
 
 /// 多艺人标签的分隔符集合。
-pub const ARTIST_SEPARATORS: &[char] = &[
-    '&', '＆', ';', '；', '、', '，', ',', '|', '｜', '／', '､',
-];
+pub const ARTIST_SEPARATORS: &[char] =
+    &['&', '＆', ';', '；', '、', '，', ',', '|', '｜', '／', '､'];
 
 /// 连接词（需自成词、大小写不敏感）：`feat.` / `ft.` / `featuring`
 const COLLAB_KEYWORDS: &[&str] = &["featuring", "feat.", "feat", "ft.", "ft"];
@@ -256,7 +255,10 @@ mod tests {
         assert_eq!(split_artist_names("A＆B"), vec!["A", "B"]);
         assert_eq!(split_artist_names("A|B|C|D"), vec!["A", "B", "C", "D"]);
         // 全角斜杠、半角顿号
-        assert_eq!(split_artist_names("张玉华／李圣杰"), vec!["张玉华", "李圣杰"]);
+        assert_eq!(
+            split_artist_names("张玉华／李圣杰"),
+            vec!["张玉华", "李圣杰"]
+        );
         assert_eq!(split_artist_names("A､B"), vec!["A", "B"]);
     }
 
@@ -286,7 +288,10 @@ mod tests {
     #[test]
     fn keeps_single_artists_intact() {
         assert_eq!(split_artist_names("Kraftwerk"), vec!["Kraftwerk"]);
-        assert_eq!(split_artist_names("The Soft Machine"), vec!["The Soft Machine"]);
+        assert_eq!(
+            split_artist_names("The Soft Machine"),
+            vec!["The Soft Machine"]
+        );
         assert_eq!(split_artist_names("Defeats"), vec!["Defeats"]);
         assert_eq!(split_artist_names("  A  B  "), vec!["A  B"]);
         // 空串 / 纯分隔符不产生空艺人
@@ -296,7 +301,10 @@ mod tests {
 
     #[test]
     fn mixed_separators_and_whitespace() {
-        assert_eq!(split_artist_names(" A | B feat. C & D "), vec!["A", "B", "C", "D"]);
+        assert_eq!(
+            split_artist_names(" A | B feat. C & D "),
+            vec!["A", "B", "C", "D"]
+        );
     }
 
     /// 来源标签把分隔符丢掉时（"Frank Ocean feat.|James Blake"）后半段会残留一个光秃秃的连接词

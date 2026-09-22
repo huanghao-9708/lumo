@@ -290,10 +290,8 @@ pub fn run() {
             app.manage(DbState { db: pool });
 
             let playback_manager = PlaybackManager::new().expect("Failed to init playback");
-            let playback_level = playback_manager.level_handle();
             app.manage(PlaybackState {
                 manager: Mutex::new(playback_manager),
-                level: playback_level,
                 play_lock: Mutex::new(()),
             });
 
@@ -466,7 +464,6 @@ pub fn run() {
             crate::commands::playback::playback_set_speed,
             crate::commands::playback::playback_get_speed,
             crate::commands::playback::playback_get_pos,
-            crate::commands::playback::playback_get_level,
             crate::commands::playback::playback_seek,
             crate::commands::playback::playback_is_finished,
             crate::commands::library::library_toggle_favorite,
@@ -522,6 +519,7 @@ pub fn run() {
             crate::commands::library::library_get_playability,
             crate::commands::library::storage_get_db_size,
             crate::commands::queue::playback_set_queue,
+            crate::commands::queue::playback_play_index,
             crate::commands::queue::playback_queue_state,
             crate::commands::queue::playback_advance,
             crate::commands::queue::playback_set_mode,

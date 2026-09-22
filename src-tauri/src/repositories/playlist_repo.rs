@@ -68,9 +68,7 @@ impl PlaylistRepo {
         let base_rows = rows.collect::<rusqlite::Result<Vec<_>>>()?;
         drop(stmt);
 
-        let mut thumb_stmt = conn.prepare(
-            "SELECT thumbnail_blob FROM artwork WHERE id = ?1",
-        )?;
+        let mut thumb_stmt = conn.prepare("SELECT thumbnail_blob FROM artwork WHERE id = ?1")?;
 
         let mut result = Vec::with_capacity(base_rows.len());
         for (id, name, description, track_count, cover_artwork_id) in base_rows {

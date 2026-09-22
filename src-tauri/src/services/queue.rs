@@ -189,6 +189,17 @@ impl PlaybackQueue {
         target
     }
 
+    /// 用户在已有队列中手动选择某首歌曲播放：直接跳转到指定索引，作废旧退避。
+    pub fn select_index(&mut self, index: usize) -> Option<usize> {
+        if index < self.items.len() {
+            self.index = index;
+            self.retry.clear();
+            Some(index)
+        } else {
+            None
+        }
+    }
+
     /// 播放器确实接下这一首之后才写当前位置（CR-002）。
     ///
     /// 反过来（先写位置再交给播放器）会让一次失败看起来像「这首歌已经播过了」：

@@ -3,7 +3,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue';
 import type { CSSProperties } from 'vue';
 import {
   Shuffle, SkipBack, Play, Pause, SkipForward, Repeat, Repeat1,
-  ChevronDown, Disc3, Heart, Volume, Volume1, Volume2,
+  ChevronDown, Disc3, Music, Heart, Volume, Volume1, Volume2,
   Minus, Square, X, ListPlus,
 } from 'lucide-vue-next';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -11,7 +11,6 @@ import { usePlayerStore } from '../../stores/player';
 import { useUiStore } from '../../stores/ui';
 import { useArtworkSrc } from '../../composables/useArtworkSrc';
 import { useCoverColor } from '../../composables/useCoverColor';
-import { playbackGetLevel } from '../../api/playback';
 import LyricsView from '../shared/LyricsView.vue';
 import PlaylistPickerModal from '../shared/PlaylistPickerModal.vue';
 import PlaybackRateButton from '../shared/PlaybackRateButton.vue';
@@ -37,100 +36,27 @@ const FALLBACK_BG = '#2A2722';
 const bgPrimary = computed(() => (ready.value && primary.value ? primary.value : FALLBACK_BG));
 const bgSecondary = computed(() => (ready.value && secondary.value ? secondary.value : FALLBACK_BG));
 
-/* ============ 封面呼吸（兜底：拿不到音频能量时启用） ============ */
+/* ============ 方案一：浮光掠影 · 呼吸色晕场（Aura Halo） ============ */
+const auraPrimaryColor = computed(() => (ready.value && primary.value ? primary.value : 'rgba(226, 138, 35, 0.55)'));
+const auraSecondaryColor = computed(() => {
+  if (ready.value && secondary.value) return secondary.value;
+  if (ready.value && primary.value) return primary.value;
+  return 'rgba(235, 110, 60, 0.45)';
+});
+const auraCoreColor = computed(() => (ready.value && primary.value ? primary.value : 'rgba(226, 138, 35, 0.38)'));
+
 /**
  * 以曲目 id 作确定性种子：同一首歌的呼吸节奏恒定，不同歌略有差异。
- * - 周期 3.4–4.6s（≈ 13–18 次/分钟，接近平静呼吸，不会显得躁动）
- * - 振幅 2.0%–4.5%（克制，避免喧宾夺主）
- * 一旦下方「音频能量驱动」取到真实能量，就停用这套兜底，避免两套动效叠加。
+ * - 周期 4.0–5.4s，微幅悬浮与轻微呼吸，完全在 GPU 合成器线程运行。
  */
-const breathStyle = computed<CSSProperties>(() => {
+const floatingStyle = computed<CSSProperties>(() => {
   const id = playerStore.currentTrack?.id ?? 0;
   const seed = (Math.abs(Math.imul(id, 2654435761)) % 1000) / 1000;
   return {
-    '--np-breath-duration': `${(3.4 + seed * 1.2).toFixed(2)}s`,
-    '--np-breath-scale': (1.02 + seed * 0.025).toFixed(4),
+    '--np-float-duration': `${(4.0 + seed * 1.4).toFixed(2)}s`,
+    '--np-float-scale': (1.012 + seed * 0.015).toFixed(4),
   } as CSSProperties;
 });
-
-/* ============ 音频能量驱动（真·随音乐呼吸） ============ */
-/**
- * 后端（services/playback.rs 的 LevelSource）在音频线程逐窗 ≈21ms 统计 RMS 写入原子量，
- * 这里以约 30Hz 采样。要点：
- * - 只在「组件挂载（= 沉浸式可见）+ 正在播放」时采样，其余时间不发请求；
- * - 先做感知映射（RMS 绝对值很小，音乐典型 0.05–0.3，开方后才有可读的动态范围），
- *   再走「快起慢落」包络平滑，使封面起伏像呼吸而非逐帧抖动；
- * - 直接写元素 style.transform，绕开响应式系统，避免每帧触发 Vue 更新。
- */
-const reactiveRef = ref<HTMLElement | null>(null);
-/** 是否已成功取到音频能量：取到后交接给 JS 驱动，停用 CSS 兜底呼吸，避免两套动效叠加 */
-const audioActive = ref(false);
-
-const SAMPLE_INTERVAL_MS = 34; // ≈30Hz：够细腻，又不给 IPC 通道添堵
-const ATTACK = 0.5; // 吸气：跟得上鼓点
-const RELEASE = 0.06; // 呼气：缓慢回落
-const PULSE_GAIN = 0.045; // 音频能量对 scale 的最大贡献
-const IDLE_BREATH = 0.006; // 静息呼吸幅度，安静段落不至于完全僵死
-const IDLE_PERIOD_S = 4.2;
-
-let rafId = 0;
-let lastSampleAt = 0;
-let rawLevel = 0;
-let env = 0;
-
-/** 是否有一发 get_level 还在路上：**未返回前不再发下一发**。
- *  这个命令一旦因后端繁忙迟迟不回，30Hz 的循环会把 IPC 通道堆满
- *  （实测 186 个在飞、连歌词/收藏列表都排不进来，整个应用巨卡）。
- *  限制为最多一个在飞后，最坏情况也只是呼吸动效暂时冻结，不再殃及其它功能。 */
-let levelInFlight = false;
-
-function reactiveTick(now: number) {
-  rafId = requestAnimationFrame(reactiveTick);
-
-  // 页面被最小化/切走时（document.hidden）rAF 会被浏览器节流甚至暂停，
-  // 但保险起见显式跳过采样：看不见的动效不值得占用 IPC。
-  if (!playerStore.isPlaying || document.hidden) {
-    rawLevel = 0;
-  } else if (!levelInFlight && now - lastSampleAt >= SAMPLE_INTERVAL_MS) {
-    lastSampleAt = now;
-    levelInFlight = true;
-    playbackGetLevel()
-      .then((lv) => {
-        rawLevel = typeof lv === 'number' && lv > 0 ? lv : 0;
-        if (rawLevel > 0) audioActive.value = true;
-      })
-      .catch(() => {
-        rawLevel = 0;
-      })
-      .finally(() => {
-        levelInFlight = false;
-      });
-  }
-
-  const target = Math.min(1, Math.sqrt(rawLevel) * 1.6);
-  env += (target - env) * (target > env ? ATTACK : RELEASE);
-
-  const idle = Math.sin((now / 1000) * ((Math.PI * 2) / IDLE_PERIOD_S)) * IDLE_BREATH;
-  const scale = 1 + idle + env * PULSE_GAIN;
-  if (reactiveRef.value) {
-    reactiveRef.value.style.transform = `scale(${scale.toFixed(4)})`;
-  }
-}
-
-function stopReactiveLoop() {
-  if (rafId) {
-    cancelAnimationFrame(rafId);
-    rafId = 0;
-  }
-  if (reactiveRef.value) reactiveRef.value.style.transform = '';
-}
-
-function startReactiveLoop() {
-  // 尊重系统「减少动态效果」：不启动 JS 驱动（CSS 侧已由全局规则压到 0.01ms）
-  if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
-  lastSampleAt = 0;
-  rafId = requestAnimationFrame(reactiveTick);
-}
 
 /* ============ 进度条 ============ */
 /**
@@ -242,11 +168,9 @@ function onKey(e: KeyboardEvent) {
 }
 onMounted(() => {
   window.addEventListener('keydown', onKey);
-  startReactiveLoop();
 });
 onUnmounted(() => {
   window.removeEventListener('keydown', onKey);
-  stopReactiveLoop();
 });
 </script>
 
@@ -327,8 +251,8 @@ onUnmounted(() => {
       v-if="playerStore.currentTrack"
       class="relative z-10 flex-1 min-h-0 grid grid-cols-[1fr_auto_1fr] gap-8 px-8 pb-2"
     >
-      <!-- 左：歌曲信息 + 收藏（上下左右居中） -->
-      <div class="flex flex-col items-center justify-center text-center gap-2 max-w-[340px] w-full justify-self-end min-w-0">
+      <!-- 左：歌曲信息 + 收藏（在左侧空间内完全水平居中对齐） -->
+      <div class="flex flex-col items-center justify-center text-center gap-2 max-w-[400px] w-full justify-self-center min-w-0">
         <h1 class="text-[26px] font-bold text-white leading-[1.2] break-words w-full">
           {{ playerStore.currentTrack.title }}
         </h1>
@@ -367,35 +291,61 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- 中：封面（正方形四边羽化，唯一视觉焦点） -->
-      <div class="flex items-center justify-center min-w-0">
-        <!-- 外层承接音频能量的实时缩放；内层 CSS 呼吸仅在没有音频数据时兜底，避免两套动效叠加 -->
-        <div ref="reactiveRef" class="cover-reactive">
+      <!-- 中：封面舞台（背部流光呼吸色晕场 + 悬浮主体卡片） -->
+      <div class="flex items-center justify-center min-w-0 relative">
+        <div
+          class="relative flex items-center justify-center select-none"
+          style="width: var(--np-cover); height: var(--np-cover);"
+        >
+          <!-- 1. 背部动态流光呼吸色晕场（Aura Halo） -->
           <div
-            class="relative square-feather shrink-0"
-            :class="{ 'cover-breathe': !audioActive, 'is-playing': playerStore.isPlaying }"
-            style="width: var(--np-cover); height: var(--np-cover);"
-            :style="breathStyle"
+            class="aura-container pointer-events-none"
+            :class="{ 'is-playing': playerStore.isPlaying }"
+          >
+            <div
+              class="aura-blob aura-blob-1"
+              :style="{ background: auraPrimaryColor }"
+            ></div>
+            <div
+              class="aura-blob aura-blob-2"
+              :style="{ background: auraSecondaryColor }"
+            ></div>
+            <div
+              class="aura-blob aura-blob-core"
+              :style="{ background: auraCoreColor }"
+            ></div>
+          </div>
+
+          <!-- 2. 悬浮封面主体卡片（现代实体感 + 微玻璃高光） -->
+          <div
+            class="relative z-10 shrink-0 cover-card cover-floating overflow-hidden rounded-2xl ring-1 ring-white/15"
+            :class="{ 'is-playing': playerStore.isPlaying }"
+            style="width: 100%; height: 100%;"
+            :style="floatingStyle"
           >
             <img
               v-if="coverSrc"
               :src="coverSrc"
               alt="cover"
-              class="w-full h-full object-cover"
+              class="w-full h-full object-cover pointer-events-none"
             />
             <div
               v-else
-              class="w-full h-full flex items-center justify-center"
+              class="w-full h-full flex flex-col items-center justify-center gap-2.5 bg-white/5 backdrop-blur-md"
             >
-              <Disc3 class="w-16 h-16 text-white/60 animate-spin" style="animation-duration: 8s;" />
+              <Music class="w-16 h-16 text-white/35" />
+              <span class="text-[12px] font-mono tracking-wider text-white/35 uppercase">No Artwork</span>
             </div>
+
+            <!-- 卡片表面微妙的玻璃斜高光（非旋转、纯静态光泽层） -->
+            <div class="absolute inset-0 pointer-events-none cover-glass-sheen"></div>
           </div>
         </div>
       </div>
 
-      <!-- 右：歌词（高度 = 封面高度，上下渐隐，垂直居中） -->
-      <div class="flex flex-col justify-center min-h-0 max-w-[340px] w-full justify-self-start">
-        <div class="lyrics-fade overflow-hidden" style="height: var(--np-cover);">
+      <!-- 右：歌词（高度 = 封面高度，在右侧空间内完全水平居中对齐） -->
+      <div class="flex flex-col items-center justify-center min-h-0 max-w-[400px] w-full justify-self-center text-center">
+        <div class="lyrics-fade overflow-hidden w-full" style="height: var(--np-cover);">
           <LyricsView variant="immersive" />
         </div>
       </div>
@@ -507,32 +457,135 @@ onUnmounted(() => {
   --np-cover: min(56vh, 480px);
 }
 
-/* 音频能量驱动层：实时 scale 由 JS 直接写入 style.transform（绕开响应式）。
-   与内层 .cover-breathe 分属两层元素，两个 scale 相乘，互不覆盖。 */
-.cover-reactive {
-  transform-origin: center;
+/* ===== 方案一：背部流光呼吸色晕场（Aura Halo） ===== */
+.aura-container {
+  position: absolute;
+  inset: -14%;
+  width: 128%;
+  height: 128%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  filter: blur(52px);
+  opacity: 0.85;
+  transition: opacity 0.6s ease;
+  z-index: 0;
+}
+
+.aura-blob {
+  position: absolute;
+  transform-origin: center center;
+  will-change: transform, opacity;
+  animation-play-state: paused;
+}
+
+.aura-container.is-playing .aura-blob {
+  animation-play-state: running;
+}
+
+/* 光团 1：主色流光团，顺时针椭圆慢巡游 */
+.aura-blob-1 {
+  width: 82%;
+  height: 82%;
+  border-radius: 46% 54% 65% 35% / 40% 48% 52% 60%;
+  animation: aura-flow-1 8.5s ease-in-out infinite;
+}
+
+/* 光团 2：次色流光团，逆时针交错慢巡游 */
+.aura-blob-2 {
+  width: 76%;
+  height: 76%;
+  border-radius: 58% 42% 38% 62% / 55% 38% 62% 45%;
+  animation: aura-flow-2 11.5s ease-in-out infinite;
+}
+
+/* 光团 3：中心氛围光脉冲，随播放节奏微呼吸 */
+.aura-blob-core {
+  width: 64%;
+  height: 64%;
+  border-radius: 50%;
+  animation: aura-pulse-core var(--np-float-duration, 4.6s) ease-in-out infinite;
+}
+
+@keyframes aura-flow-1 {
+  0% {
+    transform: translate(-7%, -6%) rotate(0deg) scale(0.98);
+  }
+  33% {
+    transform: translate(6%, -4%) rotate(120deg) scale(1.08);
+  }
+  66% {
+    transform: translate(-3%, 7%) rotate(240deg) scale(0.94);
+  }
+  100% {
+    transform: translate(-7%, -6%) rotate(360deg) scale(0.98);
+  }
+}
+
+@keyframes aura-flow-2 {
+  0% {
+    transform: translate(6%, 6%) rotate(0deg) scale(0.96);
+  }
+  50% {
+    transform: translate(-7%, -5%) rotate(-180deg) scale(1.09);
+  }
+  100% {
+    transform: translate(6%, 6%) rotate(-360deg) scale(0.96);
+  }
+}
+
+@keyframes aura-pulse-core {
+  0%, 100% {
+    transform: scale(0.9);
+    opacity: 0.42;
+  }
+  50% {
+    transform: scale(1.16);
+    opacity: 0.72;
+  }
+}
+
+/* ===== 悬浮封面卡片 ===== */
+.cover-card {
+  box-shadow:
+    0 22px 55px -12px rgba(0, 0, 0, 0.75),
+    0 0 40px 1px rgba(255, 255, 255, 0.05);
+  transform-origin: center center;
   will-change: transform;
 }
 
-/* 封面呼吸：随播放态律动。
-   仅用 transform（GPU 合成，不触发重排/重绘）；周期与振幅由曲目 id 确定性生成。
-   无障碍：src/style.css 的 prefers-reduced-motion 会将其时长压到 0.01ms，等效停用。 */
-.cover-breathe {
-  transform-origin: center;
-  will-change: transform;
-  animation: cover-breathe var(--np-breath-duration, 4.2s) cubic-bezier(0.4, 0, 0.2, 1) infinite;
+.cover-floating {
+  animation: cover-float var(--np-float-duration, 4.6s) cubic-bezier(0.4, 0, 0.2, 1) infinite;
   animation-play-state: paused;
 }
-.cover-breathe.is-playing {
+
+.cover-floating.is-playing {
   animation-play-state: running;
 }
-@keyframes cover-breathe {
-  0%,
-  100% {
-    transform: scale(1);
+
+@keyframes cover-float {
+  0%, 100% {
+    transform: translateY(0px) scale(1);
   }
   50% {
-    transform: scale(var(--np-breath-scale, 1.03));
+    transform: translateY(-5px) scale(var(--np-float-scale, 1.02));
+  }
+}
+
+/* 玻璃高光掠光层（静态通透斜高光，不晃眼） */
+.cover-glass-sheen {
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.12) 0%,
+    rgba(255, 255, 255, 0.03) 38%,
+    transparent 55%
+  );
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aura-blob,
+  .cover-floating {
+    animation: none !important;
   }
 }
 

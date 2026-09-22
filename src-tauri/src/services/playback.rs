@@ -1,6 +1,6 @@
 use rodio::{Decoder, OutputStreamBuilder, Sink, Source};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use tracing::info;
 
 /// 播放速率下限/上限（前端只提供 0.5–1.5 五档，这里留一点余量做防御）
@@ -73,9 +73,6 @@ pub struct PlaybackManager {
     /// `Sink::empty()` 只能说明当前没有音频，无法区分「自然播完」「用户主动停止」和
     /// 「应用刚启动尚未播放」。队列观察器需要这个状态，才能只消费一次自然结束事件。
     active: AtomicBool,
-    /// 当前音频能量（f32 的位模式），由 `LevelSource` 在音频线程逐窗写入。
-    /// 用原子量而非 Mutex：音频回调路径上绝不能阻塞。
-    level: Arc<AtomicU32>,
     /// 播放速率。写进 rodio 的 `Sink::set_speed`——音频线程每 5ms 读一次该值，
     /// 所以改速率立即生效、不需要重建音源（变速=重采样，会有音高变化，这是无时间拉伸依赖下的取舍）。
     speed: Mutex<f32>,
@@ -96,7 +93,6 @@ impl PlaybackManager {
         Ok(Self {
             sink,
             active: AtomicBool::new(false),
-            level: Arc::new(AtomicU32::new(0)),
             speed: Mutex::new(1.0),
             position: Mutex::new(PositionTracker::default()),
         })
@@ -134,7 +130,10 @@ impl PlaybackManager {
     ///
     /// 远端流的探测/解码可能耗时数十秒 —— 这正是它必须在锁外的原因：
     /// 否则 seek / 进度查询全都要排在它后面。
-    pub fn build_decoder<R>(reader: R, byte_len: Option<u64>) -> Result<(Decoder<R>, Option<u64>), String>
+    pub fn build_decoder<R>(
+        reader: R,
+        byte_len: Option<u64>,
+    ) -> Result<(Decoder<R>, Option<u64>), String>
     where
         R: std::io::Read + std::io::Seek + Send + Sync + 'static,
     {
@@ -163,7 +162,7 @@ impl PlaybackManager {
         }
         // 速率设置要重新下发：rodio 的 speed 是挂在「被 append 的音源」上的
         self.sink.set_speed(self.get_speed());
-        self.sink.append(LevelSource::new(decoder, self.level.clone()));
+        self.sink.append(decoder);
         self.sink.play();
         self.active.store(true, Ordering::Relaxed);
         Ok(())
@@ -174,7 +173,7 @@ impl PlaybackManager {
         &self,
         decoder: Decoder<R>,
     ) -> Result<(), String> {
-        self.sink.append(LevelSource::new(decoder, self.level.clone()));
+        self.sink.append(decoder);
         Ok(())
     }
 
@@ -203,7 +202,6 @@ impl PlaybackManager {
         }
         info!("Playback stopped");
         self.sink.stop();
-        self.level.store(0f32.to_bits(), Ordering::Relaxed);
         if let Ok(mut tracker) = self.position.lock() {
             tracker.reset();
         }
@@ -252,21 +250,6 @@ impl PlaybackManager {
         self.active.load(Ordering::Relaxed)
     }
 
-    /// 当前音频能量（RMS，0.0–1.0）。未播放或静音段为 0。
-    /// 前端在沉浸式页以约 30Hz 采样，驱动封面「随音乐呼吸」。
-    pub fn get_level(&self) -> f32 {
-        f32::from_bits(self.level.load(Ordering::Relaxed))
-    }
-
-    /// 能量原子量的共享句柄。
-    ///
-    /// 给 `PlaybackState` 存一份，让 `playback_get_level` 命令**不经过 manager 锁**
-    /// 直接读：这个命令是 30Hz 高频采样，一旦和播放/解码抢同一把锁，
-    /// 某条命令卡住时采样会在 IPC 通道里无限堆积（实测 186 个在飞、整条通道堵死）。
-    pub fn level_handle(&self) -> Arc<AtomicU32> {
-        self.level.clone()
-    }
-
     /// [MA0 Spike] 播放正弦测试音，验证移动端音频输出链路。
     /// 刻意与正式播放共用 PlaybackManager 的初始化与 Sink 路径，
     /// 使 Spike 的结论（能否出声、采样率是否正确）可直接迁移到正式链路。
@@ -285,85 +268,6 @@ impl PlaybackManager {
         self.sink.play();
         info!("Playing debug tone: {}Hz for {}s", freq, seconds);
         Ok(Some(seconds as u64 * 1000))
-    }
-}
-
-/// 在解码器外层包一层，逐窗统计 RMS 能量并写入共享原子量（音频可视化用）。
-///
-/// 设计约束：
-/// - 只在音频线程做「乘加 + 每窗一次原子写」，不加锁、不分配，对播放链路零感知开销；
-/// - **必须转发 `try_seek`**：rodio 的 `Sink::try_seek` 会调用当前 Source 的 `try_seek`，
-///   不转发就会静默退化为 `NotSupported`，导致进度条拖拽失效；
-/// - 声道 / 采样率 / 时长 / 帧长度全部原样透传，保持 Sink 行为不变。
-struct LevelSource<S> {
-    inner: S,
-    level: Arc<AtomicU32>,
-    acc: f32,
-    count: u32,
-}
-
-/// 统计窗口 1024 个样本：48kHz 下约 21ms，足够驱动 30fps 视觉反馈，
-/// 同时把原子写频率压到约 47 次/秒。
-const LEVEL_WINDOW: u32 = 1024;
-
-impl<S> LevelSource<S> {
-    fn new(inner: S, level: Arc<AtomicU32>) -> Self {
-        Self {
-            inner,
-            level,
-            acc: 0.0,
-            count: 0,
-        }
-    }
-}
-
-impl<S> Iterator for LevelSource<S>
-where
-    S: Iterator<Item = f32>,
-{
-    type Item = f32;
-
-    fn next(&mut self) -> Option<f32> {
-        let sample = self.inner.next()?;
-        self.acc += sample * sample;
-        self.count += 1;
-
-        if self.count >= LEVEL_WINDOW {
-            let rms = (self.acc / self.count as f32).sqrt();
-            self.level
-                .store(rms.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
-            self.acc = 0.0;
-            self.count = 0;
-        }
-
-        Some(sample)
-    }
-}
-
-impl<S> rodio::Source for LevelSource<S>
-where
-    S: rodio::Source<Item = f32>,
-{
-    // rodio 0.21 把 current_frame_len 改名成 current_span_len（语义不变）
-    fn current_span_len(&self) -> Option<usize> {
-        self.inner.current_span_len()
-    }
-
-    fn channels(&self) -> rodio::ChannelCount {
-        self.inner.channels()
-    }
-
-    fn sample_rate(&self) -> rodio::SampleRate {
-        self.inner.sample_rate()
-    }
-
-    fn total_duration(&self) -> Option<std::time::Duration> {
-        self.inner.total_duration()
-    }
-
-    /// 关键：转发 seek，否则进度条拖拽会失效（见类型注释）。
-    fn try_seek(&mut self, pos: std::time::Duration) -> Result<(), rodio::source::SeekError> {
-        self.inner.try_seek(pos)
     }
 }
 

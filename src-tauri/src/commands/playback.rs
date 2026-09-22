@@ -8,19 +8,14 @@ use crate::services::webdav::WebdavClient;
 use rusqlite::OptionalExtension;
 use std::fs::File;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Mutex;
 use tauri::{Manager, State};
 
 pub struct PlaybackState {
     pub manager: Mutex<PlaybackManager>,
-    /// 音频能量的原子量（与 manager 内部共享同一份）。
-    /// `playback_get_level` 是 30Hz 高频采样，必须**绕过 manager 锁**直接读，
-    /// 否则任何一条慢命令（远端流解码等）都会把采样全部堵在锁上。
-    pub level: Arc<AtomicU32>,
     /// 播放串行锁：把「解析 → 解码 → 换源」整段串行化。
     /// 解码（尤其远端流）可能耗时数十秒，且不能和 manager 锁互相等待 ——
-    /// 这把锁**只有播放/入队会拿**，seek / 进度 / 能量采样都不碰它，
+    /// 这把锁**只有播放/入队会拿**，seek / 进度都不碰它，
     /// 所以切歌再慢也不会拖住进度条。
     pub play_lock: Mutex<()>,
 }
@@ -358,8 +353,8 @@ pub fn playback_play(
         dur
     } else if let Some(path) = path_buf {
         // 本地文件或缓存命中
-        let file =
-            File::open(&path).map_err(|e| AppError::Internal(format!("Failed to open file: {}", e)))?;
+        let file = File::open(&path)
+            .map_err(|e| AppError::Internal(format!("Failed to open file: {}", e)))?;
         let byte_len = std::fs::metadata(&path).ok().map(|m| m.len());
         let (decoder, dur) = PlaybackManager::build_decoder(file, byte_len)?;
 
@@ -437,8 +432,8 @@ pub fn playback_enqueue_next(
         }
     } else if let Some(path) = path_buf {
         // 本地文件或缓存命中 → 标准 gapless
-        let file =
-            File::open(&path).map_err(|e| AppError::Internal(format!("Failed to open file: {}", e)))?;
+        let file = File::open(&path)
+            .map_err(|e| AppError::Internal(format!("Failed to open file: {}", e)))?;
         let byte_len = std::fs::metadata(&path).ok().map(|m| m.len());
         let (decoder, _dur) = PlaybackManager::build_decoder(file, byte_len)?;
 
@@ -581,22 +576,6 @@ pub fn playback_get_pos(playback_state: State<'_, PlaybackState>) -> Result<u64,
         .lock()
         .map_err(|e| AppError::Internal(e.to_string()))?;
     Ok(manager.get_pos())
-}
-
-/// 读取当前音频能量（RMS，0.0–1.0），用于沉浸式播放页的封面「随音乐呼吸」。
-///
-/// 仅在沉浸式页可见且正在播放时由前端以约 30Hz 采样，非播放态不采样。
-///
-/// 两个刻意的设计（缺一不可，缺了就会出现 186 个采样堆在通道里的事故）：
-/// 1. `#[tauri::command(async)]`：不占主线程。同步命令在主线程串行执行，
-///    任何一条慢命令都会让排在后面的采样全部堆积。
-/// 2. **不经过 manager 锁**（直接读原子量）：远端流解码等操作会长时间持有
-///    manager 锁，采样一旦去抢锁就会逐个卡住、把整条 IPC 通道堵死。
-#[tauri::command(async)]
-pub fn playback_get_level(playback_state: State<'_, PlaybackState>) -> Result<f32, AppError> {
-    Ok(f32::from_bits(
-        playback_state.level.load(Ordering::Relaxed),
-    ))
 }
 
 #[tauri::command(async)]

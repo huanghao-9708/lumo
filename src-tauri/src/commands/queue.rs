@@ -397,6 +397,27 @@ pub fn playback_advance(
 }
 
 #[tauri::command(async)]
+pub fn playback_play_index(
+    app: AppHandle,
+    queue_state: State<'_, QueueState>,
+    playback_state: State<'_, PlaybackState>,
+    index: usize,
+) -> Result<(), AppError> {
+    let target_index = {
+        let mut q = queue_state
+            .queue
+            .lock()
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        q.select_index(index)
+    };
+
+    if let Some(idx) = target_index {
+        play_item(&app, &queue_state, &playback_state, idx, false)?;
+    }
+    Ok(())
+}
+
+#[tauri::command(async)]
 pub fn playback_set_mode(
     queue_state: State<'_, QueueState>,
     mode: PlayMode,

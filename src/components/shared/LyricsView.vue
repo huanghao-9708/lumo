@@ -180,7 +180,7 @@ const lineClass = computed(() =>
 );
 const emptyClass = computed(() =>
   isImmersive.value
-    ? 'text-[15px] text-white/50 italic'
+    ? 'text-[15px] text-white/50 italic text-center w-full py-12'
     : 'text-[13px] text-text-muted/70 italic',
 );
 

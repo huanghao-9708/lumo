@@ -24,7 +24,7 @@ import {
   type ScanCompleteEvent
 } from '../api/scanner';
 import {
-  playbackSetQueue, playbackQueueState, playbackAdvance, playbackSetMode,
+  playbackSetQueue, playbackPlayIndex, playbackQueueState, playbackAdvance, playbackSetMode,
   type QueueItemDTO, type BackendPlayMode
 } from '../api/queue';
 import { libraryGetPlayability, type PlayabilityState } from '../api/library';
@@ -2047,13 +2047,27 @@ const albums = shallowRef<Album[]>([]);
     });
   }
 
+  function isSameTrackList(a: Track[], b: Track[]): boolean {
+    if (a === b) return true;
+    if (a.length !== b.length) return false;
+    if (a.length === 0) return true;
+    if (a[0].id !== b[0].id || a[a.length - 1].id !== b[b.length - 1].id) return false;
+    for (let i = 1; i < a.length - 1; i++) {
+      if (a[i].id !== b[i].id) return false;
+    }
+    return true;
+  }
+
   async function playQueue(newQueue: Track[], index: number, _skipHistoryPush = false) {
     const clickedTrack = newQueue[index];
     // 离线/不可播守卫：本地文件丢失或离线未缓存的曲目直接提示，不发请求
     if (guardPlayback(clickedTrack)) {
       return;
     }
-    queue.value = [...newQueue];
+    const isSame = isSameTrackList(queue.value, newQueue);
+    if (!isSame) {
+      queue.value = [...newQueue];
+    }
     currentIndex.value = index;
     const track = queue.value[index];
     if (track) {
@@ -2063,25 +2077,30 @@ const albums = shallowRef<Album[]>([]);
       isBuffering.value = true;
       hasLoadedCurrentFile.value = true;
 
-      const items: QueueItemDTO[] = newQueue.map(t => ({
-        trackId: t.id,
-        mediaFileId: t.primary_file_id || 0,
-        title: t.title,
-        artist: t.artist,
-        album: t.album,
-        artworkId: t.cover_artwork_id || null,
-        durationMs: t.durationSec ? t.durationSec * 1000 : null,
-      }));
-
       try {
-        await playbackSetQueue(items, index, toBackendPlayMode(playMode.value));
-        persistPlayQueueIfNeeded();
+        if (isSame) {
+          // 当前播放队列与传入列表完全一致：无需重新全量序列化和设置队列，直接按索引播放
+          await playbackPlayIndex(index);
+        } else {
+          const items: QueueItemDTO[] = newQueue.map(t => ({
+            trackId: t.id,
+            mediaFileId: t.primary_file_id || 0,
+            title: t.title,
+            artist: t.artist,
+            album: t.album,
+            artworkId: t.cover_artwork_id || null,
+            durationMs: t.durationSec ? t.durationSec * 1000 : null,
+          }));
+
+          await playbackSetQueue(items, index, toBackendPlayMode(playMode.value));
+          persistPlayQueueIfNeeded();
+        }
         updateMediaSessionMetadata(track);
         if ('mediaSession' in navigator) {
           navigator.mediaSession.playbackState = 'playing';
         }
       } catch (e) {
-        console.error("Set queue failed:", e);
+        console.error("Play queue failed:", e);
         isPlaying.value = false;
         isBuffering.value = false;
         if ('mediaSession' in navigator) {
