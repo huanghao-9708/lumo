@@ -525,6 +525,18 @@ export const usePlayerStore = defineStore("player", () => {
    *  显式导航进入某位艺人时重置；历史前进/后退（返回详情页）时保留原分栏。 */
   let resetArtistSubTabOnLoad = false;
 
+  /**
+   * 「本次 tab 变化来自历史前进/后退」标志。
+   *
+   * 视图在响应 activeLibraryTab 变化时会重新拉取该 tab 的数据（loadForCurrentTab），
+   * 而返回上一页时数据其实还在内存里：重拉会把分页重置到第 1 页，已加载的滚动高度消失，
+   * 滚动位置记忆也就无处可恢复。所以返回时视图应复用内存数据、跳过重拉。
+   *
+   * 消费方：MainContent / MobileContentView 的 tab watcher（读到后自行清除）。
+   * 清除方：任何显式导航（navigateToTab / Artist / Album、侧边栏选择）。
+   */
+  const isHistoryRestore = ref(false);
+
   // 页面导航历史栈
   interface HistoryState {
     tab: string;
@@ -539,15 +551,16 @@ export const usePlayerStore = defineStore("player", () => {
 
   // 监听导航状态变化以记录历史
   watch([activeLibraryTab, activeAlbumId, activeArtistId, activePlaylistId], (_newVals, oldVals) => {
-    if (isGoingBack.value) {
-      isGoingBack.value = false;
-      return;
-    }
-    if (isGoingForward.value) {
-      isGoingForward.value = false;
-      return;
-    }
     const [oldTab, oldAlbumId, oldArtistId, oldPlaylistId] = oldVals;
+    // 历史前进/后退：不改写历史栈
+    if (isGoingBack.value || isGoingForward.value) {
+      if (isGoingBack.value) isGoingBack.value = false;
+      else isGoingForward.value = false;
+      // 但若这次还原没有改变 tab（详情 → 详情），视图的 tab watcher 不会触发、
+      // 也就没人消费 isHistoryRestore；这里清掉，避免残留到下一次真实的 tab 切换上（那会漏加载）。
+      if (oldTab === activeLibraryTab.value) isHistoryRestore.value = false;
+      return;
+    }
     if (oldTab) {
       // 不记录指向已删除歌单的历史：删歌单时 activePlaylistId 置空会触发一次记录，
       // 若不拦，后退会回到一个不存在的歌单详情页。
@@ -577,6 +590,7 @@ export const usePlayerStore = defineStore("player", () => {
         playlistId: activePlaylistId.value
       });
       isGoingBack.value = true;
+      isHistoryRestore.value = true;
       const state = historyStack.value.pop()!;
       activeLibraryTab.value = state.tab;
       activeAlbumId.value = state.albumId;
@@ -594,6 +608,7 @@ export const usePlayerStore = defineStore("player", () => {
         playlistId: activePlaylistId.value
       });
       isGoingForward.value = true;
+      isHistoryRestore.value = true;
       const state = forwardStack.value.pop()!;
       activeLibraryTab.value = state.tab;
       activeAlbumId.value = state.albumId;
@@ -607,6 +622,7 @@ export const usePlayerStore = defineStore("player", () => {
 
   /** 切换到某个一级页面（清空详情选中态） */
   function navigateToTab(tab: string) {
+    isHistoryRestore.value = false;
     activeAlbumId.value = null;
     activeArtistId.value = null;
     activePlaylistId.value = null;
@@ -621,6 +637,7 @@ export const usePlayerStore = defineStore("player", () => {
   /** 进艺人详情页（id 与 tab 同 tick 修改，只记一条历史） */
   function navigateToArtist(artistId: number | null | undefined) {
     if (!artistId) return;
+    isHistoryRestore.value = false;
     // 显式换艺人：详情页子标签回到「全部歌曲」；返回同一艺人（goBack）时保留原分栏
     if (activeArtistId.value !== artistId) resetArtistSubTabOnLoad = true;
     activeAlbumId.value = null;
@@ -632,6 +649,7 @@ export const usePlayerStore = defineStore("player", () => {
   /** 进专辑详情页（id 与 tab 同 tick 修改，只记一条历史） */
   function navigateToAlbum(albumId: number | null | undefined) {
     if (!albumId) return;
+    isHistoryRestore.value = false;
     activeArtistId.value = null;
     activePlaylistId.value = null;
     activeAlbumId.value = albumId;
@@ -1310,6 +1328,16 @@ const albums = shallowRef<Album[]>([]);
       currentPlaylistDetailsData.value = null;
     }
   });
+
+  /** 打开某个歌单详情（显式导航：清掉其它详情选中态，并取消「历史还原」标志） */
+  async function openPlaylist(playlistId: number) {
+    isHistoryRestore.value = false;
+    activeAlbumId.value = null;
+    activeArtistId.value = null;
+    activePlaylistId.value = playlistId;
+    activeLibraryTab.value = '播放列表';
+    await refreshCurrentPlaylistTracks(playlistId);
+  }
 
   watch(activeAlbumId, async (newId) => {
     if (newId) {
@@ -2335,6 +2363,9 @@ const albums = shallowRef<Album[]>([]);
     goHome,
     navigateToArtist,
     navigateToAlbum,
+    // 历史还原标志：视图读到后自行清除（详见 store 内声明处注释）
+    isHistoryRestore,
+    openPlaylist,
     // 首页数据
     stats,
     isLoadingStats,

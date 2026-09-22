@@ -5,10 +5,14 @@ import {
 } from 'lucide-vue-next';
 import { usePlayerStore } from '../../stores/player';
 import { useBatchSelect } from '../../composables/useBatchSelect';
+import { useScrollRestore } from '../../composables/useScrollRestore';
 import BatchActionBar from '../shared/BatchActionBar.vue';
 import FooterStatus from '../shared/FooterStatus.vue';
 
 const playerStore = usePlayerStore();
+
+/** 滚动位置记忆：每种智能歌单各记一份 */
+const scrollEl = useScrollRestore(() => `smart-playlist:${playerStore.activeSmartPlaylistKind ?? ''}`);
 
 /* ============ 批量选择（本视图一份实例） ============ */
 const batch = useBatchSelect();
@@ -47,7 +51,7 @@ function toggleFav(trackId: number, e: Event) {
 
 <template>
   <div class="flex-1 flex flex-col overflow-hidden">
-    <div class="flex-1 overflow-y-auto px-8">
+    <div ref="scrollEl" class="flex-1 overflow-y-auto px-8">
       <!-- 头部标识 -->
       <div class="py-6 flex items-center gap-4">
         <div class="w-16 h-16 rounded-xl bg-gradient-to-br from-brand-orange to-red-500 flex items-center justify-center shadow-lg">

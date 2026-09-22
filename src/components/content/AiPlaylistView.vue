@@ -7,11 +7,15 @@ import { useAiStore } from '../../stores/ai';
 import { usePlayerStore } from '../../stores/player';
 import { useUiStore } from '../../stores/ui';
 import { libraryGetTracks } from '../../api/library';
+import { useScrollRestore } from '../../composables/useScrollRestore';
 import type { Track } from '../../stores/player';
 
 const aiStore = useAiStore();
 const playerStore = usePlayerStore();
 const uiStore = useUiStore();
+
+/** 滚动位置记忆：切走再回到 AI 电台时还原 */
+const scrollEl = useScrollRestore(() => 'ai-playlist');
 
 onMounted(() => {
   aiStore.fetchSettings();
@@ -124,7 +128,7 @@ function playAll() {
       <p class="text-[12px] text-text-muted font-mono">从你的曲库中生成一份应景歌单 · 请求只包含标题与艺人</p>
     </div>
 
-    <div class="flex-1 overflow-y-auto px-8 pb-8">
+    <div ref="scrollEl" class="flex-1 overflow-y-auto px-8 pb-8">
 
       <!-- ===== 未开启引导 ===== -->
       <div

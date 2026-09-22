@@ -181,15 +181,14 @@ function playTrack(index: number, dto: TrackDTO) {
 }
 
 function selectAlbum(album: AlbumDTO) {
-  playerStore.activeAlbumId = album.id;
-  playerStore.activeLibraryTab = '专辑';
+  // 统一走 store 导航函数（清掉其它详情选中态、取消历史还原标志、只记一条历史）
   playerStore.globalSearchQuery = '';
+  playerStore.navigateToAlbum(album.id);
 }
 
 function selectArtist(artist: ArtistDTO) {
-  playerStore.activeArtistId = artist.id;
-  playerStore.activeLibraryTab = '艺术家';
   playerStore.globalSearchQuery = '';
+  playerStore.navigateToArtist(artist.id);
 }
 
 

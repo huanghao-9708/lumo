@@ -5,6 +5,7 @@ import {
 } from 'lucide-vue-next';
 import { usePlayerStore } from '../../stores/player';
 import { useBatchSelect } from '../../composables/useBatchSelect';
+import { useScrollRestore } from '../../composables/useScrollRestore';
 import BatchActionBar from '../shared/BatchActionBar.vue';
 import FooterStatus from '../shared/FooterStatus.vue';
 
@@ -14,6 +15,9 @@ const props = defineProps<{
 }>();
 
 const playerStore = usePlayerStore();
+
+/** 滚动位置记忆：进详情返回后还原（key 带过滤词，过滤后不串位） */
+const scrollEl = useScrollRestore(() => `favorites:${props.filterQuery ?? ''}`);
 
 /* ============ 批量选择（本视图一份实例；hide-favorite-action 避免"把喜欢的加进喜欢"） ============ */
 const batch = useBatchSelect();
@@ -54,7 +58,7 @@ function toggleFav(trackId: number, e: Event) {
 
 <template>
   <div class="flex-1 flex flex-col overflow-hidden">
-    <div class="flex-1 overflow-y-auto px-8">
+    <div ref="scrollEl" class="flex-1 overflow-y-auto px-8">
       <!-- 表头 -->
       <div class="flex items-center text-[10px] text-text-muted uppercase tracking-wider py-2 border-b border-border-color sticky top-0 bg-bg-content z-10">
         <div class="w-10 text-center shrink-0">#</div>

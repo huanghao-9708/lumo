@@ -41,18 +41,12 @@ function isActive(key: string): boolean {
 }
 
 function selectNav(key: string) {
-  playerStore.activeAlbumId = null;
-  playerStore.activeArtistId = null;
-  playerStore.activePlaylistId = null;
-  playerStore.activeLibraryTab = key;
+  // 统一走 store 的导航函数：清详情选中态 + 取消「历史还原」标志，只记一条历史
+  playerStore.navigateToTab(key);
 }
 
 function selectPlaylist(id: number) {
-  playerStore.activeAlbumId = null;
-  playerStore.activeArtistId = null;
-  playerStore.activeLibraryTab = '播放列表';
-  playerStore.activePlaylistId = id;
-  playerStore.refreshCurrentPlaylistTracks(id);
+  playerStore.openPlaylist(id);
 }
 
 function selectSmartPlaylist(kind: string) {

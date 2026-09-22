@@ -13,6 +13,7 @@ import WebdavFolderPicker from '../shared/WebdavFolderPicker.vue';
 import { APP_NAME, APP_VERSION_LABEL, APP_DESCRIPTION } from '../../config/appInfo';
 import { useAiStore } from '../../stores/ai';
 import { useUiStore as useUiStore2 } from '../../stores/ui';
+import { useScrollRestore } from '../../composables/useScrollRestore';
 
 const playerStore = usePlayerStore();
 const uiStore = useUiStore();
@@ -21,6 +22,10 @@ const syncStore = useSyncStore();
 // ===== 左栏分类导航 =====
 type SectionId = 'appearance' | 'privacy' | 'ai' | 'sources' | 'sync' | 'storage' | 'about';
 const activeSection = ref<SectionId>('appearance');
+
+/** 滚动位置记忆：切走再回到设置页时还原（每个分区各记一份） */
+const scrollEl = useScrollRestore(() => `settings:${activeSection.value}`);
+
 const navItems: { id: SectionId; label: string; icon: Component }[] = [
   { id: 'appearance', label: '外观', icon: Palette },
   { id: 'privacy', label: '隐私', icon: ShieldCheck },
@@ -162,7 +167,7 @@ async function clearCache() {
     </nav>
 
     <!-- ============ 右栏：当前分区内容 ============ -->
-    <div class="flex-1 min-w-0 overflow-y-auto bg-bg-content px-8 py-8">
+    <div ref="scrollEl" class="flex-1 min-w-0 overflow-y-auto bg-bg-content px-8 py-8">
       <div class="max-w-[560px]">
 
         <!-- ---- 外观 ---- -->

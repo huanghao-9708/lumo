@@ -2,6 +2,7 @@
 import { computed } from 'vue';
 import { Play, Shuffle, Loader2, Heart, User } from 'lucide-vue-next';
 import { usePlayerStore } from '../../stores/player';
+import { useScrollRestore } from '../../composables/useScrollRestore';
 import MobileSongRow from './MobileSongRow.vue';
 
 /**
@@ -22,6 +23,9 @@ const detail = computed(() => playerStore.currentArtistDetails);
 const tracks = computed(() => detail.value?.tracks ?? []);
 
 const isLoading = computed(() => !detail.value);
+
+/** 滚动位置记忆：从专辑详情返回本页时还原 */
+const listScrollEl = useScrollRestore(() => `m-artist-detail:${playerStore.activeArtistId ?? 0}`);
 
 const isArtistFav = computed(() =>
   playerStore.favoriteArtists.some(a => a.id === playerStore.activeArtistId)
@@ -67,7 +71,7 @@ function toggleFav(trackId: number) {
     </div>
 
     <template v-else-if="detail">
-      <div class="flex-1 overflow-y-auto">
+      <div ref="listScrollEl" class="flex-1 overflow-y-auto">
         <!-- 头像 + 信息 -->
         <div class="flex flex-col items-center px-6 pt-6 pb-2">
           <div class="w-[120px] h-[120px] rounded-full overflow-hidden bg-gradient-to-br from-warm-400 to-warm-600 flex items-center justify-center mb-4 flex-shrink-0">

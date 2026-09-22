@@ -7,6 +7,7 @@ import { usePlayerStore } from '../../stores/player';
 import type { DirectoryNodeDTO } from '../../api/types';
 import { libraryGetFolderChildren } from '../../api/library';
 import { useBatchSelect } from '../../composables/useBatchSelect';
+import { useScrollRestore } from '../../composables/useScrollRestore';
 import BatchActionBar from '../shared/BatchActionBar.vue';
 
 const playerStore = usePlayerStore();
@@ -20,11 +21,35 @@ function onToggleSelectAll() {
   else batch.selectAll(playerStore.folderTracks);
 }
 
-const selectedSourceId = ref<number | null>(null);
-const loadedChildren = ref<Record<string, DirectoryNodeDTO[]>>({});
-const expandedPaths = ref<Record<string, boolean>>({});
+/**
+ * 文件夹浏览状态（当前数据源 / 已展开目录 / 已加载的子节点）挂在模块作用域：
+ * 该视图在切到详情页时会被 v-if 销毁，组件局部 ref 会连同「展开的目录树」一起丢失，
+ * 返回时树是空的，滚动位置也就无从恢复。曲目列表与选中路径本来就在 store 里，不受影响。
+ */
+const browseState = {
+  sourceId: null as number | null,
+  loadedChildren: {} as Record<string, DirectoryNodeDTO[]>,
+  expandedPaths: {} as Record<string, boolean>,
+};
+
+const selectedSourceId = ref<number | null>(browseState.sourceId);
+const loadedChildren = ref<Record<string, DirectoryNodeDTO[]>>(browseState.loadedChildren);
+const expandedPaths = ref<Record<string, boolean>>(browseState.expandedPaths);
 const loadingPaths = ref<Record<string, boolean>>({});
 const pickerDirPath = ref<string | null>(null);
+
+// 任一变更即写回模块态，供下次挂载复用
+watch([selectedSourceId, loadedChildren, expandedPaths], () => {
+  browseState.sourceId = selectedSourceId.value;
+  browseState.loadedChildren = loadedChildren.value;
+  browseState.expandedPaths = expandedPaths.value;
+});
+
+/** 滚动位置记忆：目录树 / 曲目列表各记一份（曲目列表按目录分别记） */
+const treeScrollEl = useScrollRestore(() => `folder-tree:${selectedSourceId.value ?? 0}`);
+const tracksScrollEl = useScrollRestore(
+  () => `folder-tracks:${selectedSourceId.value ?? 0}:${playerStore.selectedTreePath}`
+);
 
 const sources = computed(() => playerStore.localSources);
 
@@ -141,8 +166,9 @@ watch(sources, (list) => {
   }
 }, { immediate: true });
 
-watch(selectedSourceId, (id) => {
-  if (id != null) {
+watch(selectedSourceId, (id, oldId) => {
+  // 只有「真的换了数据源」才重置树与曲目；挂载时从模块态还原同一个源不动它
+  if (id != null && id !== oldId) {
     loadedChildren.value = {};
     expandedPaths.value = {};
     playerStore.folderTracks = [];
@@ -177,7 +203,7 @@ const currentBreadcrumb = computed(() => {
         </select>
       </div>
 
-      <div class="flex-1 overflow-y-auto px-2 pb-4 space-y-[2px]">
+      <div ref="treeScrollEl" class="flex-1 overflow-y-auto px-2 pb-4 space-y-[2px]">
         <div v-if="sources.length === 0" class="flex flex-col items-center justify-center py-16 text-text-muted">
           <p class="text-[12px]">暂无数据源</p>
         </div>
@@ -252,6 +278,7 @@ const currentBreadcrumb = computed(() => {
 
       <!-- Track rows -->
       <div
+        ref="tracksScrollEl"
         class="flex-1 overflow-y-auto px-6"
         @scroll="(e) => {
           const el = e.target as HTMLElement;

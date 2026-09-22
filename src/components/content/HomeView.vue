@@ -5,9 +5,13 @@ import {
   ChevronRight, Loader2, Music, Sparkles,
 } from 'lucide-vue-next';
 import { usePlayerStore, type RankedTrack } from '../../stores/player';
+import { useScrollRestore } from '../../composables/useScrollRestore';
 import { formatRelativeTime } from '../../utils/datetime';
 
 const playerStore = usePlayerStore();
+
+/** 滚动位置记忆：从榜单点进详情再返回时还原（首页数据本身由 store 持有） */
+const scrollEl = useScrollRestore(() => 'home');
 
 const stats = computed(() => playerStore.stats);
 const insights = computed(() => playerStore.insights);
@@ -125,7 +129,7 @@ const favoriteList = computed(() => insights.value?.favoriteTracks ?? []);
 
 <template>
   <div class="flex-1 flex flex-col overflow-hidden">
-    <div class="flex-1 overflow-y-auto px-4 md:px-8 py-4 md:py-6">
+    <div ref="scrollEl" class="flex-1 overflow-y-auto px-4 md:px-8 py-4 md:py-6">
 
       <!-- Header -->
       <div class="mb-4 md:mb-6">

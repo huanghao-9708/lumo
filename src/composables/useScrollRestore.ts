@@ -21,8 +21,8 @@ import { ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
 /** 模块级缓存：视图 key → scrollTop */
 const positions = new Map<string, number>();
 
-/** 单次恢复最多等待的帧数（约 0.5s @60fps） */
-const MAX_TRIES = 30;
+/** 单次恢复最多等待的帧数（约 1.5s @60fps；详情页数据异步到位耗时更长也不至于放弃） */
+const MAX_TRIES = 90;
 
 /** 清除指定 key（或全部）的记忆位置 */
 export function resetScrollPosition(key?: string) {

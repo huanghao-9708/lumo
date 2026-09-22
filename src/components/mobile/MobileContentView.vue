@@ -12,6 +12,7 @@ import MobileArtistDetail from './MobileArtistDetail.vue';
 import HomeView from '../content/HomeView.vue';
 import ActionSheet from './ActionSheet.vue';
 import type { ActionItem } from './ActionSheet.vue';
+import { useScrollRestore } from '../../composables/useScrollRestore';
 
 /**
  * 移动端内容区。
@@ -102,7 +103,24 @@ function loadForCurrentTab() {
   else playerStore.fetchTracks(true);
 }
 
-watch(() => playerStore.activeLibraryTab, loadForCurrentTab);
+watch(() => playerStore.activeLibraryTab, () => {
+  // 历史前进/后退回到本页：数据仍在内存，重拉会把分页与滚动高度清掉，跳过这次加载
+  if (playerStore.isHistoryRestore) {
+    playerStore.isHistoryRestore = false;
+    return;
+  }
+  loadForCurrentTab();
+});
+
+/* ============ 各列表的滚动位置记忆（进详情返回后还原） ============ */
+const tracksScrollEl = useScrollRestore(() => 'm-tracks');
+const artistGridScrollEl = useScrollRestore(() => 'm-artist-grid');
+const playlistListScrollEl = useScrollRestore(() => 'm-playlist-list');
+const playlistDetailScrollEl = useScrollRestore(() => `m-playlist-detail:${playerStore.activePlaylistId ?? 0}`);
+const folderScrollEl = useScrollRestore(() => 'm-folder');
+const favoriteAlbumsScrollEl = useScrollRestore(() => 'm-favorite-albums');
+const favoriteArtistsScrollEl = useScrollRestore(() => 'm-favorite-artists');
+const albumDetailScrollEl = useScrollRestore(() => `m-album-detail:${playerStore.activeAlbumId ?? 0}`);
 
 onMounted(() => {
   if (playerStore.tracks.length === 0 && playerStore.albums.length === 0) {
@@ -170,7 +188,7 @@ function onSheetClose() {
 
 /* ============ 专辑网格：无限滚动 ============ */
 
-const albumScrollContainer = ref<HTMLElement | null>(null);
+const albumScrollContainer = useScrollRestore(() => 'm-album-grid');
 const albumSentinel = ref<HTMLElement | null>(null);
 let albumObserver: IntersectionObserver | null = null;
 
@@ -270,14 +288,14 @@ const albumCoverSrc = useArtworkSrc(() => album.value?.cover_artwork_id ?? null)
 /* ============ 艺术家网格 ============ */
 
 function selectArtist(artistId: number) {
-  playerStore.activeArtistId = artistId;
+  // 统一走 store 导航函数（取消历史还原标志 + 只记一条历史）
+  playerStore.navigateToArtist(artistId);
 }
 
 /* ============ 歌单操作 ============ */
 
 function selectPlaylist(id: number) {
-  playerStore.activePlaylistId = id;
-  playerStore.refreshCurrentPlaylistTracks(id);
+  playerStore.openPlaylist(id);
 }
 
 /* ============ 歌单详情 ============ */
@@ -316,7 +334,7 @@ function onAlbumTrackLongPress(trackId: number) {
       </div>
 
       <template v-else-if="album">
-        <div class="flex-1 overflow-y-auto">
+        <div ref="albumDetailScrollEl" class="flex-1 overflow-y-auto">
           <div class="flex flex-col items-center px-6 pt-6 pb-2">
             <div class="relative w-[60%] max-w-[260px] aspect-square rounded-[10px] overflow-hidden bg-bg-hover mb-4">
               <img v-if="albumCoverSrc" :src="albumCoverSrc" class="w-full h-full object-cover" alt="cover" />
@@ -393,7 +411,7 @@ function onAlbumTrackLongPress(trackId: number) {
     </div>
 
     <!-- ===== 歌曲列表 ===== -->
-    <div v-else-if="isTracksView" class="flex-1 overflow-y-auto">
+    <div v-else-if="isTracksView" ref="tracksScrollEl" class="flex-1 overflow-y-auto">
       <div v-if="playerStore.isLoadingTracks && playerStore.tracks.length === 0" class="flex flex-col items-center justify-center py-20 gap-3 text-text-muted">
         <Loader2 class="w-5 h-5 animate-spin text-brand-orange" aria-hidden="true" />
         <span class="text-[12px]">加载中…</span>
@@ -434,7 +452,7 @@ function onAlbumTrackLongPress(trackId: number) {
     </div>
 
     <!-- ===== 艺术家网格 ===== -->
-    <div v-else-if="isArtistGridView" class="flex-1 overflow-y-auto px-4 pt-3">
+    <div v-else-if="isArtistGridView" ref="artistGridScrollEl" class="flex-1 overflow-y-auto px-4 pt-3">
       <div v-if="playerStore.artists.length > 0" class="grid gap-4 pb-4" style="grid-template-columns: repeat(2, 1fr);">
         <div v-for="artist in playerStore.artists" :key="artist.id" class="cursor-pointer min-w-0" @click="selectArtist(artist.id)">
           <div class="w-full aspect-square rounded-[10px] overflow-hidden bg-bg-hover mb-2 flex items-center justify-center">
@@ -455,7 +473,7 @@ function onAlbumTrackLongPress(trackId: number) {
     <MobileArtistDetail v-else-if="isArtistDetailView" />
 
     <!-- ===== 歌单列表 ===== -->
-    <div v-else-if="isPlaylistListView" class="flex-1 overflow-y-auto px-4 pt-3">
+    <div v-else-if="isPlaylistListView" ref="playlistListScrollEl" class="flex-1 overflow-y-auto px-4 pt-3">
       <div v-if="playerStore.playlists.length === 0" class="flex flex-col items-center justify-center py-20 gap-3 text-text-muted">
         <ListMusic class="w-8 h-8 text-text-disabled" aria-hidden="true" />
         <span class="text-[13px]">暂无歌单</span>
@@ -494,7 +512,7 @@ function onAlbumTrackLongPress(trackId: number) {
           </p>
         </div>
         <div class="h-px bg-border-color mx-4 mt-2"></div>
-        <div class="flex-1 overflow-y-auto py-1">
+        <div ref="playlistDetailScrollEl" class="flex-1 overflow-y-auto py-1">
           <MobileSongRow
             v-for="(track, index) in playlistTracks"
             :key="track.id"
@@ -511,7 +529,7 @@ function onAlbumTrackLongPress(trackId: number) {
     </div>
 
     <!-- ===== 文件夹视图（简化） ===== -->
-    <div v-else-if="isFolderView" class="flex-1 overflow-y-auto px-4 pt-3">
+    <div v-else-if="isFolderView" ref="folderScrollEl" class="flex-1 overflow-y-auto px-4 pt-3">
       <div v-if="playerStore.localSources.length === 0" class="flex flex-col items-center justify-center py-20 gap-3 text-text-muted">
         <Folder class="w-8 h-8 text-text-disabled" aria-hidden="true" />
         <span class="text-[13px]">暂无文件夹数据源</span>
@@ -533,7 +551,7 @@ function onAlbumTrackLongPress(trackId: number) {
     </div>
 
     <!-- ===== 收藏的专辑 ===== -->
-    <div v-else-if="isFavoriteAlbumsView" class="flex-1 overflow-y-auto px-4 pt-3">
+    <div v-else-if="isFavoriteAlbumsView" ref="favoriteAlbumsScrollEl" class="flex-1 overflow-y-auto px-4 pt-3">
       <div v-if="playerStore.favoriteAlbums.length === 0" class="flex flex-col items-center justify-center py-20 gap-3 text-text-muted">
         <Disc3 class="w-8 h-8 text-text-disabled" aria-hidden="true" />
         <span class="text-[13px]">暂无收藏的专辑</span>
@@ -549,7 +567,7 @@ function onAlbumTrackLongPress(trackId: number) {
     </div>
 
     <!-- ===== 收藏的歌手 ===== -->
-    <div v-else-if="isFavoriteArtistsView" class="flex-1 overflow-y-auto px-4 pt-3">
+    <div v-else-if="isFavoriteArtistsView" ref="favoriteArtistsScrollEl" class="flex-1 overflow-y-auto px-4 pt-3">
       <div v-if="playerStore.favoriteArtists.length === 0" class="flex flex-col items-center justify-center py-20 gap-3 text-text-muted">
         <span class="text-[13px]">暂无收藏的歌手</span>
       </div>

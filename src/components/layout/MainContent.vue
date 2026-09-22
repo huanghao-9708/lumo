@@ -5,10 +5,11 @@ import {
 } from 'lucide-vue-next';
 
 const SKELETON_ROWS = 8;
-import { usePlayerStore, ALBUM_MIN_TRACK_COUNT, ARTIST_MIN_TRACK_COUNT, type Album } from '../../stores/player';
+import { usePlayerStore, ALBUM_MIN_TRACK_COUNT, ARTIST_MIN_TRACK_COUNT, type Album, type Track } from '../../stores/player';
 import { useUiStore } from '../../stores/ui';
 import { useVirtualList } from '../../composables/useVirtualList';
 import { useBatchSelect } from '../../composables/useBatchSelect';
+import { useScrollRestore } from '../../composables/useScrollRestore';
 import BatchActionBar from '../shared/BatchActionBar.vue';
 import AlbumGrid from '../content/AlbumGrid.vue';
 import AlbumDetail from '../content/AlbumDetail.vue';
@@ -77,6 +78,10 @@ const metaText = computed(() => {
   if (playerStore.activeLibraryTab === '专辑') return `${playerStore.albumsTotalCount.toLocaleString()} 张专辑`;
   if (playerStore.activeLibraryTab === '艺术家') return `${playerStore.artistsTotalCount.toLocaleString()} 位艺术家`;
   if (playerStore.activeLibraryTab === '文件夹') return `${playerStore.localSources.length} 个数据源`;
+  if (playerStore.activeLibraryTab === '播放列表' && !playerStore.activePlaylistId) {
+    // 播放列表（未选中具体歌单）= 当前正在播放的队列
+    return `${playerStore.queue.length.toLocaleString()} 首歌曲 · 当前播放队列`;
+  }
   if (playerStore.activeLibraryTab === '喜欢的音乐') return `${playerStore.libraryCounts.favorite_tracks.toLocaleString()} 首歌曲`;
   if (playerStore.activeLibraryTab === '收藏的专辑') return `${playerStore.libraryCounts.favorite_albums.toLocaleString()} 张专辑`;
   if (playerStore.activeLibraryTab === '收藏的歌手') return `${playerStore.libraryCounts.favorite_artists.toLocaleString()} 位艺术家`;
@@ -113,6 +118,39 @@ const isTracksView = computed(() => {
   return ['全部歌曲', '播放列表'].includes(playerStore.activeLibraryTab);
 });
 
+/**
+ * 「播放列表」一级入口（未选中具体歌单）展示的是**当前播放队列**，
+ * 与右侧面板的「播放列表」标签同一份数据，只是铺满内容区。
+ */
+const isQueueView = computed(() => {
+  return playerStore.activeLibraryTab === '播放列表' && !playerStore.activePlaylistId;
+});
+
+/**
+ * 队列视图的搜索过滤结果 + 对应的原始队列下标（两个数组同序）。
+ * 过滤后行号与播放位置仍要指向队列里的真实位置，所以要带回原始下标。
+ */
+const queueFilter = computed(() => {
+  const q = playerStore.searchQuery.trim().toLowerCase();
+  const list: Track[] = [];
+  const idx: number[] = [];
+  playerStore.queue.forEach((t, i) => {
+    if (!q || t.title.toLowerCase().includes(q) || t.artist.toLowerCase().includes(q) || t.album.toLowerCase().includes(q)) {
+      list.push(t);
+      idx.push(i);
+    }
+  });
+  return { list, idx };
+});
+
+/** 渲染行下标 → 原始队列下标 */
+function queueOriginalIndex(renderedIndex: number): number {
+  return queueFilter.value.idx[renderedIndex] ?? renderedIndex;
+}
+
+/** 表格视图实际渲染的数据源：播放列表页 = 播放队列（可过滤），其余 = 曲库列表 */
+const displayTracks = computed(() => isQueueView.value ? queueFilter.value.list : playerStore.tracks);
+
 const isArtistGridView = computed(() => {
   return playerStore.activeLibraryTab === '艺术家' && !playerStore.activeArtistId;
 });
@@ -144,7 +182,7 @@ function isPlayingTrack(trackId: number): boolean {
 /* ============ 可播性（离线降级） ============ */
 // 列表变化或可播性失效（扫描/同步恢复）时批量拉取；离线时 Remote 未缓存与 Unavailable 的行置灰
 watch(
-  [() => playerStore.tracks.map(t => t.id), () => playerStore.playabilityEpoch],
+  [() => displayTracks.value.map(t => t.id), () => playerStore.playabilityEpoch],
   ([ids]) => { if (ids.length > 0) playerStore.ensurePlayability(ids); },
   { immediate: true },
 );
@@ -158,6 +196,11 @@ function isOfflineRemote(trackId: number): boolean {
 }
 
 function playSong(index: number) {
+  if (isQueueView.value) {
+    // 队列行：按原始队列下标继续播（过滤后下标会错位，必须映射回去）
+    playerStore.playQueue(playerStore.queue, queueOriginalIndex(index));
+    return;
+  }
   playerStore.playTrack(index);
 }
 
@@ -167,18 +210,21 @@ function toggleFav(trackId: number, e: Event) {
 }
 
 /* ============ 批量选择（全选以已加载列表为准） ============ */
-const isAllSelected = computed(() => batch.count > 0 && batch.count === playerStore.tracks.length);
+const isAllSelected = computed(() => batch.count > 0 && batch.count === displayTracks.value.length);
 function onToggleSelectAll() {
   if (isAllSelected.value) batch.selectNone();
-  else batch.selectAll(playerStore.tracks);
+  else batch.selectAll(displayTracks.value);
 }
 
 /* ============ 虚拟列表 ============ */
 const ROW_HEIGHT = 40;
-const scrollContainer = ref<HTMLElement | null>(null);
+// 滚动位置记忆：全部歌曲 / 播放列表（队列）各记一份
+const scrollContainer = useScrollRestore(
+  () => `tracks:${playerStore.activeLibraryTab}:${playerStore.searchQuery}`
+);
 const { totalHeight, offsetY, visibleItems } = useVirtualList({
   containerRef: scrollContainer,
-  items: computed(() => playerStore.tracks) as any,
+  items: displayTracks as any,
   itemHeight: ROW_HEIGHT,
   buffer: 8,
 });
@@ -187,6 +233,8 @@ const { totalHeight, offsetY, visibleItems } = useVirtualList({
 function onListScroll() {
   const el = scrollContainer.value;
   if (!el) return;
+  // 队列是内存数据，没有分页
+  if (isQueueView.value) return;
   if (el.scrollTop + el.clientHeight >= el.scrollHeight - 400) {
     if (playerStore.hasMoreTracks && !playerStore.isLoadingTracks) {
       playerStore.fetchTracks();
@@ -204,12 +252,12 @@ function loadForCurrentTab() {
   const tab = playerStore.activeLibraryTab;
   if (tab === '首页') return; // 首页自管数据
   if (tab === 'AI 电台') return; // AI 电台自管数据
+  if (tab === '播放列表') return; // 未选歌单时展示播放队列（内存），详情数据由 store watcher 负责
   if (tab === '最近播放') playerStore.fetchRecentlyPlayed();
   else if (tab === '喜欢的音乐') playerStore.fetchFavoriteTracks();
   else if (tab === '收藏的专辑') playerStore.fetchFavoriteAlbums();
   else if (tab === '收藏的歌手') playerStore.fetchFavoriteArtists();
   else if (tab === '专辑') playerStore.fetchAlbums(true);
-  else if (tab === '播放列表' && playerStore.activePlaylistId) return;
   else if (tab === '艺术家' && playerStore.activeArtistId) return; // 详情数据由 watch(activeArtistId) 加载
   else if (tab === '艺术家') playerStore.fetchArtists(true); // 艺术家网格：按关键词刷新网格
   else playerStore.fetchTracks(true);
@@ -222,6 +270,11 @@ watch(() => playerStore.activeLibraryTab, () => {
   }
   // 切换 tab 自动退出多选（本视图跨 全部歌曲/播放列表 常驻，须显式退出）
   batch.exit();
+  // 历史前进/后退回到本页：数据仍在内存，重拉会把分页与滚动高度清掉，跳过这次加载
+  if (playerStore.isHistoryRestore) {
+    playerStore.isHistoryRestore = false;
+    return;
+  }
   loadForCurrentTab();
 });
 // 播放列表详情切换也退出多选，避免选择集跨歌单串扰
@@ -379,8 +432,8 @@ onMounted(() => {
             <div class="w-8 shrink-0"></div>
           </div>
 
-          <!-- 加载态（首次）骨架屏 -->
-          <div v-if="playerStore.isLoadingTracks && playerStore.tracks.length === 0" class="py-2">
+          <!-- 加载态（首次）骨架屏（播放队列是内存数据，不需要骨架屏） -->
+          <div v-if="!isQueueView && playerStore.isLoadingTracks && displayTracks.length === 0" class="py-2">
             <div
               v-for="i in SKELETON_ROWS"
               :key="'skel-' + i"
@@ -413,13 +466,13 @@ onMounted(() => {
           </div>
 
           <!-- 空态 -->
-          <div v-else-if="playerStore.tracks.length === 0" class="flex flex-col items-center justify-center py-20 gap-3 text-text-muted">
+          <div v-else-if="displayTracks.length === 0" class="flex flex-col items-center justify-center py-20 gap-3 text-text-muted">
             <Music class="w-8 h-8 text-text-disabled" />
-            <span class="text-[12px]">没有找到歌曲</span>
+            <span class="text-[12px]">{{ isQueueView ? '播放队列为空' : '没有找到歌曲' }}</span>
           </div>
 
-          <!-- 错误态 -->
-          <div v-else-if="playerStore.isErrorTracks" class="flex flex-col items-center justify-center py-20 gap-3 text-text-muted">
+          <!-- 错误态（播放队列无后端加载，不展示错误态） -->
+          <div v-else-if="!isQueueView && playerStore.isErrorTracks" class="flex flex-col items-center justify-center py-20 gap-3 text-text-muted">
             <span class="text-[12px]">加载失败，请稍后重试</span>
           </div>
 
@@ -459,7 +512,7 @@ onMounted(() => {
                       <Play v-else class="w-[12px] h-[12px] fill-current" />
                     </span>
                     <template v-else>
-                      <span class="text-text-muted group-hover:hidden tabular-nums">{{ String(index + 1).padStart(2, '0') }}</span>
+                      <span class="text-text-muted group-hover:hidden tabular-nums">{{ String((isQueueView ? queueOriginalIndex(index) : index) + 1).padStart(2, '0') }}</span>
                       <Play class="w-[12px] h-[12px] fill-current mx-auto hidden group-hover:block text-text-secondary" />
                     </template>
                   </template>
@@ -529,7 +582,7 @@ onMounted(() => {
           </div>
 
           <!-- 增量加载指示 -->
-          <div v-if="playerStore.isLoadingTracks && playerStore.tracks.length > 0" class="flex items-center justify-center py-4 text-text-muted">
+          <div v-if="!isQueueView && playerStore.isLoadingTracks && displayTracks.length > 0" class="flex items-center justify-center py-4 text-text-muted">
             <Loader2 class="w-3.5 h-3.5 animate-spin mr-2" />
             <span class="text-[11px]">加载更多…</span>
           </div>
