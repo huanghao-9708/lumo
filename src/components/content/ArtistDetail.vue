@@ -6,6 +6,7 @@ import {
 import { usePlayerStore, type Album, type Track } from '../../stores/player';
 import { getArtworkUrl } from '../../utils';
 import { useScrollRestore } from '../../composables/useScrollRestore';
+import EqualizerIndicator from '../shared/EqualizerIndicator.vue';
 
 const props = defineProps<{
   artistId: number | null;
@@ -282,9 +283,8 @@ function onScroll(e: Event) {
               @dblclick="playTrack(index)"
             >
               <div class="w-10 text-center shrink-0 text-[12px] font-mono">
-                <span v-if="isPlayingTrack(track.id)" class="text-brand-orange inline-flex items-center justify-center">
-                  <Loader2 v-if="playerStore.isPlaying" class="w-[14px] h-[14px] animate-spin" />
-                  <Play v-else class="w-[12px] h-[12px] fill-current" />
+                <span v-if="isPlayingTrack(track.id)" class="inline-flex items-center justify-center">
+                  <EqualizerIndicator :playing="playerStore.isPlaying" />
                 </span>
                 <template v-else>
                   <span class="text-text-muted group-hover:hidden tabular-nums">{{ String(index + 1).padStart(2, '0') }}</span>

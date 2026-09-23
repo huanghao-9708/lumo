@@ -10,6 +10,7 @@ import { useScrollRestore } from '../../composables/useScrollRestore';
 import { useArtworkSrc } from '../../composables/useArtworkSrc';
 import BatchActionBar from '../shared/BatchActionBar.vue';
 import ConfirmDialog from '../shared/ConfirmDialog.vue';
+import EqualizerIndicator from '../shared/EqualizerIndicator.vue';
 
 const playerStore = usePlayerStore();
 const uiStore = useUiStore();
@@ -213,9 +214,8 @@ function toggleFav(trackId: number, e: Event) {
               </span>
             </span>
             <template v-else>
-              <span v-if="isPlayingTrack(track.id)" class="text-brand-orange inline-flex items-center justify-center">
-                <Loader2 v-if="playerStore.isPlaying" class="w-[14px] h-[14px] animate-spin" />
-                <Play v-else class="w-[12px] h-[12px] fill-current" />
+              <span v-if="isPlayingTrack(track.id)" class="inline-flex items-center justify-center">
+                <EqualizerIndicator :playing="playerStore.isPlaying" />
               </span>
               <template v-else>
                 <span class="text-text-muted group-hover:hidden tabular-nums">{{ String(index + 1).padStart(2, '0') }}</span>

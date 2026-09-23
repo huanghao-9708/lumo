@@ -8,6 +8,7 @@ import { useArtworkSrc } from '../../composables/useArtworkSrc';
 import { useBatchSelect } from '../../composables/useBatchSelect';
 import { useScrollRestore } from '../../composables/useScrollRestore';
 import BatchActionBar from '../shared/BatchActionBar.vue';
+import EqualizerIndicator from '../shared/EqualizerIndicator.vue';
 
 const props = defineProps<{
   albumId: number | null;
@@ -119,7 +120,7 @@ function toggleFav(trackId: number, e: Event) {
       <div class="px-8 pt-8 pb-4 flex-shrink-0">
         <div class="flex items-start gap-8">
           <!-- 封面（~180px） -->
-          <div class="w-[180px] h-[180px] rounded-[10px] overflow-hidden flex-shrink-0 bg-bg-hover flex items-center justify-center">
+          <div class="w-[180px] h-[180px] rounded-[12px] overflow-hidden flex-shrink-0 bg-bg-hover flex items-center justify-center shadow-lg ring-1 ring-black/5 dark:ring-white/10">
             <img v-if="coverSrc" :src="coverSrc" class="w-full h-full object-cover" alt="cover" />
             <Disc3 v-else class="w-10 h-10 text-text-disabled" />
           </div>
@@ -222,9 +223,8 @@ function toggleFav(trackId: number, e: Event) {
               </span>
             </span>
             <template v-else>
-              <span v-if="isPlayingTrack(track.id)" class="text-brand-orange inline-flex items-center justify-center">
-                <Loader2 v-if="playerStore.isPlaying" class="w-[14px] h-[14px] animate-spin" />
-                <Play v-else class="w-[12px] h-[12px] fill-current" />
+              <span v-if="isPlayingTrack(track.id)" class="inline-flex items-center justify-center">
+                <EqualizerIndicator :playing="playerStore.isPlaying" />
               </span>
               <template v-else>
                 <span class="text-text-muted group-hover:hidden tabular-nums">{{ String(index + 1).padStart(2, '0') }}</span>

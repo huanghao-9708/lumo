@@ -26,6 +26,7 @@ import FolderView from '../content/FolderView.vue';
 import SmartPlaylistView from '../content/SmartPlaylistView.vue';
 import HomeView from '../content/HomeView.vue';
 import AiPlaylistView from '../content/AiPlaylistView.vue';
+import EqualizerIndicator from '../shared/EqualizerIndicator.vue';
 
 const playerStore = usePlayerStore();
 const uiStore = useUiStore();
@@ -507,9 +508,8 @@ onMounted(() => {
                     </span>
                   </span>
                   <template v-else>
-                    <span v-if="isPlayingTrack(song.id)" class="text-brand-orange inline-flex items-center justify-center">
-                      <Loader2 v-if="playerStore.isPlaying" class="w-[14px] h-[14px] animate-spin" />
-                      <Play v-else class="w-[12px] h-[12px] fill-current" />
+                    <span v-if="isPlayingTrack(song.id)" class="inline-flex items-center justify-center">
+                      <EqualizerIndicator :playing="playerStore.isPlaying" />
                     </span>
                     <template v-else>
                       <span class="text-text-muted group-hover:hidden tabular-nums">{{ String((isQueueView ? queueOriginalIndex(index) : index) + 1).padStart(2, '0') }}</span>

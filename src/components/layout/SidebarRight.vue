@@ -7,6 +7,7 @@ import { useArtworkSrc } from '../../composables/useArtworkSrc';
 import LyricsView from '../shared/LyricsView.vue';
 import { libraryGetTrackVersions, librarySetPrimaryFile } from '../../api/library';
 import type { TrackFileInfoDTO } from '../../api/types';
+import EqualizerIndicator from '../shared/EqualizerIndicator.vue';
 
 const playerStore = usePlayerStore();
 const uiStore = useUiStore();
@@ -73,7 +74,7 @@ async function switchVersion(fileId: number) {
 </script>
 
 <template>
-  <div v-if="uiStore.isRightSidebarVisible" class="absolute right-0 top-0 h-full w-[360px] bg-bg-canvas flex-col z-20 flex border-l border-border-color shadow-[-4px_0_16px_rgba(0,0,0,0.12)] dark:shadow-[-4px_0_16px_rgba(0,0,0,0.3)]">
+  <div v-if="uiStore.isRightSidebarVisible" class="absolute right-0 top-0 h-full w-[360px] bg-bg-canvas/90 backdrop-blur-2xl flex-col z-20 flex border-l border-border-color/80 shadow-[-8px_0_24px_rgba(0,0,0,0.06)] dark:shadow-[-8px_0_24px_rgba(0,0,0,0.35)] transition-colors-smooth">
 
     <!-- Top Tabs -->
     <div class="relative h-[60px] flex-shrink-0" data-tauri-drag-region>
@@ -110,7 +111,7 @@ async function switchVersion(fileId: number) {
       <template v-else>
         <div class="flex-1 overflow-y-auto px-6 pt-4 pb-4 flex flex-col min-h-0">
           <!-- Album Cover -->
-          <div class="w-full aspect-square max-h-[40vh] bg-bg-hover rounded-[10px] mb-4 overflow-hidden flex-shrink-0 flex items-center justify-center">
+          <div class="w-full aspect-square max-h-[40vh] bg-bg-hover rounded-[12px] mb-4 overflow-hidden flex-shrink-0 flex items-center justify-center shadow-lg ring-1 ring-black/5 dark:ring-white/10">
             <img v-if="coverSrc" :src="coverSrc" class="w-full h-full object-cover" alt="cover" />
             <Disc3 v-else class="w-10 h-10 text-text-disabled" />
           </div>
@@ -192,7 +193,10 @@ async function switchVersion(fileId: number) {
           :class="i === playerStore.currentIndex ? 'bg-list-selected playing-row' : 'hover:bg-list-hover'"
           @click="playerStore.playQueue(playerStore.queue, i)"
         >
-          <span class="w-5 text-[11px] font-mono text-text-muted tabular-nums shrink-0">{{ String(i + 1).padStart(2, '0') }}</span>
+          <span class="w-5 flex items-center justify-center shrink-0">
+            <EqualizerIndicator v-if="i === playerStore.currentIndex" :playing="playerStore.isPlaying" size="sm" />
+            <span v-else class="text-[11px] font-mono text-text-muted tabular-nums">{{ String(i + 1).padStart(2, '0') }}</span>
+          </span>
           <div class="min-w-0 flex-1">
             <p class="text-[12px] truncate" :class="i === playerStore.currentIndex ? 'text-brand-orange font-medium' : 'text-text-primary'">{{ t.title }}</p>
             <p class="text-[11px] text-text-muted truncate">{{ t.artist }}</p>

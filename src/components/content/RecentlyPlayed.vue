@@ -9,6 +9,7 @@ import { useScrollRestore } from '../../composables/useScrollRestore';
 import BatchActionBar from '../shared/BatchActionBar.vue';
 import { formatPlayedAt } from '../../utils/datetime';
 import FooterStatus from '../shared/FooterStatus.vue';
+import EqualizerIndicator from '../shared/EqualizerIndicator.vue';
 
 const props = defineProps<{
   /** 内容区搜索框传入的过滤词：内存过滤当前列表 */
@@ -134,9 +135,8 @@ function toggleFav(trackId: number, e: Event) {
               </span>
             </span>
             <template v-else>
-              <span v-if="isPlayingTrack(track.id)" class="text-brand-orange inline-flex items-center justify-center">
-                <Loader2 v-if="playerStore.isPlaying" class="w-[14px] h-[14px] animate-spin" />
-                <Play v-else class="w-[12px] h-[12px] fill-current" />
+              <span v-if="isPlayingTrack(track.id)" class="inline-flex items-center justify-center">
+                <EqualizerIndicator :playing="playerStore.isPlaying" />
               </span>
               <template v-else>
                 <span class="text-text-muted group-hover:hidden tabular-nums">{{ String(index + 1).padStart(2, '0') }}</span>

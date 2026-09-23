@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue';
-import { Play, Loader2, Heart, CloudOff } from 'lucide-vue-next';
+import { Heart, CloudOff } from 'lucide-vue-next';
 import type { Track } from '../../stores/player';
 import { usePlayerStore } from '../../stores/player';
 import { useUiStore } from '../../stores/ui';
+import EqualizerIndicator from '../shared/EqualizerIndicator.vue';
 
 /**
  * 移动端歌曲行（56px 触控行）。
@@ -102,9 +103,8 @@ function onTouchMove() {
   >
     <!-- 序号 / 播放图标 -->
     <div class="text-center shrink-0" style="width: 36px;">
-      <span v-if="isCurrent" class="text-brand-orange inline-flex items-center justify-center">
-        <Loader2 v-if="isPlaying" class="w-[14px] h-[14px] animate-spin" aria-hidden="true" />
-        <Play v-else class="w-[14px] h-[14px] fill-current" aria-hidden="true" />
+      <span v-if="isCurrent" class="inline-flex items-center justify-center">
+        <EqualizerIndicator :playing="isPlaying" />
       </span>
       <span
         v-else

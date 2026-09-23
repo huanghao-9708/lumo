@@ -15,7 +15,7 @@ const close = () => appWindow.close();
 
 <template>
   <div
-    class="h-[60px] w-full bg-bg-content flex items-center justify-between px-4 flex-shrink-0 select-none"
+    class="h-[60px] w-full bg-bg-content/90 backdrop-blur-md flex items-center justify-between px-4 flex-shrink-0 select-none border-b border-border-color/50 transition-colors-smooth"
     data-tauri-drag-region
   >
 
@@ -58,7 +58,7 @@ const close = () => appWindow.close();
           v-model="playerStore.globalSearchQuery"
           type="text"
           placeholder="搜索全局…"
-          class="w-full h-[34px] pl-8 pr-3 text-[13px] bg-bg-hover border border-transparent rounded-[8px] text-text-primary placeholder:text-text-muted transition-colors-smooth focus:bg-bg-canvas focus:border-border-color"
+          class="w-full h-[34px] pl-8 pr-3 text-[13px] bg-bg-hover border border-transparent rounded-[8px] text-text-primary placeholder:text-text-muted transition-all duration-200 focus:bg-bg-canvas focus:border-brand-orange/40 focus:ring-2 focus:ring-brand-orange/15 shadow-sm"
         />
       </div>
     </div>

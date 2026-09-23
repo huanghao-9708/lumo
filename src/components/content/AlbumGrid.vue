@@ -126,14 +126,14 @@ onBeforeUnmount(() => {
         >
           <!-- 封面 -->
           <div
-            class="relative w-full aspect-square rounded-[10px] overflow-hidden bg-bg-hover mb-3"
+            class="relative w-full aspect-square rounded-[12px] overflow-hidden bg-bg-hover mb-3 ring-1 ring-black/5 dark:ring-white/10 shadow-sm group-hover:shadow-[0_12px_24px_-6px_rgba(0,0,0,0.18)] dark:group-hover:shadow-[0_12px_24px_-6px_rgba(0,0,0,0.5)] group-hover:-translate-y-1 transition-all duration-200"
             @click="selectAlbum(album)"
           >
             <img
               v-if="getCoverSrc(album)"
               :src="getCoverSrc(album)"
               :alt="album.title"
-              class="w-full h-full object-cover"
+              class="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300 ease-out"
               loading="lazy"
             />
             <div v-else class="w-full h-full flex items-center justify-center bg-bg-hover">
@@ -142,11 +142,11 @@ onBeforeUnmount(() => {
 
             <!-- 悬浮播放按钮 -->
             <div
-              class="absolute inset-0 bg-black/0 group-hover:bg-black/20 dark:group-hover:bg-black/40 transition-colors-smooth flex items-center justify-center opacity-0 group-hover:opacity-100"
+              class="absolute inset-0 bg-black/0 group-hover:bg-black/25 dark:group-hover:bg-black/45 transition-colors-smooth flex items-center justify-center opacity-0 group-hover:opacity-100"
               @click.stop="playAlbum(album)"
             >
-              <div class="w-10 h-10 rounded-full bg-brand-orange text-white flex items-center justify-center shadow-lg">
-                <Play class="w-4 h-4 fill-current ml-0.5" />
+              <div class="w-11 h-11 rounded-full bg-brand-orange text-white flex items-center justify-center shadow-lg transform scale-90 group-hover:scale-100 transition-transform duration-200 hover:scale-105 active:scale-95">
+                <Play class="w-5 h-5 fill-current ml-0.5" />
               </div>
             </div>
           </div>
