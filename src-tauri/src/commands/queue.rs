@@ -154,17 +154,35 @@ pub fn internal_play_item(
         },
     );
 
-    if let Ok(conn) = db_state.db.get() {
-        let _ = crate::repositories::track_repo::TrackRepo::record_play(
-            &conn,
-            item.track_id,
-            item.duration_ms.unwrap_or(0) as i64,
-            Some(effective_media_file_id),
-        );
-    }
-    if let Ok(q) = queue_state.queue.lock() {
-        crate::services::queue::save_state_to_disk(&app_dir, &q, 0);
-    }
+    // 异步执行播放记账与队列状态落盘，绝不阻塞切歌/换源主流程
+    let db_pool = db_state.db.clone();
+    let track_id = item.track_id;
+    let duration_ms = item.duration_ms.unwrap_or(0) as i64;
+    let media_file_id = Some(effective_media_file_id);
+    let app_dir_clone = app_dir.clone();
+    let state_snapshot = queue_state.queue.lock().ok().map(|q| crate::services::queue::PersistedPlaybackState {
+        items: q.items.clone(),
+        index: q.index,
+        mode: q.mode,
+        position_ms: 0,
+    });
+
+    std::thread::spawn(move || {
+        if let Ok(conn) = db_pool.get() {
+            let _ = crate::repositories::track_repo::TrackRepo::record_play(
+                &conn,
+                track_id,
+                duration_ms,
+                media_file_id,
+            );
+        }
+        if let Some(state) = state_snapshot {
+            if let Ok(json) = serde_json::to_string_pretty(&state) {
+                let file_path = app_dir_clone.join("playback_state.json");
+                let _ = std::fs::write(file_path, json);
+            }
+        }
+    });
 
     // MA2 前台服务与媒体通知同步
     let _ = crate::services::platform::update_foreground(

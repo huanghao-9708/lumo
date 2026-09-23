@@ -52,10 +52,10 @@ async function fetchVersions(trackId: number) {
   }
 }
 
-watch(() => playerStore.currentTrack?.id, (newId) => {
-  if (newId) {
+watch([() => playerStore.currentTrack?.id, () => uiStore.isRightSidebarVisible], ([newId, visible]) => {
+  if (newId && visible) {
     fetchVersions(newId);
-  } else {
+  } else if (!newId) {
     trackVersions.value = [];
   }
 }, { immediate: true });

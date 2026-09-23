@@ -203,7 +203,7 @@ pub fn library_get_playlists(db_state: State<'_, DbState>) -> Result<Vec<Playlis
     crate::repositories::playlist_repo::PlaylistRepo::get_playlists(&conn).map_err(|e| e.into())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_add_to_playlist(
     db_state: State<'_, DbState>,
     playlist_id: i64,
@@ -215,7 +215,7 @@ pub fn library_add_to_playlist(
         .map_err(|e| e.into())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_get_playlist_tracks(
     db_state: State<'_, DbState>,
     playlist_id: i64,
@@ -226,7 +226,7 @@ pub fn library_get_playlist_tracks(
         .map_err(|e| e.into())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_record_play(
     db_state: State<'_, DbState>,
     track_id: i64,

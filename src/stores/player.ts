@@ -1305,36 +1305,54 @@ const albums = shallowRef<Album[]>([]);
     return result;
   }
 
-  // 监听当前播放曲目，自动加载对应歌词与文件元数据
-  watch(currentTrack, async (newTrack) => {
+  // 监听当前播放曲目，自动加载对应歌词与文件元数据（解耦并行加载，防止慢速网络歌词阻塞元数据展示）
+  let currentTrackRequestId = 0;
+  watch(currentTrack, (newTrack) => {
+    const reqId = ++currentTrackRequestId;
     if (newTrack) {
-      try {
-        // 隐私开关（P0-07）：未开启「在线歌词匹配」时只读本地，不发 IPC
-        const lrcText = uiStore.fetchLyricsOnline ? await libraryGetLyrics(newTrack.id, true) : null;
-        if (lrcText) {
-          lyrics.value = parseLrc(lrcText);
-        } else {
-          lyrics.value = [
-            { text: newTrack.title, time: 0 },
-            { text: newTrack.artist, time: 3 },
-            { text: "— 暂无歌词 —", time: 6 }
-          ];
-        }
-      } catch (e) {
-        console.error("Failed to load lyrics:", e);
-        lyrics.value = [
-          { text: newTrack.title, time: 0 },
-          { text: "— 暂无歌词 —", time: 3 }
-        ];
-      }
+      const trackId = newTrack.id;
 
-      try {
-        const fileInfo = await libraryGetTrackFileInfo(newTrack.id);
-        currentTrackFileInfo.value = fileInfo;
-      } catch (e) {
-        console.error("Failed to load track file info:", e);
-        currentTrackFileInfo.value = null;
-      }
+      // 1. 独立异步加载文件元数据（本地查询，零等待）
+      libraryGetTrackFileInfo(trackId)
+        .then(fileInfo => {
+          if (reqId === currentTrackRequestId) {
+            currentTrackFileInfo.value = fileInfo;
+          }
+        })
+        .catch(e => {
+          console.error("Failed to load track file info:", e);
+          if (reqId === currentTrackRequestId) {
+            currentTrackFileInfo.value = null;
+          }
+        });
+
+      // 2. 独立异步加载歌词（网络请求与本地查询独立，不拖垮主 UI）
+      const lyricsPromise = uiStore.fetchLyricsOnline
+        ? libraryGetLyrics(trackId, true)
+        : Promise.resolve(null);
+
+      lyricsPromise
+        .then(lrcText => {
+          if (reqId !== currentTrackRequestId) return;
+          if (lrcText) {
+            lyrics.value = parseLrc(lrcText);
+          } else {
+            lyrics.value = [
+              { text: newTrack.title, time: 0 },
+              { text: newTrack.artist, time: 3 },
+              { text: "— 暂无歌词 —", time: 6 }
+            ];
+          }
+        })
+        .catch(e => {
+          console.error("Failed to load lyrics:", e);
+          if (reqId === currentTrackRequestId) {
+            lyrics.value = [
+              { text: newTrack.title, time: 0 },
+              { text: "— 暂无歌词 —", time: 3 }
+            ];
+          }
+        });
     } else {
       lyrics.value = [];
       currentTrackFileInfo.value = null;
@@ -1395,9 +1413,12 @@ const albums = shallowRef<Album[]>([]);
     isHistoryRestore.value = false;
     activeAlbumId.value = null;
     activeArtistId.value = null;
-    activePlaylistId.value = playlistId;
     activeLibraryTab.value = '播放列表';
-    await refreshCurrentPlaylistTracks(playlistId);
+    if (activePlaylistId.value === playlistId) {
+      await refreshCurrentPlaylistTracks(playlistId);
+    } else {
+      activePlaylistId.value = playlistId;
+    }
   }
 
   watch(activeAlbumId, async (newId) => {
