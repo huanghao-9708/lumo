@@ -29,6 +29,7 @@ import {
 } from '../api/queue';
 import { libraryGetPlayability, type PlayabilityState } from '../api/library';
 import { useUiStore } from './ui';
+import { getArtworkUrl } from '../utils';
 
 
 // ================= 后端 DTO 接口（与 Rust 端 models.rs 保持一致） =================
@@ -1690,12 +1691,20 @@ const albums = shallowRef<Album[]>([]);
    * 通过比较 id 序列的快照来判断"内容是否变了"。
    */
   let lastSavedQueueSignature = '';
+  let persistQueueTimer: ReturnType<typeof setTimeout> | null = null;
   function persistPlayQueueIfNeeded() {
     const sig = queue.value.map(t => t.id).join(',');
     if (sig === lastSavedQueueSignature) return;
     lastSavedQueueSignature = sig;
-    librarySavePlayQueue(queue.value.map(t => t.id))
-      .catch(e => console.error("Failed to auto-save play queue:", e));
+    if (persistQueueTimer) {
+      clearTimeout(persistQueueTimer);
+    }
+    // 防抖 3000ms：让播放启动、解码与 UI 切换平稳完成后，再异步落库，彻底避免抢占写锁
+    persistQueueTimer = setTimeout(() => {
+      persistQueueTimer = null;
+      librarySavePlayQueue(queue.value.map(t => t.id))
+        .catch(e => console.error("Failed to auto-save play queue:", e));
+    }, 3000);
   }
 
   // ===== 进度持久化（事件驱动，避免高频写磁盘） =====
@@ -1908,7 +1917,9 @@ const albums = shallowRef<Album[]>([]);
     }
   }
 
+  let isTogglingPlay = false;
   async function togglePlay() {
+    if (isTogglingPlay) return;
     if (queue.value.length === 0) return;
     if (currentIndex.value === -1) {
       currentIndex.value = 0;
@@ -1917,14 +1928,25 @@ const albums = shallowRef<Album[]>([]);
     const track = queue.value[currentIndex.value];
     if (!track) return;
 
+    isTogglingPlay = true;
     try {
       if (isPlaying.value) {
-        await playbackPause();
+        // 乐观更新：立刻在前端呈现暂停状态，停止进度轮询，给用户瞬时响应
         isPlaying.value = false;
         stopProgressAutoSave();
-        // 同步系统媒体状态
         if ('mediaSession' in navigator) {
           navigator.mediaSession.playbackState = 'paused';
+        }
+        try {
+          await playbackPause();
+        } catch (err) {
+          // 发生错误时回滚状态
+          isPlaying.value = true;
+          startProgressAutoSave();
+          if ('mediaSession' in navigator) {
+            navigator.mediaSession.playbackState = 'playing';
+          }
+          throw err;
         }
       } else {
         if (guardPlayback(track)) {
@@ -1936,8 +1958,7 @@ const albums = shallowRef<Album[]>([]);
             hasLoadedCurrentFile.value = true;
 
             if (progressMs.value > 0) {
-              // 恢复上次听到的地方。seek 失败（个别格式的解码器不支持 seek）只记日志，
-              // 绝不能把整个播放动作带崩——从头播也比点播放没反应强。
+              // 恢复上次听到的地方。seek 失败只记日志，绝不把整个播放动作带崩
               try {
                 await playbackSeek(progressMs.value);
               } catch (seekErr) {
@@ -1949,7 +1970,23 @@ const albums = shallowRef<Album[]>([]);
             updateMediaSessionMetadata(track);
           }
         } else {
-          await playbackResume();
+          // 乐观恢复
+          isPlaying.value = true;
+          startProgressAutoSave();
+          if ('mediaSession' in navigator) {
+            navigator.mediaSession.playbackState = 'playing';
+          }
+          try {
+            await playbackResume();
+          } catch (err) {
+            isPlaying.value = false;
+            stopProgressAutoSave();
+            if ('mediaSession' in navigator) {
+              navigator.mediaSession.playbackState = 'paused';
+            }
+            throw err;
+          }
+          return;
         }
         isPlaying.value = true;
         startProgressAutoSave();
@@ -1959,6 +1996,8 @@ const albums = shallowRef<Album[]>([]);
       }
     } catch (e) {
       console.error("Toggle play failed:", e);
+    } finally {
+      isTogglingPlay = false;
     }
   }
 
@@ -2110,21 +2149,28 @@ const albums = shallowRef<Album[]>([]);
     }
   }
 
+  let isAdvancing = false;
   async function nextTrack(_isAuto = false) {
-    if (queue.value.length === 0) return;
+    if (queue.value.length === 0 || isAdvancing) return;
+    isAdvancing = true;
     try {
       await playbackAdvance(1);
     } catch (e) {
       console.error("Advance next failed:", e);
+    } finally {
+      isAdvancing = false;
     }
   }
 
   async function prevTrack() {
-    if (queue.value.length === 0) return;
+    if (queue.value.length === 0 || isAdvancing) return;
+    isAdvancing = true;
     try {
       await playbackAdvance(-1);
     } catch (e) {
       console.error("Advance prev failed:", e);
+    } finally {
+      isAdvancing = false;
     }
   }
 
@@ -2362,7 +2408,7 @@ const albums = shallowRef<Album[]>([]);
     const artwork: MediaImage[] = [];
     if (track.cover_artwork_id) {
       artwork.push({
-        src: `lumo://artwork/${track.cover_artwork_id}`,
+        src: getArtworkUrl(track.cover_artwork_id),
         sizes: '512x512',
         type: 'image/jpeg',
       });

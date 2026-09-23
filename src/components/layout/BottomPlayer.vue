@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue';
+import { ref, computed } from 'vue';
 import {
   Shuffle, SkipBack, Play, Pause, SkipForward, Repeat, Repeat1, ChevronUp, ChevronDown, Disc3, Volume, Volume1, Volume2,
   Heart, ListPlus,
@@ -112,7 +112,7 @@ const modeIcon = computed(() => {
 });
 const modeActive = computed(() => playerStore.playMode !== 'normal');
 
-/* ============ 确定性波形（基于 track id 的固定种子） ============ */
+/* ============ 确定性波形（基于 track id 的固定种子，纯 CSS 动画驱动） ============ */
 const BARS = 32;
 function seedRand(seed: number) {
   // 简单确定性 PRNG：同一 seed 永远产生同一序列
@@ -122,55 +122,25 @@ function seedRand(seed: number) {
     return s / 4294967296;
   };
 }
-const animationTick = ref(0);
-let animationFrameId: number;
 
-function animateWaveform() {
-  if (playerStore.isPlaying) {
-    animationTick.value += 0.15;
-    animationFrameId = requestAnimationFrame(animateWaveform);
-  }
-}
-
-watch(() => playerStore.isPlaying, (playing) => {
-  if (playing) {
-    animationFrameId = requestAnimationFrame(animateWaveform);
-  } else {
-    cancelAnimationFrame(animationFrameId);
-  }
-});
-
-onMounted(() => {
-  if (playerStore.isPlaying) {
-    animationFrameId = requestAnimationFrame(animateWaveform);
-  }
-});
-
-onBeforeUnmount(() => {
-  cancelAnimationFrame(animationFrameId);
-});
-
-const waveform = computed(() => {
+const waveformBars = computed(() => {
   const seed = playerStore.currentTrack?.id ?? 42;
   const rand = seedRand(seed);
-  const bars: number[] = [];
-  const tick = animationTick.value;
-  const playing = playerStore.isPlaying;
+  const bars: { height: number; delay: number; duration: number }[] = [];
   
   // 中间高、两边低的包络，更像真实音频波形
   for (let i = 0; i < BARS; i++) {
     const center = 1 - Math.abs(i - BARS / 2) / (BARS / 2);
     const staticNoise = 0.3 + rand() * 0.7;
-    let base = Math.max(0.15, Math.min(1, center * 0.6 + staticNoise * 0.5));
-    
-    // 如果正在播放，叠加一个动态正弦波跳动
-    if (playing) {
-      // 用不同的频率和相位，让每个柱子跳动不一致
-      const jump = (Math.sin(tick + i * 0.5) + Math.cos(tick * 1.3 - i * 0.3)) * 0.15 * center;
-      base = Math.max(0.15, Math.min(1, base + jump));
-    }
-    
-    bars.push(base);
+    const base = Math.max(0.15, Math.min(1, center * 0.6 + staticNoise * 0.5));
+    // 错落有致的律动周期与延时（纯 CSS 动画使用，GPU 合成，不占 JS 线程）
+    const delay = ((i * 7) % 11) * 0.08;
+    const duration = 0.6 + ((i * 3) % 5) * 0.12;
+    bars.push({
+      height: Math.max(15, Math.round(base * 100)),
+      delay,
+      duration,
+    });
   }
   return bars;
 });
@@ -288,14 +258,18 @@ async function addCurrentToPlaylist(playlistId: number) {
         
         <div class="flex items-center gap-2 mt-1">
           <span class="text-[9px] text-text-muted font-mono uppercase tracking-wider px-1 py-0.5 bg-bg-hover rounded">{{ playerStore.currentTrack.format }}</span>
-          <!-- 确定性微波形律动 -->
-          <div class="flex items-end h-3 gap-[1px]">
+          <!-- 确定性微波形律动（纯 CSS GPU 驱动，零 JS 开销） -->
+          <div class="flex items-end h-3 gap-[1px]" :class="{ 'is-playing': playerStore.isPlaying }">
             <div
-              v-for="(h, i) in waveform"
+              v-for="(bar, i) in waveformBars"
               :key="i"
-              class="w-[2px] rounded-t-sm transition-colors-smooth"
+              class="w-[2px] rounded-t-sm transition-colors-smooth waveform-bar"
               :class="i < playedBarCount ? 'bg-brand-orange' : 'bg-text-muted/25'"
-              :style="{ height: `${Math.max(15, h * 100)}%` }"
+              :style="{
+                height: `${bar.height}%`,
+                animationDelay: `${bar.delay}s`,
+                animationDuration: `${bar.duration}s`,
+              }"
             ></div>
           </div>
         </div>
@@ -503,3 +477,23 @@ async function addCurrentToPlaylist(playlistId: number) {
 
   </div>
 </template>
+
+<style scoped>
+.waveform-bar {
+  transform-origin: bottom;
+  will-change: transform;
+}
+
+.is-playing .waveform-bar {
+  animation: waveform-bounce ease-in-out infinite alternate;
+}
+
+@keyframes waveform-bounce {
+  0% {
+    transform: scaleY(0.4);
+  }
+  100% {
+    transform: scaleY(1.2);
+  }
+}
+</style>

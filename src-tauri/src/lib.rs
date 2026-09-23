@@ -124,6 +124,30 @@ fn backfill_artwork_thumbnails(app: tauri::AppHandle, pool: &DbPool) {
     let mut failed = 0usize;
 
     for chunk in rows.chunks(batch_size) {
+        // 第一阶段（事务外）：读磁盘与图片解码缩放，不持数据库连接与写锁
+        let mut prepared = Vec::with_capacity(chunk.len());
+        for (id, cache_path) in chunk {
+            let thumb = std::fs::read(cache_path).ok().and_then(|data| {
+                crate::services::library::LibraryService::generate_thumbnail(&data)
+            });
+
+            if let Some(blob) = thumb {
+                prepared.push((*id, blob));
+            } else {
+                failed += 1;
+                tracing::warn!(
+                    "[回填] artwork id={} 无法生成缩略图（路径={}）",
+                    id,
+                    cache_path
+                );
+            }
+        }
+
+        if prepared.is_empty() {
+            continue;
+        }
+
+        // 第二阶段（事务内）：毫秒级纯 SQL 批量 UPDATE 并立即提交释放锁
         let conn = match pool.get() {
             Ok(c) => c,
             Err(e) => {
@@ -140,24 +164,14 @@ fn backfill_artwork_thumbnails(app: tauri::AppHandle, pool: &DbPool) {
             }
         };
 
-        for (id, cache_path) in chunk {
-            let thumb = std::fs::read(cache_path).ok().and_then(|data| {
-                crate::services::library::LibraryService::generate_thumbnail(&data)
-            });
-
-            if let Some(blob) = thumb {
-                let _ = tx.execute(
-                    "UPDATE artwork SET thumbnail_blob = ?1 WHERE id = ?2",
-                    params![blob, id],
-                );
+        for (id, blob) in prepared {
+            if tx.execute(
+                "UPDATE artwork SET thumbnail_blob = ?1 WHERE id = ?2",
+                params![blob, id],
+            ).is_ok() {
                 done += 1;
             } else {
                 failed += 1;
-                tracing::warn!(
-                    "[回填] artwork id={} 无法生成缩略图（路径={}）",
-                    id,
-                    cache_path
-                );
             }
         }
 

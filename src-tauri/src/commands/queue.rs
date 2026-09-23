@@ -3,6 +3,7 @@ use crate::commands::playback::{
 };
 use crate::db::DbState;
 use crate::error::AppError;
+use crate::ipc_trace;
 use crate::services::cache::AudioCacheState;
 use crate::services::queue::{PlayMode, PlaybackQueueStateDto, QueueItem, QueueState};
 use std::path::PathBuf;
@@ -337,6 +338,7 @@ pub fn playback_set_queue(
     index: usize,
     mode: PlayMode,
 ) -> Result<(), AppError> {
+    let _trace = ipc_trace!("playback_set_queue");
     let should_play = !items.is_empty();
     {
         let mut q = queue_state
@@ -382,6 +384,7 @@ pub fn playback_advance(
     playback_state: State<'_, PlaybackState>,
     direction: i32,
 ) -> Result<(), AppError> {
+    let _trace = ipc_trace!("playback_advance");
     let target_index = {
         let mut q = queue_state
             .queue
@@ -403,6 +406,7 @@ pub fn playback_play_index(
     playback_state: State<'_, PlaybackState>,
     index: usize,
 ) -> Result<(), AppError> {
+    let _trace = ipc_trace!("playback_play_index");
     let target_index = {
         let mut q = queue_state
             .queue

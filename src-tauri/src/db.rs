@@ -26,11 +26,14 @@ pub fn init_db(db_path: PathBuf) -> Result<DbPool, Box<dyn std::error::Error>> {
         conn.pragma_update(None, "cache_size", "8000")?;
         // NORMAL：WAL 模式下 NORMAL 已足够安全，且比 FULL 快很多
         conn.pragma_update(None, "synchronous", "NORMAL")?;
+        // 设置 5 秒 busy timeout，避免在写事务争抢时直接抛出 SQLITE_BUSY 或死锁
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
         Ok(())
     });
 
     let pool = r2d2::Pool::builder()
-        .max_size(8) // 8 条并发连接：artwork × 6 + IPC 命令 × 2
+        .max_size(24) // 扩大连接池容积：覆盖封面并发 + IPC 命令 + 后台扫描/回填
+        .connection_timeout(std::time::Duration::from_secs(5)) // 避免死锁或耗尽时死等 30 秒
         .build(manager)?;
 
     // 首次连接：建表 + 版本化迁移（保证在连接池对外服务前完成）

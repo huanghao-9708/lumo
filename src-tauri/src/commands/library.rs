@@ -98,7 +98,7 @@ pub fn library_get_album_tracks(
         .map_err(|e| e.into())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_get_album_by_id(
     db_state: State<'_, DbState>,
     album_id: i64,
@@ -109,7 +109,7 @@ pub fn library_get_album_by_id(
         .map_err(|e| e.into())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_get_artist_by_id(
     db_state: State<'_, DbState>,
     artist_id: i64,
@@ -489,7 +489,7 @@ pub async fn library_get_lyrics(
     Ok(fetched_lyrics.or_else(|| local_lyrics.map(|(_, c, _, _)| c)))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_get_track_file_info(
     db_state: State<'_, DbState>,
     track_id: i64,
@@ -566,18 +566,18 @@ pub fn library_remove_playlist_item(
     .map_err(|e| e.into())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_save_play_queue(
     db_state: State<'_, DbState>,
     track_ids: Vec<i64>,
 ) -> Result<(), AppError> {
     let _trace = ipc_trace!("library_save_play_queue");
-    let conn = db_state.db.get()?;
-    crate::repositories::track_repo::TrackRepo::save_play_queue(&conn, &track_ids)
+    let mut conn = db_state.db.get()?;
+    crate::repositories::track_repo::TrackRepo::save_play_queue(&mut conn, &track_ids)
         .map_err(|e| e.into())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_get_play_queue(db_state: State<'_, DbState>) -> Result<Vec<TrackDTO>, AppError> {
     let _trace = ipc_trace!("library_get_play_queue");
     let conn = db_state.db.get()?;

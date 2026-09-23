@@ -228,8 +228,8 @@ impl TrackRepo {
         )
     }
 
-    pub fn save_play_queue(conn: &Connection, track_ids: &[i64]) -> rusqlite::Result<()> {
-        let tx = conn.unchecked_transaction()?;
+    pub fn save_play_queue(conn: &mut Connection, track_ids: &[i64]) -> rusqlite::Result<()> {
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         tx.execute("DELETE FROM play_queue", [])?;
         {
             let mut stmt =

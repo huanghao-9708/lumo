@@ -9,7 +9,7 @@ use rusqlite::OptionalExtension;
 use std::fs::File;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 
 pub struct PlaybackState {
     pub manager: Mutex<PlaybackManager>,
@@ -459,6 +459,7 @@ pub fn playback_get_queue_len(playback_state: State<'_, PlaybackState>) -> Resul
 
 #[tauri::command(async)]
 pub fn playback_pause(
+    app: tauri::AppHandle,
     playback_state: State<'_, PlaybackState>,
     queue_state: State<'_, crate::services::queue::QueueState>,
 ) -> Result<(), AppError> {
@@ -481,11 +482,16 @@ pub fn playback_pause(
             );
         }
     }
+    let _ = app.emit(
+        "playback-status-changed",
+        serde_json::json!({ "is_playing": false }),
+    );
     Ok(())
 }
 
 #[tauri::command(async)]
 pub fn playback_resume(
+    app: tauri::AppHandle,
     playback_state: State<'_, PlaybackState>,
     queue_state: State<'_, crate::services::queue::QueueState>,
 ) -> Result<(), AppError> {
@@ -508,6 +514,10 @@ pub fn playback_resume(
             );
         }
     }
+    let _ = app.emit(
+        "playback-status-changed",
+        serde_json::json!({ "is_playing": true }),
+    );
     Ok(())
 }
 
