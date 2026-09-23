@@ -326,7 +326,7 @@ onMounted(() => {
     <template v-else>
 
       <!-- Header -->
-      <div class="px-8 pt-6 pb-0 flex-shrink-0" data-tauri-drag-region>
+      <div class="px-8 pt-6 pb-0 flex-shrink-0">
         <div class="flex items-end justify-between mb-2">
           <div>
             <!-- LDL Page Title = 42px -->

@@ -244,7 +244,7 @@ pub fn library_record_play(
     .map_err(|e| e.into())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_get_recently_played(
     db_state: State<'_, DbState>,
     limit: u32,
@@ -255,7 +255,7 @@ pub fn library_get_recently_played(
         .map_err(|e| e.into())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_get_favorite_tracks(
     db_state: State<'_, DbState>,
 ) -> Result<Vec<TrackDTO>, AppError> {
@@ -264,7 +264,7 @@ pub fn library_get_favorite_tracks(
     crate::repositories::track_repo::TrackRepo::get_favorite_tracks(&conn).map_err(|e| e.into())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_get_favorite_albums(
     db_state: State<'_, DbState>,
 ) -> Result<Vec<AlbumDTO>, AppError> {
@@ -273,7 +273,7 @@ pub fn library_get_favorite_albums(
     crate::repositories::album_repo::AlbumRepo::get_favorite_albums(&conn).map_err(|e| e.into())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_get_favorite_artists(
     db_state: State<'_, DbState>,
 ) -> Result<Vec<ArtistDTO>, AppError> {
@@ -282,7 +282,7 @@ pub fn library_get_favorite_artists(
     crate::repositories::artist_repo::ArtistRepo::get_favorite_artists(&conn).map_err(|e| e.into())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_toggle_favorite_album(
     db_state: State<'_, DbState>,
     album_id: i64,
@@ -294,7 +294,7 @@ pub fn library_toggle_favorite_album(
         .map_err(|e| e.into())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_toggle_favorite_artist(
     db_state: State<'_, DbState>,
     artist_id: i64,
@@ -1399,7 +1399,7 @@ pub async fn library_match_single_artist_cover(
 /// - `"most_played"`：按 play_count 降序，返回播放次数最多的 Top N 歌曲
 ///
 /// `limit` 默认为 50，前端可传入自定义值。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_get_smart_playlist(
     db_state: State<'_, DbState>,
     kind: String,
