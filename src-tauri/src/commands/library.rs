@@ -955,10 +955,11 @@ async fn fetch_album_cover_impl(
     app_dir: &std::path::Path,
     pool: &crate::db::DbPool,
     album_id: i64,
+    force: bool,
 ) -> Result<Option<crate::models::FetchedCover>, AppError> {
-    // 会话级负缓存：近期尝试过就不再发请求（避免每次打开详情都反复拉取未命中的目标）
+    // 会话级负缓存：近期尝试过就不再发请求（手动主动匹配时 force=true 绕过）
     let attempt_key = format!("album:{}", album_id);
-    if cover_attempt_recently(&attempt_key) {
+    if !force && cover_attempt_recently(&attempt_key) {
         return Ok(None);
     }
     mark_cover_attempt(&attempt_key);
@@ -1060,11 +1061,6 @@ async fn fetch_album_cover_impl(
 }
 
 /// 触发专辑封面在线拉取（第七轮：后台化）。
-///
-/// dev 模式 IPC 走 `http://ipc.localhost`，受 WebView2 HTTP/1.1 单 host 6 并发上限约束；
-/// 此命令单次 2-10s，若同步占用 channel，5+ 个无封面专辑就会把其他列表 IPC 全部
-/// Stalled 5-15s。因此命令体立即返回 `Ok(None)` 不占并发坑位，真实下载在
-/// tokio 后台任务执行，完成后 emit `album-cover-fetched` 事件，由前端订阅更新 UI。
 #[tauri::command]
 pub async fn library_fetch_missing_album_cover(
     app: tauri::AppHandle,
@@ -1074,12 +1070,10 @@ pub async fn library_fetch_missing_album_cover(
 ) -> Result<Option<i64>, AppError> {
     let _trace = ipc_trace!("library_fetch_missing_album_cover");
 
-    // P0-07 在线元数据隐私：默认拒绝，未显式授权不向 iTunes 发送专辑/艺人名称
     if allow_online != Some(true) {
         return Ok(None);
     }
 
-    // State<'_, DbState> 有生命周期，不能 move 进 spawn；DbPool 内部是 Arc，clone 后 'static。
     let app_clone = app.clone();
     let app_dir = app
         .path()
@@ -1087,7 +1081,7 @@ pub async fn library_fetch_missing_album_cover(
         .unwrap_or_else(|_| std::path::PathBuf::from("."));
     let pool = db_state.db.clone();
     tokio::spawn(async move {
-        match fetch_album_cover_impl(&app_dir, &pool, album_id).await {
+        match fetch_album_cover_impl(&app_dir, &pool, album_id, false).await {
             Ok(Some(cover)) => {
                 use tauri::Emitter;
                 let _ = app_clone.emit(
@@ -1104,7 +1098,83 @@ pub async fn library_fetch_missing_album_cover(
         }
     });
 
-    Ok(None) // 立即返回，不占 WebView 并发
+    Ok(None)
+}
+
+/// 获取用于批量匹配封面的全量专辑目标列表
+#[tauri::command(async)]
+pub fn library_get_album_match_targets(
+    db_state: State<'_, DbState>,
+    only_missing: Option<bool>,
+) -> Result<Vec<crate::models::AlbumMatchTargetDTO>, AppError> {
+    let _trace = ipc_trace!("library_get_album_match_targets");
+    let conn = db_state.db.get()?;
+    let only_missing = only_missing.unwrap_or(false);
+
+    let sql = "
+        SELECT
+            al.id,
+            al.title,
+            (SELECT GROUP_CONCAT(aa2.name, ', ') FROM album_artists aa1 JOIN artists aa2 ON aa1.artist_id = aa2.id WHERE aa1.album_id = al.id ORDER BY aa1.position) AS artist_name,
+            (al.cover_artwork_id IS NOT NULL) AS has_cover
+        FROM albums al
+        WHERE (?1 = 0 OR al.cover_artwork_id IS NULL)
+        ORDER BY al.normalized_title ASC, al.id ASC
+    ";
+
+    let mut stmt = conn.prepare(sql)?;
+    let only_missing_int: i64 = if only_missing { 1 } else { 0 };
+    let rows = stmt.query_map(rusqlite::params![only_missing_int], |row| {
+        Ok(crate::models::AlbumMatchTargetDTO {
+            id: row.get(0)?,
+            title: row.get(1)?,
+            artist_name: row.get(2)?,
+            has_cover: row.get::<_, i64>(3)? != 0,
+        })
+    })?;
+
+    let mut results = Vec::new();
+    for r in rows {
+        results.push(r?);
+    }
+    Ok(results)
+}
+
+/// 同步拉取单个专辑封面（供批量调度器使用，返回真实 artwork_id 并触发前端事件）
+#[tauri::command(async)]
+pub async fn library_match_single_album_cover(
+    app: tauri::AppHandle,
+    db_state: State<'_, DbState>,
+    album_id: i64,
+    force: Option<bool>,
+) -> Result<Option<i64>, AppError> {
+    let _trace = ipc_trace!("library_match_single_album_cover");
+    let app_dir = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let pool = db_state.db.clone();
+    let is_force = force.unwrap_or(true);
+
+    match fetch_album_cover_impl(&app_dir, &pool, album_id, is_force).await {
+        Ok(Some(cover)) => {
+            use tauri::Emitter;
+            let _ = app.emit(
+                "album-cover-fetched",
+                crate::models::CoverFetchedEvent {
+                    target_id: album_id,
+                    artwork_id: cover.artwork_id,
+                    cover_thumbnail_base64: cover.thumbnail_base64,
+                },
+            );
+            Ok(Some(cover.artwork_id))
+        }
+        Ok(None) => Ok(None),
+        Err(e) => {
+            tracing::warn!("[cover] batch album={} fetch failed: {}", album_id, e);
+            Err(e)
+        }
+    }
 }
 
 /// 艺人头像的真实拉取流程（网易云 → iTunes 兜底 + 缩略图 + 写库）。
@@ -1113,9 +1183,10 @@ async fn fetch_artist_cover_impl(
     app_dir: &std::path::Path,
     pool: &crate::db::DbPool,
     artist_id: i64,
+    force: bool,
 ) -> Result<Option<crate::models::FetchedCover>, AppError> {
     let attempt_key = format!("artist:{}", artist_id);
-    if cover_attempt_recently(&attempt_key) {
+    if !force && cover_attempt_recently(&attempt_key) {
         return Ok(None);
     }
     mark_cover_attempt(&attempt_key);
@@ -1166,6 +1237,13 @@ async fn fetch_artist_cover_impl(
     }
 
     let thumbnail_blob = crate::services::library::LibraryService::generate_thumbnail(&bytes);
+    let thumbnail_base64 = thumbnail_blob.as_ref().map(|b| {
+        use base64::{engine::general_purpose, Engine as _};
+        format!(
+            "data:image/jpeg;base64,{}",
+            general_purpose::STANDARD.encode(b)
+        )
+    });
 
     let conn = pool.get()?;
     use rusqlite::OptionalExtension;
@@ -1196,7 +1274,7 @@ async fn fetch_artist_cover_impl(
 
     Ok(Some(crate::models::FetchedCover {
         artwork_id,
-        thumbnail_base64: None,
+        thumbnail_base64,
     }))
 }
 
@@ -1222,7 +1300,7 @@ pub async fn library_fetch_missing_artist_cover(
         .unwrap_or_else(|_| std::path::PathBuf::from("."));
     let pool = db_state.db.clone();
     tokio::spawn(async move {
-        match fetch_artist_cover_impl(&app_dir, &pool, artist_id).await {
+        match fetch_artist_cover_impl(&app_dir, &pool, artist_id, false).await {
             Ok(Some(cover)) => {
                 use tauri::Emitter;
                 let _ = app_clone.emit(
@@ -1240,6 +1318,80 @@ pub async fn library_fetch_missing_artist_cover(
     });
 
     Ok(None) // 立即返回，不占 WebView 并发
+}
+
+/// 获取用于批量匹配头像的全量艺人目标列表
+#[tauri::command(async)]
+pub fn library_get_artist_match_targets(
+    db_state: State<'_, DbState>,
+    only_missing: Option<bool>,
+) -> Result<Vec<crate::models::ArtistMatchTargetDTO>, AppError> {
+    let _trace = ipc_trace!("library_get_artist_match_targets");
+    let conn = db_state.db.get()?;
+    let only_missing = only_missing.unwrap_or(false);
+
+    let sql = "
+        SELECT
+            ar.id,
+            ar.name,
+            (ar.avatar_artwork_id IS NOT NULL) AS has_avatar
+        FROM artists ar
+        WHERE (?1 = 0 OR ar.avatar_artwork_id IS NULL)
+        ORDER BY ar.normalized_name ASC, ar.id ASC
+    ";
+
+    let mut stmt = conn.prepare(sql)?;
+    let only_missing_int: i64 = if only_missing { 1 } else { 0 };
+    let rows = stmt.query_map(rusqlite::params![only_missing_int], |row| {
+        Ok(crate::models::ArtistMatchTargetDTO {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            has_avatar: row.get::<_, i64>(2)? != 0,
+        })
+    })?;
+
+    let mut results = Vec::new();
+    for r in rows {
+        results.push(r?);
+    }
+    Ok(results)
+}
+
+/// 同步拉取单个艺人头像（供批量调度器使用，返回真实 artwork_id 并触发前端事件）
+#[tauri::command(async)]
+pub async fn library_match_single_artist_cover(
+    app: tauri::AppHandle,
+    db_state: State<'_, DbState>,
+    artist_id: i64,
+    force: Option<bool>,
+) -> Result<Option<i64>, AppError> {
+    let _trace = ipc_trace!("library_match_single_artist_cover");
+    let app_dir = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let pool = db_state.db.clone();
+    let is_force = force.unwrap_or(true);
+
+    match fetch_artist_cover_impl(&app_dir, &pool, artist_id, is_force).await {
+        Ok(Some(cover)) => {
+            use tauri::Emitter;
+            let _ = app.emit(
+                "artist-cover-fetched",
+                crate::models::CoverFetchedEvent {
+                    target_id: artist_id,
+                    artwork_id: cover.artwork_id,
+                    cover_thumbnail_base64: cover.thumbnail_base64,
+                },
+            );
+            Ok(Some(cover.artwork_id))
+        }
+        Ok(None) => Ok(None),
+        Err(e) => {
+            tracing::warn!("[cover] batch artist={} fetch failed: {}", artist_id, e);
+            Err(e)
+        }
+    }
 }
 
 /// 智能歌单查询 command。

@@ -3,7 +3,8 @@ import { computed, onMounted, onBeforeUnmount, ref } from 'vue';
 import { User, Loader2, Sparkles, CheckCircle2, X } from 'lucide-vue-next';
 import { usePlayerStore } from '../../stores/player';
 import { getArtworkUrl } from '../../utils';
-import { libraryFetchMissingArtistCover } from '../../api/library';
+import { libraryGetArtistMatchTargets, libraryMatchSingleArtistCover } from '../../api/library';
+import type { ArtistMatchTargetDTO } from '../../api/types';
 import { useScrollRestore } from '../../composables/useScrollRestore';
 
 const playerStore = usePlayerStore();
@@ -21,62 +22,89 @@ function getColorClass(color: string): string {
   return color || 'from-warm-500 to-warm-700';
 }
 
-/* ============ 网络匹配艺人图片功能 ============ */
+/* ============ 网络匹配艺人图片功能（全库覆盖） ============ */
 const isMatching = ref(false);
 const matchCompleted = ref(false);
 const matchTotal = ref(0);
 const matchProcessed = ref(0);
 const matchSuccessCount = ref(0);
 const currentMatchName = ref('');
+const missingTotalCount = ref<number | null>(null);
 let matchAborted = false;
 
-const missingCount = computed(() => artists.value.filter(a => !a.avatar_artwork_id).length);
+const missingCount = computed(() => missingTotalCount.value !== null ? missingTotalCount.value : artists.value.filter(a => !a.avatar_artwork_id).length);
 const matchPercent = computed(() => (matchTotal.value ? Math.min(100, (matchProcessed.value / matchTotal.value) * 100) : 0));
+
+async function refreshMissingCount() {
+  try {
+    const missingTargets = await libraryGetArtistMatchTargets(true);
+    missingTotalCount.value = missingTargets.length;
+  } catch (e) {
+    console.error('获取全库待匹配艺人数失败:', e);
+  }
+}
 
 async function startMatchingCovers() {
   if (isMatching.value) return;
-  // 优先匹配没有头像的艺人，若全部已有则处理全部
-  const targets = artists.value.filter(a => !a.avatar_artwork_id);
-  const queue = targets.length > 0 ? targets : [...artists.value];
-  if (queue.length === 0) return;
+
+  // 默认从后端数据库拉取所有未拥有头像的艺人；若全库均已拥有头像，则匹配全库全部艺人
+  let targets: ArtistMatchTargetDTO[] = [];
+  try {
+    targets = await libraryGetArtistMatchTargets(true);
+    if (targets.length === 0) {
+      targets = await libraryGetArtistMatchTargets(false);
+    }
+  } catch (e) {
+    console.error('获取全量艺人匹配目标失败:', e);
+    return;
+  }
+
+  if (targets.length === 0) return;
 
   isMatching.value = true;
   matchCompleted.value = false;
-  matchTotal.value = queue.length;
+  matchTotal.value = targets.length;
   matchProcessed.value = 0;
   matchSuccessCount.value = 0;
   matchAborted = false;
 
-  // 每次并发 3 个，平滑推进
-  const CONCURRENCY = 3;
+  // 并发 2 个，平滑有序推进，避免触发网络请求风控
+  const CONCURRENCY = 2;
   let idx = 0;
 
   async function worker() {
-    while (idx < queue.length && !matchAborted) {
-      const cur = queue[idx++];
+    while (idx < targets.length && !matchAborted) {
+      const cur = targets[idx++];
       if (!cur) break;
       currentMatchName.value = cur.name;
       try {
-        const res = await libraryFetchMissingArtistCover(cur.id, true);
-        if (res) matchSuccessCount.value++;
+        const res = await libraryMatchSingleArtistCover(cur.id, true);
+        if (res) {
+          matchSuccessCount.value++;
+          if (missingTotalCount.value !== null && missingTotalCount.value > 0) {
+            missingTotalCount.value = Math.max(0, missingTotalCount.value - 1);
+          }
+        }
       } catch (e) {
         console.error('匹配艺人图片失败:', cur.name, e);
       }
       matchProcessed.value++;
-      // 微小间隔，保护网络与界面平滑
-      await new Promise(r => setTimeout(r, 120));
+      await new Promise(r => setTimeout(r, 160));
     }
   }
 
-  const workers = Array.from({ length: Math.min(CONCURRENCY, queue.length) }, () => worker());
+  const workers = Array.from({ length: Math.min(CONCURRENCY, targets.length) }, () => worker());
   await Promise.all(workers);
 
   isMatching.value = false;
   if (!matchAborted) {
     matchCompleted.value = true;
+    refreshMissingCount();
     setTimeout(() => {
       matchCompleted.value = false;
     }, 4000);
+  } else {
+    refreshMissingCount();
   }
 }
 
@@ -94,6 +122,7 @@ const sentinelRef = ref<HTMLElement | null>(null);
 let observer: IntersectionObserver | null = null;
 
 onMounted(() => {
+  refreshMissingCount();
   if (!scrollContainer.value) return;
   observer = new IntersectionObserver(
     (entries) => {
@@ -131,10 +160,10 @@ onBeforeUnmount(() => {
         v-if="!isMatching"
         @click="startMatchingCovers"
         class="h-[32px] px-3.5 rounded-[8px] text-[12px] font-medium bg-bg-content border border-border-color hover:border-brand-orange/40 hover:text-brand-orange transition-all flex items-center gap-2 shadow-sm"
-        title="从互联网自动搜索并补全艺人头像图片"
+        :title="missingCount === 0 ? '从互联网重新搜索并补全整个曲库所有艺人头像' : '从互联网自动搜索并补全未拥有头像的艺人'"
       >
         <Sparkles class="w-3.5 h-3.5 text-brand-orange" />
-        匹配网络艺人图片
+        {{ missingCount === 0 ? '重新匹配全部头像' : '匹配网络艺人图片' }}
       </button>
       
       <button

@@ -191,3 +191,16 @@ export interface StartupBundleDTO {
   /** 持久化的播放队列 */
   play_queue: TrackDTO[];
 }
+
+export interface AlbumMatchTargetDTO {
+  id: number;
+  title: string;
+  artistName?: string | null;
+  hasCover: boolean;
+}
+
+export interface ArtistMatchTargetDTO {
+  id: number;
+  name: string;
+  hasAvatar: boolean;
+}

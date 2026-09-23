@@ -535,3 +535,22 @@ pub struct AiTestConnectionResult {
     pub message: String,
     pub latency_ms: u64,
 }
+
+/// 全量匹配封面用的专辑目标
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumMatchTargetDTO {
+    pub id: i64,
+    pub title: String,
+    pub artist_name: Option<String>,
+    pub has_cover: bool,
+}
+
+/// 全量匹配头像用的艺人目标
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtistMatchTargetDTO {
+    pub id: i64,
+    pub name: String,
+    pub has_avatar: bool,
+}

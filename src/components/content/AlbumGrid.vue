@@ -3,7 +3,8 @@ import { computed, onMounted, onBeforeUnmount, ref } from 'vue';
 import { Play, Loader2, Disc3, Sparkles, CheckCircle2, X } from 'lucide-vue-next';
 import { usePlayerStore, type Album } from '../../stores/player';
 import { getArtworkUrl } from '../../utils';
-import { libraryGetAlbumTracks, libraryFetchMissingAlbumCover } from '../../api/library';
+import { libraryGetAlbumTracks, libraryGetAlbumMatchTargets, libraryMatchSingleAlbumCover } from '../../api/library';
+import type { AlbumMatchTargetDTO } from '../../api/types';
 import { useScrollRestore } from '../../composables/useScrollRestore';
 
 const playerStore = usePlayerStore();
@@ -61,61 +62,89 @@ const isLoading = computed(() => playerStore.isLoadingAlbums);
 const isError = computed(() => playerStore.isErrorAlbums);
 const hasMoreAlbums = computed(() => playerStore.hasMoreAlbums);
 
-/* ============ 网络匹配专辑封面功能 ============ */
+/* ============ 网络匹配专辑封面功能（全库覆盖） ============ */
 const isMatching = ref(false);
 const matchCompleted = ref(false);
 const matchTotal = ref(0);
 const matchProcessed = ref(0);
 const matchSuccessCount = ref(0);
 const currentMatchName = ref('');
+const missingTotalCount = ref<number | null>(null);
 let matchAborted = false;
 
-const missingCount = computed(() => playerStore.albums.filter(a => !a.cover_artwork_id && !a.cover_thumb).length);
+const missingCount = computed(() => missingTotalCount.value !== null ? missingTotalCount.value : playerStore.albums.filter(a => !a.cover_artwork_id && !a.cover_thumb).length);
 const matchPercent = computed(() => (matchTotal.value ? Math.min(100, (matchProcessed.value / matchTotal.value) * 100) : 0));
+
+async function refreshMissingCount() {
+  try {
+    const missingTargets = await libraryGetAlbumMatchTargets(true);
+    missingTotalCount.value = missingTargets.length;
+  } catch (e) {
+    console.error('获取全库待匹配专辑数失败:', e);
+  }
+}
 
 async function startMatchingCovers() {
   if (isMatching.value) return;
-  // 优先匹配没有封面的专辑，若全部已有则对当前专辑做刷新匹配
-  const targets = playerStore.albums.filter(a => !a.cover_artwork_id && !a.cover_thumb);
-  const queue = targets.length > 0 ? targets : [...playerStore.albums];
-  if (queue.length === 0) return;
+
+  // 默认从后端数据库拉取所有未拥有封面的专辑；若全库均已拥有封面，则匹配全库全部专辑
+  let targets: AlbumMatchTargetDTO[] = [];
+  try {
+    targets = await libraryGetAlbumMatchTargets(true);
+    if (targets.length === 0) {
+      targets = await libraryGetAlbumMatchTargets(false);
+    }
+  } catch (e) {
+    console.error('获取全量匹配目标失败:', e);
+    return;
+  }
+
+  if (targets.length === 0) return;
 
   isMatching.value = true;
   matchCompleted.value = false;
-  matchTotal.value = queue.length;
+  matchTotal.value = targets.length;
   matchProcessed.value = 0;
   matchSuccessCount.value = 0;
   matchAborted = false;
 
-  // 每次并发 3 个，平滑推进
-  const CONCURRENCY = 3;
+  // 并发 2 个，平滑有序推进，避免触发网络请求风控
+  const CONCURRENCY = 2;
   let idx = 0;
 
   async function worker() {
-    while (idx < queue.length && !matchAborted) {
-      const cur = queue[idx++];
+    while (idx < targets.length && !matchAborted) {
+      const cur = targets[idx++];
       if (!cur) break;
-      currentMatchName.value = cur.title;
+      currentMatchName.value = cur.artistName ? `${cur.title} (${cur.artistName})` : cur.title;
       try {
-        const res = await libraryFetchMissingAlbumCover(cur.id, true);
-        if (res) matchSuccessCount.value++;
+        const res = await libraryMatchSingleAlbumCover(cur.id, true);
+        if (res) {
+          matchSuccessCount.value++;
+          if (missingTotalCount.value !== null && missingTotalCount.value > 0) {
+            missingTotalCount.value = Math.max(0, missingTotalCount.value - 1);
+          }
+        }
       } catch (e) {
         console.error('匹配专辑封面失败:', cur.title, e);
       }
       matchProcessed.value++;
-      await new Promise(r => setTimeout(r, 120));
+      await new Promise(r => setTimeout(r, 160));
     }
   }
 
-  const workers = Array.from({ length: Math.min(CONCURRENCY, queue.length) }, () => worker());
+  const workers = Array.from({ length: Math.min(CONCURRENCY, targets.length) }, () => worker());
   await Promise.all(workers);
 
   isMatching.value = false;
   if (!matchAborted) {
     matchCompleted.value = true;
+    refreshMissingCount();
     setTimeout(() => {
       matchCompleted.value = false;
     }, 4000);
+  } else {
+    refreshMissingCount();
   }
 }
 
@@ -133,6 +162,7 @@ const sentinelRef = ref<HTMLElement | null>(null);
 let observer: IntersectionObserver | null = null;
 
 onMounted(() => {
+  refreshMissingCount();
   if (!gridContainer.value) return;
   observer = new IntersectionObserver(
     (entries) => {
@@ -173,10 +203,10 @@ onBeforeUnmount(() => {
           v-if="!isMatching"
           @click="startMatchingCovers"
           class="h-[32px] px-3.5 rounded-[8px] text-[12px] font-medium bg-bg-content border border-border-color hover:border-brand-orange/40 hover:text-brand-orange transition-all flex items-center gap-2 shadow-sm"
-          title="从互联网自动搜索并补全专辑封面"
+          :title="missingCount === 0 ? '从互联网重新搜索并补全整个曲库所有专辑封面' : '从互联网自动搜索并补全未拥有封面的专辑'"
         >
           <Sparkles class="w-3.5 h-3.5 text-brand-orange" />
-          匹配网络封面
+          {{ missingCount === 0 ? '重新匹配全部封面' : '匹配网络封面' }}
         </button>
         
         <button

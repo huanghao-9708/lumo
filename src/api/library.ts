@@ -13,7 +13,9 @@ import type {
   TrackFileInfoDTO,
   LibraryStatsDTO,
   LibraryInsightsDTO,
-  StartupBundleDTO
+  StartupBundleDTO,
+  AlbumMatchTargetDTO,
+  ArtistMatchTargetDTO
 } from './types';
 
 // Tracks
@@ -184,6 +186,26 @@ export function libraryFetchMissingAlbumCover(albumId: number, allowOnline: bool
 
 export function libraryFetchMissingArtistCover(artistId: number, allowOnline: boolean): Promise<number | null> {
   return invoke('library_fetch_missing_artist_cover', { artistId, allowOnline });
+}
+
+/** 获取用于全量/缺失封面匹配的全部专辑目标 */
+export function libraryGetAlbumMatchTargets(onlyMissing?: boolean): Promise<AlbumMatchTargetDTO[]> {
+  return invoke('library_get_album_match_targets', { onlyMissing });
+}
+
+/** 获取用于全量/缺失头像匹配的全部艺人目标 */
+export function libraryGetArtistMatchTargets(onlyMissing?: boolean): Promise<ArtistMatchTargetDTO[]> {
+  return invoke('library_get_artist_match_targets', { onlyMissing });
+}
+
+/** 同步拉取单个专辑封面（返回 artwork_id 并触发前端事件） */
+export function libraryMatchSingleAlbumCover(albumId: number, force?: boolean): Promise<number | null> {
+  return invoke('library_match_single_album_cover', { albumId, force });
+}
+
+/** 同步拉取单个艺人头像（返回 artwork_id 并触发前端事件） */
+export function libraryMatchSingleArtistCover(artistId: number, force?: boolean): Promise<number | null> {
+  return invoke('library_match_single_artist_cover', { artistId, force });
 }
 
 export function libraryGetLyrics(trackId: number, allowOnline: boolean): Promise<string | null> {
