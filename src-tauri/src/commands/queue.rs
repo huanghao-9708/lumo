@@ -102,9 +102,9 @@ pub fn internal_play_item(
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
     // 解码在 manager 锁外做（可能几十秒），锁内只做微秒级的换源操作
-    let _duration = if let Some(reader) = webdav_reader {
+    if let Some(reader) = webdav_reader {
         let buffered_reader = std::io::BufReader::with_capacity(64 * 1024, reader);
-        let (decoder, dur) =
+        let decoder =
             PlaybackManager::build_decoder(buffered_reader, webdav_info.expected_size)?;
 
         {
@@ -124,22 +124,23 @@ pub fn internal_play_item(
                 expected_size,
             );
         }
-        dur
     } else if let Some(path) = path_buf {
         let file = std::fs::File::open(&path)
             .map_err(|e| AppError::Internal(format!("Failed to open file: {}", e)))?;
         let byte_len = std::fs::metadata(&path).ok().map(|m| m.len());
-        let (decoder, dur) = PlaybackManager::build_decoder(file, byte_len)?;
+        let decoder = PlaybackManager::build_decoder(file, byte_len)?;
 
         let manager = playback_state
             .manager
             .lock()
             .map_err(|e| AppError::Internal(e.to_string()))?;
         manager.play_prepared(decoder)?;
-        dur
     } else {
         return Err(AppError::Internal("No playable source found".to_string()));
     };
+
+    // 音频源已注入底层播放器，提前释放 play_lock，不再阻塞后续切歌排队
+    drop(_play_serial);
 
     // 播放器已接下这一首，此时才把队列位置写定（CR-002）。
     if let Ok(mut q) = queue_state.queue.lock() {
@@ -310,7 +311,7 @@ pub fn internal_enqueue_next(
 
     if let Some(reader) = webdav_reader {
         let buffered_reader = std::io::BufReader::with_capacity(64 * 1024, reader);
-        let (decoder, _dur) =
+        let decoder =
             PlaybackManager::build_decoder(buffered_reader, webdav_info.expected_size)?;
 
         {
@@ -334,7 +335,7 @@ pub fn internal_enqueue_next(
         let file = std::fs::File::open(&path)
             .map_err(|e| AppError::Internal(format!("Failed to open file: {}", e)))?;
         let byte_len = std::fs::metadata(&path).ok().map(|m| m.len());
-        let (decoder, _dur) = PlaybackManager::build_decoder(file, byte_len)?;
+        let decoder = PlaybackManager::build_decoder(file, byte_len)?;
 
         let manager = playback_state
             .manager
@@ -344,6 +345,7 @@ pub fn internal_enqueue_next(
     } else {
         return Err(AppError::Internal("No playable source found".to_string()));
     }
+    drop(_play_serial);
     Ok(())
 }
 
@@ -378,15 +380,15 @@ pub fn playback_queue_state(
     queue_state: State<'_, QueueState>,
     playback_state: State<'_, PlaybackState>,
 ) -> Result<PlaybackQueueStateDto, AppError> {
-    let q = queue_state
-        .queue
-        .lock()
-        .map_err(|e| AppError::Internal(e.to_string()))?;
     let position_ms = if let Ok(manager) = playback_state.manager.lock() {
         manager.get_pos()
     } else {
         0
     };
+    let q = queue_state
+        .queue
+        .lock()
+        .map_err(|e| AppError::Internal(e.to_string()))?;
     Ok(PlaybackQueueStateDto {
         items: q.items.clone(),
         index: q.index,
@@ -584,6 +586,7 @@ pub fn queue_watcher_loop(app: AppHandle) {
                     let _ = play_item(&app, &queue_state, &playback_state, target, false);
                 } else {
                     // Normal 模式播到队尾，停止
+                    drop(q); // 显式释放 queue 锁，杜绝与 manager 锁产生死锁
                     if let Ok(manager) = playback_state.manager.lock() {
                         manager.stop();
                     }

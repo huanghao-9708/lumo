@@ -326,11 +326,10 @@ pub fn playback_play(
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
     // 解码在 manager 锁外做（可能几十秒），锁内只做微秒级的换源操作
-    let duration = if let Some(reader) = webdav_reader {
+    if let Some(reader) = webdav_reader {
         // WebDAV 流播（expected_size 作为 byte_len 传给 symphonia，否则 seek 会报 Unseekable）
         let buffered_reader = std::io::BufReader::with_capacity(64 * 1024, reader);
-        let (decoder, dur) =
-            PlaybackManager::build_decoder(buffered_reader, webdav_info.expected_size)?;
+        let decoder = PlaybackManager::build_decoder(buffered_reader, webdav_info.expected_size)?;
 
         let manager = playback_state
             .manager
@@ -350,25 +349,23 @@ pub fn playback_play(
                 expected_size,
             );
         }
-        dur
     } else if let Some(path) = path_buf {
         // 本地文件或缓存命中
         let file = File::open(&path)
             .map_err(|e| AppError::Internal(format!("Failed to open file: {}", e)))?;
         let byte_len = std::fs::metadata(&path).ok().map(|m| m.len());
-        let (decoder, dur) = PlaybackManager::build_decoder(file, byte_len)?;
+        let decoder = PlaybackManager::build_decoder(file, byte_len)?;
 
         let manager = playback_state
             .manager
             .lock()
             .map_err(|e| AppError::Internal(e.to_string()))?;
         manager.play_prepared(decoder)?;
-        dur
     } else {
         return Err(AppError::Internal("No playable source found".to_string()));
     };
 
-    Ok(duration)
+    Ok(None)
 }
 
 #[tauri::command(async)]
@@ -409,8 +406,7 @@ pub fn playback_enqueue_next(
     if let Some(reader) = webdav_reader {
         // WebDAV 流式 gapless：直接 append 到 sink（不 stop，无缝衔接）
         let buffered_reader = std::io::BufReader::with_capacity(64 * 1024, reader);
-        let (decoder, _dur) =
-            PlaybackManager::build_decoder(buffered_reader, webdav_info.expected_size)?;
+        let decoder = PlaybackManager::build_decoder(buffered_reader, webdav_info.expected_size)?;
 
         let manager = playback_state
             .manager
@@ -435,7 +431,7 @@ pub fn playback_enqueue_next(
         let file = File::open(&path)
             .map_err(|e| AppError::Internal(format!("Failed to open file: {}", e)))?;
         let byte_len = std::fs::metadata(&path).ok().map(|m| m.len());
-        let (decoder, _dur) = PlaybackManager::build_decoder(file, byte_len)?;
+        let decoder = PlaybackManager::build_decoder(file, byte_len)?;
 
         let manager = playback_state
             .manager
@@ -464,12 +460,15 @@ pub fn playback_pause(
     queue_state: State<'_, crate::services::queue::QueueState>,
 ) -> Result<(), AppError> {
     let _trace = ipc_trace!("playback_pause");
-    let manager = playback_state
-        .manager
-        .lock()
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-    manager.pause();
-    let pos = manager.get_pos();
+    let pos = {
+        let manager = playback_state
+            .manager
+            .lock()
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        manager.pause();
+        manager.get_pos()
+    }; // manager 锁在此立即释放，杜绝与 queue 锁产生嵌套死锁
+
     if let Ok(q) = queue_state.queue.lock() {
         if let Some(item) = q.items.get(q.index) {
             let _ = crate::services::platform::update_foreground(
@@ -496,12 +495,15 @@ pub fn playback_resume(
     queue_state: State<'_, crate::services::queue::QueueState>,
 ) -> Result<(), AppError> {
     let _trace = ipc_trace!("playback_resume");
-    let manager = playback_state
-        .manager
-        .lock()
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-    manager.resume();
-    let pos = manager.get_pos();
+    let pos = {
+        let manager = playback_state
+            .manager
+            .lock()
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        manager.resume();
+        manager.get_pos()
+    }; // manager 锁在此立即释放，杜绝与 queue 锁产生嵌套死锁
+
     if let Ok(q) = queue_state.queue.lock() {
         if let Some(item) = q.items.get(q.index) {
             let _ = crate::services::platform::update_foreground(
@@ -527,11 +529,13 @@ pub fn playback_stop(
     queue_state: State<'_, crate::services::queue::QueueState>,
 ) -> Result<(), AppError> {
     let _trace = ipc_trace!("playback_stop");
-    let manager = playback_state
-        .manager
-        .lock()
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-    manager.stop();
+    {
+        let manager = playback_state
+            .manager
+            .lock()
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        manager.stop();
+    } // manager 锁在此立即释放
     // 用户主动停止：旧的自动重试目标与退避一并作废（CR-002）。播放结束后观察者会把
     // 「停掉」当成播完，若还挂着待重试的那一首，它会自作主张地补播一遍。
     if let Ok(mut q) = queue_state.queue.lock() {

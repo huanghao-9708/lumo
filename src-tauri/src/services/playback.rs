@@ -133,7 +133,7 @@ impl PlaybackManager {
     pub fn build_decoder<R>(
         reader: R,
         byte_len: Option<u64>,
-    ) -> Result<(Decoder<R>, Option<u64>), String>
+    ) -> Result<Decoder<R>, String>
     where
         R: std::io::Read + std::io::Seek + Send + Sync + 'static,
     {
@@ -144,8 +144,7 @@ impl PlaybackManager {
         let decoder = builder
             .build()
             .map_err(|e| format!("Failed to decode stream: {}", e))?;
-        let duration = decoder.total_duration().map(|d| d.as_millis() as u64);
-        Ok((decoder, duration))
+        Ok(decoder)
     }
 
     /// 把已构建好的解码器接上 Sink 开始播放。
