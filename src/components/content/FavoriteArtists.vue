@@ -71,33 +71,31 @@ function toggleFav(artistId: number, e: Event) {
         style="grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));"
       >
         <div
-          v-for="(artist, index) in artists"
+          v-for="artist in artists"
           :key="artist.id"
-          class="group cursor-pointer"
+          class="group cursor-pointer flex flex-col items-center text-center"
           @click="selectArtist(artist.id)"
         >
           <div
-            class="relative w-full aspect-square mb-3 overflow-hidden flex items-center justify-center"
-            :class="[
-              index % 2 === 0 ? 'rounded-[10px]' : 'rounded-full',
-              !artist.avatar_artwork_id ? `bg-gradient-to-br ${artist.avatarColor}` : 'bg-bg-hover',
-            ]"
+            class="relative w-full aspect-square mb-3 rounded-full overflow-hidden flex items-center justify-center shadow-sm ring-1 ring-black/5 dark:ring-white/10 group-hover:shadow-md group-hover:scale-[1.03] transition-all duration-300"
+            :class="!artist.avatar_artwork_id ? `bg-gradient-to-br ${artist.avatarColor || 'from-warm-500 to-warm-700'}` : 'bg-bg-hover'"
           >
-            <!-- 有头像就显示真实图片（与歌手网格一致）；没有才退回渐变 + 人形占位 -->
+            <!-- 有头像就显示真实图片；没有才退回渐变 + 人形占位 -->
             <img
               v-if="artist.avatar_artwork_id"
               :src="getArtworkUrl(artist.avatar_artwork_id)"
-              class="w-full h-full object-cover"
+              class="w-full h-full object-cover rounded-full"
               :alt="artist.name"
+              loading="lazy"
             />
             <div v-else class="w-full h-full flex items-center justify-center bg-black/10 group-hover:bg-black/20 transition-colors-smooth">
-              <User class="w-[40px] h-[40px] text-white/60" />
+              <User class="w-[42px] h-[42px] text-white/70" />
             </div>
 
             <!-- 收藏中的歌手：星标常亮，hover 才可点（点掉即取消收藏并从本页移除） -->
             <div class="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
               <button
-                class="w-7 h-7 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center hover:bg-black/60 transition-colors-smooth"
+                class="w-7 h-7 rounded-full bg-black/50 backdrop-blur-sm flex items-center justify-center hover:bg-black/70 transition-colors-smooth"
                 title="取消收藏"
                 @click.stop="toggleFav(artist.id, $event)"
               >
@@ -106,8 +104,8 @@ function toggleFav(artistId: number, e: Event) {
             </div>
           </div>
 
-          <p class="text-[15px] text-text-primary font-medium truncate leading-tight mb-1">{{ artist.name }}</p>
-          <p class="text-[13px] text-text-secondary truncate">{{ artist.trackCount }} 首歌曲</p>
+          <p class="text-[14px] text-text-primary font-medium truncate w-full leading-tight mb-1 group-hover:text-brand-orange transition-colors-smooth">{{ artist.name }}</p>
+          <p class="text-[12px] text-text-secondary truncate w-full">{{ artist.trackCount }} 首歌曲</p>
         </div>
       </div>
     </div>
