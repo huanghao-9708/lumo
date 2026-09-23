@@ -175,7 +175,7 @@ const titleClass = computed(() =>
 );
 const lineClass = computed(() =>
   isImmersive.value
-    ? 'text-[17px] leading-[2.4] transition-colors-smooth cursor-pointer px-2 text-center'
+    ? 'text-[17px] leading-[2.4] transition-all duration-300 origin-center cursor-pointer px-2 text-center select-none'
     : 'text-[13px] leading-[1.8] transition-colors-smooth cursor-pointer',
 );
 const emptyClass = computed(() =>
@@ -186,11 +186,15 @@ const emptyClass = computed(() =>
 
 function lineColor(i: number) {
   const active = i === playerStore.activeLyricIndex;
-  if (active) return isImmersive.value ? 'text-white font-semibold' : 'text-brand-orange font-medium';
-  if (i < playerStore.activeLyricIndex) {
-    return isImmersive.value ? 'text-white/30' : 'text-text-muted';
+  if (active) {
+    return isImmersive.value
+      ? 'text-white font-bold scale-[1.05] drop-shadow-[0_2px_14px_rgba(255,255,255,0.4)]'
+      : 'text-brand-orange font-medium';
   }
-  return isImmersive.value ? 'text-white/55 hover:text-white/80' : 'text-text-secondary hover:text-text-primary';
+  if (i < playerStore.activeLyricIndex) {
+    return isImmersive.value ? 'text-white/30 scale-100' : 'text-text-muted';
+  }
+  return isImmersive.value ? 'text-white/55 hover:text-white/85 scale-100' : 'text-text-secondary hover:text-text-primary';
 }
 
 function onSeek(line: { time?: number }) {

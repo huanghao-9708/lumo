@@ -358,11 +358,11 @@ onUnmounted(() => {
     </div>
 
     <!-- ===== 底部播放栏（无封面，左侧歌名作退出入口） ===== -->
-    <div class="relative z-10 h-[96px] flex-shrink-0 flex items-center px-8 border-t border-white/10 backdrop-blur-sm bg-black/15">
+    <div class="relative z-10 h-[96px] flex-shrink-0 flex items-center justify-between px-8 border-t border-white/10 backdrop-blur-md bg-black/20 select-none">
       <!-- 左：歌名（点击退出） -->
       <button
-        class="w-[260px] flex-shrink-0 flex flex-col justify-center text-left group min-w-0"
-        title="点击退出沉浸式"
+        class="w-[260px] flex-shrink-0 flex flex-col justify-center text-left group min-w-0 z-10"
+        title="点击退出沉浸式 (Esc)"
         @click="exit"
       >
         <span class="text-[10px] font-mono uppercase tracking-wider text-white/45 mb-0.5 flex items-center gap-1">
@@ -376,37 +376,63 @@ onUnmounted(() => {
         </span>
       </button>
 
-      <!-- 中：控制 + 进度条 -->
-      <div class="flex-1 flex flex-col items-center justify-center px-8">
-        <div class="flex items-center gap-7 mb-2.5">
+      <!-- 中：控制 + 进度条（屏幕绝对物理居中） -->
+      <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[560px] max-w-[min(560px,44vw)] flex flex-col items-center justify-center z-20 pointer-events-none">
+        <!-- 核心按钮行：完美轴对称分布 -->
+        <div class="flex items-center justify-center gap-7 mb-2.5 pointer-events-auto">
+          <!-- 播放模式 -->
           <button
-            class="transition-colors-smooth"
-            :class="modeActive ? 'text-brand-orange' : 'text-white/55 hover:text-white'"
+            class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/10 transition-colors-smooth"
+            :class="modeActive ? 'text-brand-orange' : 'text-white/60 hover:text-white'"
             :title="`播放模式: ${playerStore.playMode}`"
             @click="cycleMode"
           >
             <component :is="modeIcon" class="w-[17px] h-[17px]" />
           </button>
-          <button class="text-white hover:text-brand-orange transition-colors-smooth" @click="playerStore.prevTrack()" title="上一首">
+
+          <!-- 上一首 -->
+          <button
+            class="w-8 h-8 flex items-center justify-center rounded-full text-white/90 hover:text-white hover:bg-white/10 active:scale-95 transition-all"
+            @click="playerStore.prevTrack()"
+            title="上一首"
+          >
             <SkipBack class="w-[20px] h-[20px] fill-current" />
           </button>
+
+          <!-- 播放/暂停大圆钮 -->
           <button
-            class="w-[50px] h-[50px] rounded-full bg-white text-black flex items-center justify-center hover:opacity-90 transition-opacity"
+            class="w-[50px] h-[50px] rounded-full bg-white text-black flex items-center justify-center shadow-lg hover:scale-105 active:scale-95 transition-all disabled:opacity-40 disabled:hover:scale-100"
             :disabled="!playerStore.currentTrack"
             @click="playerStore.togglePlay()"
+            :title="playerStore.isPlaying ? '暂停' : '播放'"
           >
             <Pause v-if="playerStore.isPlaying" class="w-[22px] h-[22px] fill-current" />
             <Play v-else class="w-[22px] h-[22px] fill-current ml-0.5" />
           </button>
-          <button class="text-white hover:text-brand-orange transition-colors-smooth" @click="playerStore.nextTrack()" title="下一首">
+
+          <!-- 下一首 -->
+          <button
+            class="w-8 h-8 flex items-center justify-center rounded-full text-white/90 hover:text-white hover:bg-white/10 active:scale-95 transition-all"
+            @click="playerStore.nextTrack()"
+            title="下一首"
+          >
             <SkipForward class="w-[20px] h-[20px] fill-current" />
           </button>
-          <div class="w-[17px]"></div>
+
+          <!-- 收藏（与左侧播放模式形成优雅对称） -->
+          <button
+            class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/10 transition-colors-smooth"
+            :class="trackIsFav ? 'text-brand-orange' : 'text-white/60 hover:text-white'"
+            :title="trackIsFav ? '取消收藏' : '收藏'"
+            @click="toggleFav"
+          >
+            <Heart class="w-[17px] h-[17px]" :class="trackIsFav ? 'fill-current' : ''" />
+          </button>
         </div>
 
         <!-- 进度条（原生 range，橙色 thumb） -->
-        <div class="w-full flex items-center gap-3 max-w-2xl">
-          <span class="text-[10px] font-mono text-white/60 w-9 text-right tabular-nums">{{ currentTimeText }}</span>
+        <div class="w-full flex items-center gap-3 pointer-events-auto">
+          <span class="text-[10px] font-mono text-white/60 w-10 text-right tabular-nums select-none">{{ currentTimeText }}</span>
           <input
             type="range"
             min="0"
@@ -417,12 +443,12 @@ onUnmounted(() => {
             @input="scrubMs = Math.floor(Number(($event.target as HTMLInputElement).value))"
             @change="commitScrub"
           />
-          <span class="text-[10px] font-mono text-white/60 w-9 text-left tabular-nums">{{ totalTimeText }}</span>
+          <span class="text-[10px] font-mono text-white/60 w-10 text-left tabular-nums select-none">{{ totalTimeText }}</span>
         </div>
       </div>
 
       <!-- 右：播放速度 + 音量 -->
-      <div class="flex items-center gap-3 flex-shrink-0 w-[260px] justify-end">
+      <div class="flex items-center gap-3 flex-shrink-0 w-[260px] justify-end z-10">
         <PlaybackRateButton variant="light" />
         <component :is="volumeIcon" class="w-[16px] h-[16px] text-white/60" />
         <input
@@ -434,7 +460,7 @@ onUnmounted(() => {
           @input="playerStore.setVolume(Math.floor(Number(($event.target as HTMLInputElement).value)))"
           @wheel="onVolumeWheel"
         />
-        <span class="text-[10px] font-mono text-white/60 w-7 tabular-nums">{{ playerStore.volume }}</span>
+        <span class="text-[10px] font-mono text-white/60 w-7 tabular-nums select-none">{{ playerStore.volume }}</span>
       </div>
     </div>
 
