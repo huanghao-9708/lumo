@@ -601,7 +601,7 @@ mod tests {
         // 只给一条连接并先占住，第二次 get 在超时后失败——就是线上"数据库正忙"的形态
         let pool = r2d2::Pool::builder()
             .max_size(1)
-            .connection_timeout(Duration::from_millis(50))
+            .connection_timeout(Duration::from_millis(500))
             .build(r2d2_sqlite::SqliteConnectionManager::file(dir.db_path()))
             .expect("构造连接池失败");
         let held = pool.get().expect("首次取连接应成功");
