@@ -165,10 +165,13 @@ fn backfill_artwork_thumbnails(app: tauri::AppHandle, pool: &DbPool) {
         };
 
         for (id, blob) in prepared {
-            if tx.execute(
-                "UPDATE artwork SET thumbnail_blob = ?1 WHERE id = ?2",
-                params![blob, id],
-            ).is_ok() {
+            if tx
+                .execute(
+                    "UPDATE artwork SET thumbnail_blob = ?1 WHERE id = ?2",
+                    params![blob, id],
+                )
+                .is_ok()
+            {
                 done += 1;
             } else {
                 failed += 1;
@@ -307,6 +310,8 @@ pub fn run() {
             app.manage(PlaybackState {
                 manager: Mutex::new(playback_manager),
                 play_lock: Mutex::new(()),
+                play_generation: std::sync::atomic::AtomicU64::new(0),
+                is_transitioning: std::sync::atomic::AtomicBool::new(false),
             });
 
             let mut playback_queue = crate::services::queue::PlaybackQueue::new();

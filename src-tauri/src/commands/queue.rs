@@ -46,6 +46,13 @@ fn current_media_file_id(conn: &rusqlite::Connection, track_id: i64, snapshot: i
     .unwrap_or(snapshot)
 }
 
+struct TransitionGuard<'a>(&'a std::sync::atomic::AtomicBool);
+impl<'a> Drop for TransitionGuard<'a> {
+    fn drop(&mut self) {
+        self.0.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 pub fn internal_play_item(
     app: &AppHandle,
     queue_state: &State<'_, QueueState>,
@@ -53,6 +60,21 @@ pub fn internal_play_item(
     index: usize,
     force_local: bool,
 ) -> Result<(), AppError> {
+    // 标记正处于切歌过渡期：观察者线程检测到时跳过自动推进，防止与用户操作撞车
+    playback_state
+        .is_transitioning
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let _transition_guard = TransitionGuard(&playback_state.is_transitioning);
+
+    // 标记当前播放请求的世代号：快速切歌时，旧请求拿到 play_lock 后
+    // 发现已被新请求取代，立即跳过解码，避免作废的解码排队累加延迟。
+    let my_gen = playback_state
+        .play_generation
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        + 1;
+
+    let t_start = std::time::Instant::now();
+
     // 只读取要播的这一首，**不**先把队列位置挪过去：播放器没接下之前挪位，
     // 等于把失败的那一首标记成「已播过」，自动切歌就会跳过它（CR-002）。
     let item = {
@@ -80,10 +102,13 @@ pub fn internal_play_item(
         Err(_) => item.media_file_id,
     };
 
-    let audio_cache = cache_state
-        .cache
-        .lock()
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let audio_cache = {
+        let guard = cache_state
+            .cache
+            .lock()
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        guard.clone()
+    };
     let (path_buf, webdav_reader, webdav_info) = resolve_media_file(
         &db_state,
         &audio_cache,
@@ -91,7 +116,22 @@ pub fn internal_play_item(
         &key,
         force_local,
     )?;
-    drop(audio_cache);
+
+    let t_resolved = std::time::Instant::now();
+
+    // 快速切歌优化：resolve 结束后若已有更新的播放请求，直接跳过，不再排队等 play_lock
+    if playback_state
+        .play_generation
+        .load(std::sync::atomic::Ordering::SeqCst)
+        != my_gen
+    {
+        tracing::info!(
+            "[play_item] 跳过已过时的播放请求（等锁前，index={}，resolve={}ms）",
+            index,
+            t_resolved.duration_since(t_start).as_millis()
+        );
+        return Ok(());
+    }
 
     // 串行化「解析 → 解码 → 换源」全过程：解码（尤其远端流）可能耗时数十秒，
     // 不串行的话两次快速切歌可能乱序接上（旧曲后到反而盖掉新曲）。
@@ -101,11 +141,26 @@ pub fn internal_play_item(
         .lock()
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
+    let t_locked = std::time::Instant::now();
+
+    // 权威判定：排队期间若有更新的播放请求进来，本次解码已过时，立即让位
+    if playback_state
+        .play_generation
+        .load(std::sync::atomic::Ordering::SeqCst)
+        != my_gen
+    {
+        tracing::info!(
+            "[play_item] 跳过已过时的播放请求（拿锁后，index={}，等锁={}ms）",
+            index,
+            t_locked.duration_since(t_resolved).as_millis()
+        );
+        return Ok(());
+    }
+
     // 解码在 manager 锁外做（可能几十秒），锁内只做微秒级的换源操作
     if let Some(reader) = webdav_reader {
         let buffered_reader = std::io::BufReader::with_capacity(64 * 1024, reader);
-        let decoder =
-            PlaybackManager::build_decoder(buffered_reader, webdav_info.expected_size)?;
+        let decoder = PlaybackManager::build_decoder(buffered_reader, webdav_info.expected_size)?;
 
         {
             let manager = playback_state
@@ -139,6 +194,8 @@ pub fn internal_play_item(
         return Err(AppError::Internal("No playable source found".to_string()));
     };
 
+    let t_played = std::time::Instant::now();
+
     // 音频源已注入底层播放器，提前释放 play_lock，不再阻塞后续切歌排队
     drop(_play_serial);
 
@@ -146,6 +203,15 @@ pub fn internal_play_item(
     if let Ok(mut q) = queue_state.queue.lock() {
         q.commit_index(index);
     }
+
+    tracing::info!(
+        "[play_item 耗时] resolve={}ms  等锁={}ms  解码+换源={}ms  总计={}ms  index={}",
+        t_resolved.duration_since(t_start).as_millis(),
+        t_locked.duration_since(t_resolved).as_millis(),
+        t_played.duration_since(t_locked).as_millis(),
+        t_start.elapsed().as_millis(),
+        index,
+    );
 
     let _ = app.emit(
         "playback-track-changed",
@@ -161,12 +227,17 @@ pub fn internal_play_item(
     let duration_ms = item.duration_ms.unwrap_or(0) as i64;
     let media_file_id = Some(effective_media_file_id);
     let app_dir_clone = app_dir.clone();
-    let state_snapshot = queue_state.queue.lock().ok().map(|q| crate::services::queue::PersistedPlaybackState {
-        items: q.items.clone(),
-        index: q.index,
-        mode: q.mode,
-        position_ms: 0,
-    });
+    let state_snapshot =
+        queue_state
+            .queue
+            .lock()
+            .ok()
+            .map(|q| crate::services::queue::PersistedPlaybackState {
+                items: q.items.clone(),
+                index: q.index,
+                mode: q.mode,
+                position_ms: 0,
+            });
 
     std::thread::spawn(move || {
         if let Ok(conn) = db_pool.get() {
@@ -286,10 +357,17 @@ pub fn internal_enqueue_next(
         .unwrap_or_else(|_| PathBuf::from("."));
     let key = crate::commands::scanner::derive_credential_key(&app_dir);
 
-    let audio_cache = cache_state
-        .cache
-        .lock()
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let gen_snapshot = playback_state
+        .play_generation
+        .load(std::sync::atomic::Ordering::SeqCst);
+
+    let audio_cache = {
+        let guard = cache_state
+            .cache
+            .lock()
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        guard.clone()
+    };
     let effective_media_file_id = match db_state.db.get() {
         Ok(conn) => current_media_file_id(&conn, item.track_id, item.media_file_id),
         Err(_) => item.media_file_id,
@@ -301,7 +379,16 @@ pub fn internal_enqueue_next(
         &key,
         false,
     )?;
-    drop(audio_cache);
+
+    // 若预加载解析期间用户已切歌，直接放弃
+    if playback_state
+        .play_generation
+        .load(std::sync::atomic::Ordering::SeqCst)
+        != gen_snapshot
+    {
+        tracing::info!("[enqueue_next] 发现用户已切歌，放弃预加载 index={}", index);
+        return Ok(());
+    }
 
     // 与 internal_play_item 同一把串行锁：解析 → 解码 → 入队 全程串行（见上文说明）
     let _play_serial = playback_state
@@ -309,10 +396,22 @@ pub fn internal_enqueue_next(
         .lock()
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
+    // 拿到锁后再次校验世代：排队期间若有切歌，立即让位
+    if playback_state
+        .play_generation
+        .load(std::sync::atomic::Ordering::SeqCst)
+        != gen_snapshot
+    {
+        tracing::info!(
+            "[enqueue_next] 拿锁后发现用户已切歌，放弃预加载 index={}",
+            index
+        );
+        return Ok(());
+    }
+
     if let Some(reader) = webdav_reader {
         let buffered_reader = std::io::BufReader::with_capacity(64 * 1024, reader);
-        let decoder =
-            PlaybackManager::build_decoder(buffered_reader, webdav_info.expected_size)?;
+        let decoder = PlaybackManager::build_decoder(buffered_reader, webdav_info.expected_size)?;
 
         {
             let manager = playback_state
@@ -455,7 +554,8 @@ pub fn playback_set_mode(
 }
 
 pub fn queue_watcher_loop(app: AppHandle) {
-    let mut next_enqueued_index: Option<usize> = None;
+    // (from_index, next_index, generation)
+    let mut next_enqueued_info: Option<(usize, usize, u64)> = None;
     let mut last_progress_ms = 0u64;
     let mut last_save_time = std::time::Instant::now();
     // 自动切歌失败的退避状态挂在 `PlaybackQueue::retry` 上而不是这里的局部变量：
@@ -476,6 +576,14 @@ pub fn queue_watcher_loop(app: AppHandle) {
             Some(s) => s,
             None => continue,
         };
+
+        // 如果用户正在切歌或换源，观察者绝对不参与判定或触发额外的 play_item
+        if playback_state
+            .is_transitioning
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            continue;
+        }
 
         let (position_ms, is_active, is_empty, queue_len) = {
             if let Ok(manager) = playback_state.manager.lock() {
@@ -502,11 +610,28 @@ pub fn queue_watcher_loop(app: AppHandle) {
         }
 
         // 每 30 秒自动持久化一次播放状态 (A2-6)
+        // 关键优化：克隆快照后在独立线程异步写入磁盘，绝不在 queue 锁内执行同步文件 I/O
         if last_save_time.elapsed() >= Duration::from_secs(30) {
-            if let Ok(q) = queue_state.queue.lock() {
+            let state_opt = queue_state.queue.lock().ok().and_then(|q| {
                 if !q.items.is_empty() {
-                    crate::services::queue::save_state_to_disk(&app_dir, &q, position_ms);
+                    Some(crate::services::queue::PersistedPlaybackState {
+                        items: q.items.clone(),
+                        index: q.index,
+                        mode: q.mode,
+                        position_ms,
+                    })
+                } else {
+                    None
                 }
+            });
+            if let Some(state) = state_opt {
+                let dir_clone = app_dir.clone();
+                std::thread::spawn(move || {
+                    if let Ok(json) = serde_json::to_string_pretty(&state) {
+                        let file_path = dir_clone.join("playback_state.json");
+                        let _ = std::fs::write(file_path, json);
+                    }
+                });
             }
             last_save_time = std::time::Instant::now();
         }
@@ -520,34 +645,42 @@ pub fn queue_watcher_loop(app: AppHandle) {
             continue;
         }
 
+        let current_gen = playback_state
+            .play_generation
+            .load(std::sync::atomic::Ordering::SeqCst);
+
+        // 如果预加载所属的播放世代或曲目索引已经改变，说明用户已手动切歌或换歌，预加载在底层已失效
+        if let Some((from_idx, _, gen)) = next_enqueued_info {
+            if q.index != from_idx || current_gen != gen {
+                next_enqueued_info = None;
+            }
+        }
+
         let current_item_duration = q.items[q.index].duration_ms.unwrap_or(0);
         let remaining = current_item_duration.saturating_sub(position_ms);
 
         // 1. Gapless 预加载逻辑：曲尾前 3 秒送入底层队列
-        if queue_len == 1 && remaining < 3000 && remaining > 0 && next_enqueued_index.is_none() {
+        if queue_len == 1 && remaining < 3000 && remaining > 0 && next_enqueued_info.is_none() {
             if let Some(next_idx) = q.next_index() {
+                let current_idx = q.index;
                 drop(q);
                 if internal_enqueue_next(&app, &queue_state, &playback_state, next_idx).is_ok() {
-                    next_enqueued_index = Some(next_idx);
+                    next_enqueued_info = Some((current_idx, next_idx, current_gen));
                 }
                 continue;
             }
         }
 
         // 2. 切歌事件判定（底层队列从 2->1 变为下一首开始播放，或当前曲目播完）
-        let just_finished = playback_just_finished(
-            is_active,
-            is_empty,
-            queue_len,
-            next_enqueued_index.is_some(),
-        );
+        let just_finished =
+            playback_just_finished(is_active, is_empty, queue_len, next_enqueued_info.is_some());
         if !just_finished {
             // 已经正常播起来了：解除退避，避免上一次故障拖慢之后的正常切歌
             q.retry.clear();
         }
 
         if just_finished {
-            if let Some(next_idx) = next_enqueued_index.take() {
+            if let Some((_, next_idx, _)) = next_enqueued_info.take() {
                 // Gapless 无缝切歌成功触发
                 q.index = next_idx;
                 q.retry.clear();

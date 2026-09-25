@@ -1307,52 +1307,62 @@ const albums = shallowRef<Album[]>([]);
 
   // 监听当前播放曲目，自动加载对应歌词与文件元数据（解耦并行加载，防止慢速网络歌词阻塞元数据展示）
   let currentTrackRequestId = 0;
+  let trackInfoDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   watch(currentTrack, (newTrack) => {
     const reqId = ++currentTrackRequestId;
+    if (trackInfoDebounceTimer) {
+      clearTimeout(trackInfoDebounceTimer);
+      trackInfoDebounceTimer = null;
+    }
     if (newTrack) {
       const trackId = newTrack.id;
 
-      // 1. 独立异步加载文件元数据（本地查询，零等待）
-      libraryGetTrackFileInfo(trackId)
-        .then(fileInfo => {
-          if (reqId === currentTrackRequestId) {
-            currentTrackFileInfo.value = fileInfo;
-          }
-        })
-        .catch(e => {
-          console.error("Failed to load track file info:", e);
-          if (reqId === currentTrackRequestId) {
-            currentTrackFileInfo.value = null;
-          }
-        });
+      // 快速连续切歌时防抖 100ms，避免为飞速掠过的过时曲目发出无谓的元数据和歌词 IPC 请求
+      trackInfoDebounceTimer = setTimeout(() => {
+        if (reqId !== currentTrackRequestId) return;
 
-      // 2. 独立异步加载歌词（网络请求与本地查询独立，不拖垮主 UI）
-      const lyricsPromise = uiStore.fetchLyricsOnline
-        ? libraryGetLyrics(trackId, true)
-        : Promise.resolve(null);
+        // 1. 独立异步加载文件元数据（本地查询，零等待）
+        libraryGetTrackFileInfo(trackId)
+          .then(fileInfo => {
+            if (reqId === currentTrackRequestId) {
+              currentTrackFileInfo.value = fileInfo;
+            }
+          })
+          .catch(e => {
+            console.error("Failed to load track file info:", e);
+            if (reqId === currentTrackRequestId) {
+              currentTrackFileInfo.value = null;
+            }
+          });
 
-      lyricsPromise
-        .then(lrcText => {
-          if (reqId !== currentTrackRequestId) return;
-          if (lrcText) {
-            lyrics.value = parseLrc(lrcText);
-          } else {
-            lyrics.value = [
-              { text: newTrack.title, time: 0 },
-              { text: newTrack.artist, time: 3 },
-              { text: "— 暂无歌词 —", time: 6 }
-            ];
-          }
-        })
-        .catch(e => {
-          console.error("Failed to load lyrics:", e);
-          if (reqId === currentTrackRequestId) {
-            lyrics.value = [
-              { text: newTrack.title, time: 0 },
-              { text: "— 暂无歌词 —", time: 3 }
-            ];
-          }
-        });
+        // 2. 独立异步加载歌词（网络请求与本地查询独立，不拖垮主 UI）
+        const lyricsPromise = uiStore.fetchLyricsOnline
+          ? libraryGetLyrics(trackId, true)
+          : Promise.resolve(null);
+
+        lyricsPromise
+          .then(lrcText => {
+            if (reqId !== currentTrackRequestId) return;
+            if (lrcText) {
+              lyrics.value = parseLrc(lrcText);
+            } else {
+              lyrics.value = [
+                { text: newTrack.title, time: 0 },
+                { text: newTrack.artist, time: 3 },
+                { text: "— 暂无歌词 —", time: 6 }
+              ];
+            }
+          })
+          .catch(e => {
+            console.error("Failed to load lyrics:", e);
+            if (reqId === currentTrackRequestId) {
+              lyrics.value = [
+                { text: newTrack.title, time: 0 },
+                { text: "— 暂无歌词 —", time: 3 }
+              ];
+            }
+          });
+      }, 100);
     } else {
       lyrics.value = [];
       currentTrackFileInfo.value = null;

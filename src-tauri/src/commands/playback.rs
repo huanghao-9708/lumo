@@ -8,6 +8,7 @@ use crate::services::webdav::WebdavClient;
 use rusqlite::OptionalExtension;
 use std::fs::File;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::Mutex;
 use tauri::{Emitter, Manager, State};
 
@@ -18,6 +19,12 @@ pub struct PlaybackState {
     /// 这把锁**只有播放/入队会拿**，seek / 进度都不碰它，
     /// 所以切歌再慢也不会拖住进度条。
     pub play_lock: Mutex<()>,
+    /// 播放请求世代计数器：快速切歌时，先到的旧请求在拿到 `play_lock` 后
+    /// 发现世代已过期，立即跳过解码——避免一连串作废的解码排队累加出数秒延迟。
+    pub play_generation: AtomicU64,
+    /// 是否正处于切歌/换源进行中。观察者线程检测到为 true 时不触发自动推进切歌，
+    /// 杜绝用户手动切歌与后台自然播完推进互相撞车。
+    pub is_transitioning: AtomicBool,
 }
 
 /// 解析媒体文件到可播放的源。
@@ -304,10 +311,18 @@ pub fn playback_play(
         .unwrap_or_else(|_| PathBuf::from("."));
     let key = crate::commands::scanner::derive_credential_key(&app_dir);
 
-    let audio_cache = cache_state
-        .cache
-        .lock()
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let my_gen = playback_state
+        .play_generation
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        + 1;
+
+    let audio_cache = {
+        let guard = cache_state
+            .cache
+            .lock()
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        guard.clone()
+    };
     let (path_buf, webdav_reader, webdav_info) = resolve_media_file(
         &db_state,
         &audio_cache,
@@ -315,7 +330,19 @@ pub fn playback_play(
         &key,
         force_local.unwrap_or(false),
     )?;
-    drop(audio_cache); // 释放缓存锁，不阻塞后续播放
+
+    // 快速切歌优化：resolve 结束后若已有更新的播放请求，直接跳过，不再排队等 play_lock
+    if playback_state
+        .play_generation
+        .load(std::sync::atomic::Ordering::SeqCst)
+        != my_gen
+    {
+        tracing::info!(
+            "[playback_play] 发现新的播放请求，跳过旧请求 media_file_id={}",
+            media_file_id
+        );
+        return Ok(None);
+    }
 
     // 串行化「解析 → 解码 → 换源」：解码（尤其远端流）可能耗时数十秒，
     // 不串行的话两次快速切歌可能乱序接上（旧曲后到反而盖掉新曲）。
@@ -324,6 +351,19 @@ pub fn playback_play(
         .play_lock
         .lock()
         .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    // 排队期间若有更新的播放请求进来，本次解码已过时，立即让位
+    if playback_state
+        .play_generation
+        .load(std::sync::atomic::Ordering::SeqCst)
+        != my_gen
+    {
+        tracing::info!(
+            "[playback_play] 拿锁后发现新的播放请求，跳过旧请求 media_file_id={}",
+            media_file_id
+        );
+        return Ok(None);
+    }
 
     // 解码在 manager 锁外做（可能几十秒），锁内只做微秒级的换源操作
     if let Some(reader) = webdav_reader {
@@ -384,10 +424,17 @@ pub fn playback_enqueue_next(
         .unwrap_or_else(|_| PathBuf::from("."));
     let key = crate::commands::scanner::derive_credential_key(&app_dir);
 
-    let audio_cache = cache_state
-        .cache
-        .lock()
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let gen_snapshot = playback_state
+        .play_generation
+        .load(std::sync::atomic::Ordering::SeqCst);
+
+    let audio_cache = {
+        let guard = cache_state
+            .cache
+            .lock()
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        guard.clone()
+    };
     let (path_buf, webdav_reader, webdav_info) = resolve_media_file(
         &db_state,
         &audio_cache,
@@ -395,13 +442,36 @@ pub fn playback_enqueue_next(
         &key,
         force_local.unwrap_or(false),
     )?;
-    drop(audio_cache);
+
+    if playback_state
+        .play_generation
+        .load(std::sync::atomic::Ordering::SeqCst)
+        != gen_snapshot
+    {
+        tracing::info!(
+            "[playback_enqueue_next] 用户已切歌，放弃预加载 media_file_id={}",
+            media_file_id
+        );
+        return Ok(());
+    }
 
     // 与 playback_play 同一把串行锁：解析 → 解码 → 入队 全程串行（见上文说明）
     let _play_serial = playback_state
         .play_lock
         .lock()
         .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    if playback_state
+        .play_generation
+        .load(std::sync::atomic::Ordering::SeqCst)
+        != gen_snapshot
+    {
+        tracing::info!(
+            "[playback_enqueue_next] 拿锁后发现用户已切歌，放弃预加载 media_file_id={}",
+            media_file_id
+        );
+        return Ok(());
+    }
 
     if let Some(reader) = webdav_reader {
         // WebDAV 流式 gapless：直接 append 到 sink（不 stop，无缝衔接）
@@ -536,8 +606,8 @@ pub fn playback_stop(
             .map_err(|e| AppError::Internal(e.to_string()))?;
         manager.stop();
     } // manager 锁在此立即释放
-    // 用户主动停止：旧的自动重试目标与退避一并作废（CR-002）。播放结束后观察者会把
-    // 「停掉」当成播完，若还挂着待重试的那一首，它会自作主张地补播一遍。
+      // 用户主动停止：旧的自动重试目标与退避一并作废（CR-002）。播放结束后观察者会把
+      // 「停掉」当成播完，若还挂着待重试的那一首，它会自作主张地补播一遍。
     if let Ok(mut q) = queue_state.queue.lock() {
         q.retry.clear();
     }

@@ -74,6 +74,7 @@ impl Drop for DownloadGuard {
 /// 缓存淘汰：按 mtime 升序清到上限之下。mtime 表示「最近一次真正播放」而非下载时间
 /// ——只有 [`AudioCache::acquire_cached_path`] 会推进它，状态查询不会（CR-005），
 /// 否则正在播放的老文件会被第一个淘汰，而只是被列表扫过的文件活得最久。
+#[derive(Clone, Debug)]
 pub struct AudioCache {
     cache_dir: PathBuf,
 }

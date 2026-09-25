@@ -1,4 +1,4 @@
-use rodio::{Decoder, OutputStreamBuilder, Sink, Source};
+use rodio::{Decoder, OutputStreamBuilder, Sink};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use tracing::info;
@@ -130,10 +130,7 @@ impl PlaybackManager {
     ///
     /// 远端流的探测/解码可能耗时数十秒 —— 这正是它必须在锁外的原因：
     /// 否则 seek / 进度查询全都要排在它后面。
-    pub fn build_decoder<R>(
-        reader: R,
-        byte_len: Option<u64>,
-    ) -> Result<Decoder<R>, String>
+    pub fn build_decoder<R>(reader: R, byte_len: Option<u64>) -> Result<Decoder<R>, String>
     where
         R: std::io::Read + std::io::Seek + Send + Sync + 'static,
     {
