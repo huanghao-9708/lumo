@@ -9,6 +9,9 @@ import { useUiStore } from '../../stores/ui';
 import { useArtworkSrc } from '../../composables/useArtworkSrc';
 import { useCoverColor } from '../../composables/useCoverColor';
 import LyricsView from '../shared/LyricsView.vue';
+import EqualizerIndicator from '../shared/EqualizerIndicator.vue';
+import ActionSheet from './ActionSheet.vue';
+import type { ActionItem } from './ActionSheet.vue';
 
 /**
  * 移动端全屏沉浸式播放页。
@@ -16,29 +19,12 @@ import LyricsView from '../shared/LyricsView.vue';
  * 从 Mini Player 底部上滑展开，下滑收起。
  * 基于桌面 NowPlayingImmersive 适配为移动端单列布局。
  *
- * 布局（从上到下）：
- *   ┌───────────────────┐
- *   │  ⌄ 收起           │  Top safe-area + collapse button
- *   ├───────────────────┤
- *   │                   │
- *   │    ┌────────┐     │  大封面（居中，max-w-[280px]）
- *   │    │  封面   │     │
- *   │    └────────┘     │
- *   │                   │
- *   │  歌曲名称          │  20px Bold
- *   │  艺术家 · 专辑     │  14px Secondary
- *   │                   │
- *   │  ═════●══════     │  进度条（touch-draggable range）
- *   │  1:23     3:42    │  Mono time
- *   │                   │
- *   │  🔀 ⏮ ▶ ⏭ ♡     │  Transport controls
- *   │                   │
- *   │  ── 歌词 ──      │  Lyrics（scrollable）
- *   │  前一句            │
- *   │  > 当前行 <        │  Accent highlight
- *   │  下一句            │
- *   │                   │
- *   └───────────────────┘
+ * 视觉增强特性：
+ *   - 封面背部动态流光色晕场（Aura Halo），伴随音乐节奏呼吸流动
+ *   - 曲目标题旁的动态频谱均衡器（EqualizerIndicator）
+ *   - 细腻毛玻璃磨砂遮罩与自适应主色晕染
+ *   - 进度条拖动防抖 Scrub 优化（松手才提交 seek，保护音频链路）
+ *   - 播放倍速触控 ActionSheet
  */
 
 const playerStore = usePlayerStore();
@@ -47,14 +33,18 @@ const uiStore = useUiStore();
 /* ============ 封面 + 取色背景 ============ */
 
 const coverSrc = useArtworkSrc(() => playerStore.currentTrack?.cover_artwork_id ?? null);
-const { primary, ready } = useCoverColor(() => coverSrc.value || null);
+const { primary, secondary, ready } = useCoverColor(() => coverSrc.value || null);
 
 const FALLBACK_BG = '#2A2722';
 const bgPrimary = computed(() => (ready.value && primary.value ? primary.value : FALLBACK_BG));
+const bgSecondary = computed(() => (ready.value && secondary.value ? secondary.value : '#E28A23'));
 
-/* ============ 进度条 ============ */
+/* ============ 进度条与防抖 Scrub ============ */
 
-const currentTimeText = computed(() => formatMs(playerStore.progressMs));
+const scrubMs = ref<number | null>(null);
+const displayProgressMs = computed(() => scrubMs.value ?? playerStore.progressMs);
+
+const currentTimeText = computed(() => formatMs(displayProgressMs.value));
 const totalTimeText = computed(() => formatMs(playerStore.durationMs));
 
 function formatMs(ms: number): string {
@@ -63,14 +53,18 @@ function formatMs(ms: number): string {
   return `${String(m).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 }
 
-/* ============ 进度条拖拽 ============ */
-
 const progressRef = ref<HTMLInputElement | null>(null);
 
 function onProgressInput(e: Event) {
   const input = e.target as HTMLInputElement;
-  if (!playerStore.durationMs) return;
-  playerStore.seek(Math.floor(Number(input.value)));
+  scrubMs.value = Math.floor(Number(input.value));
+}
+
+function onProgressChange() {
+  if (scrubMs.value !== null) {
+    playerStore.seek(scrubMs.value);
+    scrubMs.value = null;
+  }
 }
 
 /* ============ 播放模式 ============ */
@@ -116,7 +110,6 @@ function fileInfoText(): string {
 const touchStartY = ref(0);
 
 function onSwipeStart(e: TouchEvent) {
-  // Only track single-finger vertical swipes
   if (e.touches.length === 1) {
     touchStartY.value = e.touches[0].clientY;
   }
@@ -125,7 +118,7 @@ function onSwipeStart(e: TouchEvent) {
 function onSwipeEnd(e: TouchEvent) {
   if (!e.changedTouches.length) return;
   const deltaY = e.changedTouches[0].clientY - touchStartY.value;
-  // Swipe down > 80px → dismiss
+  // 下滑超过 80px 收起沉浸页
   if (deltaY > 80) {
     exit();
   }
@@ -171,6 +164,15 @@ function onCoverTouchEnd(e: TouchEvent) {
   }
 }
 
+/* ============ 播放倍速 ============ */
+const showSpeedSheet = ref(false);
+const speedActions = computed<ActionItem[]>(() => {
+  return playerStore.PLAYBACK_RATES.map(rate => ({
+    label: `${rate}x${rate === 1.0 ? '（正常速度）' : ''}`,
+    onClick: () => playerStore.setPlaybackRate(rate),
+  }));
+});
+
 /* ============ 键盘 ============ */
 
 function onKey(e: KeyboardEvent) {
@@ -190,22 +192,22 @@ function onKey(e: KeyboardEvent) {
     @keydown="onKey"
   >
     <!-- 背景三层叠（与桌面 NowPlayingImmersive 一致） -->
-    <!-- 1. 高斯模糊封面 -->
+    <!-- 1. 高斯模糊封面大背景 -->
     <img
       v-if="coverSrc"
       :src="coverSrc"
       alt=""
-      class="absolute inset-0 w-full h-full object-cover scale-150 blur-[80px] opacity-50 transition-opacity duration-500 pointer-events-none"
+      class="absolute inset-0 w-full h-full object-cover scale-150 blur-[90px] opacity-45 transition-opacity duration-700 pointer-events-none"
     />
 
-    <!-- 2. 主色叠加 -->
+    <!-- 2. 主色与次色渐变混色层 -->
     <div
-      class="absolute inset-0 pointer-events-none transition-colors duration-500"
-      :style="{ background: bgPrimary, opacity: 0.55, mixBlendMode: 'color' }"
+      class="absolute inset-0 pointer-events-none transition-colors duration-700 opacity-60 mix-blend-color"
+      :style="{ background: `radial-gradient(circle at 50% 35%, ${bgSecondary}, ${bgPrimary})` }"
     ></div>
 
-    <!-- 3. 暗化层 -->
-    <div class="absolute inset-0 bg-black/35 pointer-events-none"></div>
+    <!-- 3. 暗化与半透明磨砂层 -->
+    <div class="absolute inset-0 bg-black/40 backdrop-blur-[2px] pointer-events-none"></div>
 
     <!-- ===== 顶部：收起按钮 ===== -->
     <div
@@ -233,58 +235,96 @@ function onKey(e: KeyboardEvent) {
 
     <!-- ===== 内容：单列纵向布局 ===== -->
     <div v-else class="relative z-10 flex-1 overflow-y-auto flex flex-col items-center px-6">
-      <!-- 封面（支持横滑切歌） -->
-      <div
-        class="relative aspect-square w-[75%] max-w-[280px] rounded-[10px] overflow-hidden bg-white/10 mb-5 flex-shrink-0 transition-transform duration-150 ease-out"
-        :style="{ transform: `translateX(${coverOffsetX}px)` }"
-        @touchstart.stop="onCoverTouchStart"
-        @touchmove.stop="onCoverTouchMove"
-        @touchend.stop="onCoverTouchEnd"
-      >
-        <img
-          v-if="coverSrc"
-          :src="coverSrc"
-          alt="cover"
-          class="w-full h-full object-cover select-none pointer-events-none"
-        />
-        <Disc3
-          v-else
-          class="w-12 h-12 text-white/40 absolute inset-0 m-auto"
-          aria-hidden="true"
-        />
+      
+      <!-- 封面区包装：带背部色晕场 (Aura Halo) + 横滑切歌 -->
+      <div class="relative w-[75%] max-w-[280px] aspect-square mb-5 flex-shrink-0 flex items-center justify-center">
+        <!-- 背部呼吸光晕场 -->
+        <div
+          class="mobile-aura-container pointer-events-none"
+          :class="{ 'is-playing': playerStore.isPlaying }"
+        >
+          <div
+            class="mobile-aura-blob mobile-aura-blob-1"
+            :style="{ background: bgPrimary }"
+          ></div>
+          <div
+            class="mobile-aura-blob mobile-aura-blob-2"
+            :style="{ background: bgSecondary }"
+          ></div>
+        </div>
+
+        <!-- 封面卡片 -->
+        <div
+          class="relative w-full h-full rounded-[14px] overflow-hidden bg-white/10 shadow-2xl transition-transform duration-150 ease-out z-10 border border-white/10"
+          :style="{ transform: `translateX(${coverOffsetX}px)` }"
+          @touchstart.stop="onCoverTouchStart"
+          @touchmove.stop="onCoverTouchMove"
+          @touchend.stop="onCoverTouchEnd"
+        >
+          <img
+            v-if="coverSrc"
+            :src="coverSrc"
+            alt="cover"
+            class="w-full h-full object-cover select-none pointer-events-none"
+          />
+          <Disc3
+            v-else
+            class="w-12 h-12 text-white/40 absolute inset-0 m-auto"
+            aria-hidden="true"
+          />
+        </div>
       </div>
 
-      <!-- 曲名 + 艺术家 -->
-      <h1 class="text-[20px] font-bold text-white leading-tight text-center mb-1 truncate w-full">
-        {{ playerStore.currentTrack.title }}
-      </h1>
+      <!-- 曲名 + 律动均衡器 -->
+      <div class="w-full flex items-center justify-center gap-2 mb-1 px-2">
+        <h1 class="text-[20px] font-bold text-white leading-tight truncate text-center">
+          {{ playerStore.currentTrack.title }}
+        </h1>
+        <EqualizerIndicator :playing="playerStore.isPlaying" size="sm" class="shrink-0 text-brand-orange" />
+      </div>
+
+      <!-- 艺术家与专辑 -->
       <p class="text-[14px] text-white/80 text-center mb-0.5 truncate w-full">
         {{ playerStore.currentTrack.artist }}
       </p>
       <p class="text-[13px] text-white/50 text-center mb-0.5 truncate w-full">
         {{ playerStore.currentTrack.album }}
       </p>
-      <p v-if="fileInfoText()" class="text-[11px] font-mono uppercase tracking-wider text-white/40 mb-4">
+      <p v-if="fileInfoText()" class="text-[11px] font-mono uppercase tracking-wider text-white/40 mb-3">
         {{ fileInfoText() }}
       </p>
 
-      <!-- 进度条 -->
-      <div class="w-full max-w-[360px] flex items-center gap-3 mb-4">
+      <!-- 进度条（带拖动防抖 Scrub 优化） -->
+      <div class="w-full max-w-[360px] flex items-center gap-3 mb-1">
         <span class="text-[10px] font-mono text-white/60 w-9 text-right tabular-nums">{{ currentTimeText }}</span>
         <input
           ref="progressRef"
           type="range"
           min="0"
           :max="playerStore.durationMs || 0"
-          :value="playerStore.progressMs"
+          :value="displayProgressMs"
           class="immersive-progress flex-1"
           :disabled="!playerStore.durationMs"
           @input="onProgressInput"
+          @change="onProgressChange"
         />
         <span class="text-[10px] font-mono text-white/60 w-9 text-left tabular-nums">{{ totalTimeText }}</span>
       </div>
 
-      <!-- Transport 控制 -->
+      <!-- 倍速标签：非 1.0x 时高亮品牌橙 -->
+      <div class="w-full max-w-[360px] flex justify-end mb-2">
+        <button
+          class="h-7 px-2.5 rounded-full text-[11px] font-mono font-medium transition-colors-smooth"
+          :class="playerStore.playbackRate !== 1.0
+            ? 'text-brand-orange bg-brand-orange/20 border border-brand-orange/30'
+            : 'text-white/50 active:text-white'"
+          @click="showSpeedSheet = true"
+        >
+          {{ playerStore.playbackRate }}x
+        </button>
+      </div>
+
+      <!-- Transport 控制栏 -->
       <div class="flex items-center gap-8 mb-5">
         <!-- 播放模式 -->
         <button
@@ -308,7 +348,7 @@ function onKey(e: KeyboardEvent) {
 
         <!-- Play/Pause（Primary 白底黑图标） -->
         <button
-          class="w-[56px] h-[56px] rounded-full bg-white text-black flex items-center justify-center active:opacity-80 transition-opacity"
+          class="w-[56px] h-[56px] rounded-full bg-white text-black flex items-center justify-center active:opacity-80 transition-opacity shadow-lg"
           :disabled="!playerStore.currentTrack"
           :aria-label="playerStore.isPlaying ? '暂停' : '播放'"
           @click="playerStore.togglePlay()"
@@ -343,5 +383,90 @@ function onKey(e: KeyboardEvent) {
         <LyricsView variant="immersive" />
       </div>
     </div>
+
+    <!-- 倍速选择 ActionSheet -->
+    <ActionSheet
+      :visible="showSpeedSheet"
+      :actions="speedActions"
+      @close="showSpeedSheet = false"
+    />
   </div>
 </template>
+
+<style scoped>
+/* 移动端背部流光呼吸色晕场（Aura Halo） */
+.mobile-aura-container {
+  position: absolute;
+  inset: -15%;
+  width: 130%;
+  height: 130%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  filter: blur(48px);
+  opacity: 0.65;
+  transition: opacity 0.6s ease;
+  z-index: 0;
+}
+
+.mobile-aura-blob {
+  position: absolute;
+  transform-origin: center center;
+  will-change: transform, opacity;
+  animation-play-state: paused;
+}
+
+.mobile-aura-container.is-playing .mobile-aura-blob {
+  animation-play-state: running;
+}
+
+.mobile-aura-blob-1 {
+  width: 85%;
+  height: 85%;
+  border-radius: 46% 54% 65% 35% / 40% 48% 52% 60%;
+  animation: mobile-aura-flow-1 8s ease-in-out infinite;
+}
+
+.mobile-aura-blob-2 {
+  width: 75%;
+  height: 75%;
+  border-radius: 60% 40% 30% 70% / 50% 60% 40% 50%;
+  animation: mobile-aura-flow-2 10s ease-in-out infinite;
+}
+
+@keyframes mobile-aura-flow-1 {
+  0% {
+    transform: translate(0, 0) scale(1) rotate(0deg);
+  }
+  33% {
+    transform: translate(8%, -6%) scale(1.08) rotate(120deg);
+  }
+  66% {
+    transform: translate(-6%, 8%) scale(0.94) rotate(240deg);
+  }
+  100% {
+    transform: translate(0, 0) scale(1) rotate(360deg);
+  }
+}
+
+@keyframes mobile-aura-flow-2 {
+  0% {
+    transform: translate(0, 0) scale(1) rotate(0deg);
+  }
+  33% {
+    transform: translate(-7%, 6%) scale(1.05) rotate(-120deg);
+  }
+  66% {
+    transform: translate(6%, -5%) scale(0.96) rotate(-240deg);
+  }
+  100% {
+    transform: translate(0, 0) scale(1) rotate(-360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mobile-aura-blob {
+    animation: none !important;
+  }
+}
+</style>

@@ -1,17 +1,20 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
-import { Loader2, Disc3, Shuffle, Play, Heart, ListMusic, Folder } from 'lucide-vue-next';
+import { Loader2, Disc3, Folder, ListMusic } from 'lucide-vue-next';
 import { usePlayerStore, type Album, type Track } from '../../stores/player';
-import { useArtworkSrc } from '../../composables/useArtworkSrc';
 import MobileSongRow from './MobileSongRow.vue';
 import MobileAlbumCard from './MobileAlbumCard.vue';
 import MobileSettings from './MobileSettings.vue';
 import MobileAddLocalSource from './MobileAddLocalSource.vue';
 import MobileWebdavSourceEditor from './MobileWebdavSourceEditor.vue';
 import MobileArtistDetail from './MobileArtistDetail.vue';
+import MobileAlbumDetail from './MobileAlbumDetail.vue';
+import MobilePlaylistDetail from './MobilePlaylistDetail.vue';
+import MobileSmartPlaylist from './MobileSmartPlaylist.vue';
 import HomeView from '../content/HomeView.vue';
-import ActionSheet from './ActionSheet.vue';
-import type { ActionItem } from './ActionSheet.vue';
+import MobileAiRadio from './MobileAiRadio.vue';
+import MobileTrackVersions from './MobileTrackVersions.vue';
+import ActionSheet, { type ActionItem } from './ActionSheet.vue';
 import { useScrollRestore } from '../../composables/useScrollRestore';
 
 /**
@@ -21,15 +24,17 @@ import { useScrollRestore } from '../../composables/useScrollRestore';
  *
  *   全部歌曲 / 最近播放 / 喜欢的音乐 → 歌曲列表
  *   专辑（无 activeAlbumId）         → 专辑网格
- *   专辑（有 activeAlbumId）         → 专辑详情
+ *   专辑（有 activeAlbumId）         → 专辑详情 (MobileAlbumDetail)
  *   艺术家（无 activeArtistId）      → 艺术家网格
- *   艺术家（有 activeArtistId）      → 艺术家详情
+ *   艺术家（有 activeArtistId）      → 艺术家详情 (MobileArtistDetail)
  *   文件夹                           → 文件夹视图
  *   播放列表（无 activePlaylistId）   → 歌单列表
- *   播放列表（有 activePlaylistId）   → 歌单详情
+ *   播放列表（有 activePlaylistId）   → 歌单详情 (MobilePlaylistDetail)
+ *   智能歌单                         → 智能歌单 (MobileSmartPlaylist)
  *   收藏的专辑                       → 收藏专辑网格
  *   收藏的歌手                       → 收藏歌手网格
  *   设置                             → 设置页
+ *   AI 电台                          → AI 电台 (MobileAiRadio)
  */
 
 const playerStore = usePlayerStore();
@@ -60,6 +65,9 @@ const isPlaylistListView = computed(() =>
 const isPlaylistDetailView = computed(() =>
   playerStore.activeLibraryTab === '播放列表' && !!playerStore.activePlaylistId
 );
+const isSmartPlaylistView = computed(() =>
+  playerStore.activeLibraryTab === '智能歌单'
+);
 const isFavoriteAlbumsView = computed(() =>
   playerStore.activeLibraryTab === '收藏的专辑'
 );
@@ -72,6 +80,10 @@ const isSettingsView = computed(() =>
 const isHomeView = computed(() =>
   playerStore.activeLibraryTab === '首页'
 );
+const isAiRadioView = computed(() =>
+  playerStore.activeLibraryTab === 'AI 电台'
+);
+
 const showAddLocalSource = ref(false);
 function openAddLocalSource() {
   showAddLocalSource.value = true;
@@ -92,7 +104,14 @@ function closeAddWebdavSource() {
 
 function loadForCurrentTab() {
   const tab = playerStore.activeLibraryTab;
-  if (tab === '首页') return; // 首页自管数据
+  if (tab === '首页' || tab === 'AI 电台') return;
+  if (tab === '智能歌单') {
+    if (!playerStore.activeSmartPlaylistKind) {
+      playerStore.activeSmartPlaylistKind = 'most_played';
+    }
+    playerStore.loadSmartPlaylist(playerStore.activeSmartPlaylistKind);
+    return;
+  }
   if (tab === '最近播放') playerStore.fetchRecentlyPlayed();
   else if (tab === '喜欢的音乐') playerStore.fetchFavoriteTracks();
   else if (tab === '专辑') playerStore.fetchAlbums(true);
@@ -104,7 +123,6 @@ function loadForCurrentTab() {
 }
 
 watch(() => playerStore.activeLibraryTab, () => {
-  // 历史前进/后退回到本页：数据仍在内存，重拉会把分页与滚动高度清掉，跳过这次加载
   if (playerStore.isHistoryRestore) {
     playerStore.isHistoryRestore = false;
     return;
@@ -112,15 +130,13 @@ watch(() => playerStore.activeLibraryTab, () => {
   loadForCurrentTab();
 });
 
-/* ============ 各列表的滚动位置记忆（进详情返回后还原） ============ */
+/* ============ 各列表的滚动位置记忆 ============ */
 const tracksScrollEl = useScrollRestore(() => 'm-tracks');
 const artistGridScrollEl = useScrollRestore(() => 'm-artist-grid');
 const playlistListScrollEl = useScrollRestore(() => 'm-playlist-list');
-const playlistDetailScrollEl = useScrollRestore(() => `m-playlist-detail:${playerStore.activePlaylistId ?? 0}`);
 const folderScrollEl = useScrollRestore(() => 'm-folder');
 const favoriteAlbumsScrollEl = useScrollRestore(() => 'm-favorite-albums');
 const favoriteArtistsScrollEl = useScrollRestore(() => 'm-favorite-artists');
-const albumDetailScrollEl = useScrollRestore(() => `m-album-detail:${playerStore.activeAlbumId ?? 0}`);
 
 onMounted(() => {
   if (playerStore.tracks.length === 0 && playerStore.albums.length === 0) {
@@ -170,8 +186,26 @@ const sheetActions = computed<ActionItem[]>(() => {
         playerStore.activeLibraryTab = '艺术家';
       },
     }] : []),
+    {
+      label: '音频版本与规格',
+      onClick: () => {
+        versionTargetTrack.value = track;
+        showVersionDrawer.value = true;
+      },
+    },
   ];
 });
+
+/* ============ 音频版本与规格抽屉 ============ */
+const showVersionDrawer = ref(false);
+const versionTargetTrack = ref<Track | null>(null);
+
+function onVersionChanged(newPrimaryFileId: number) {
+  if (versionTargetTrack.value) {
+    versionTargetTrack.value.primary_file_id = newPrimaryFileId;
+  }
+  loadForCurrentTab();
+}
 
 function onTrackLongPress(trackId: number) {
   const found = playerStore.tracks.find(t => t.id === trackId);
@@ -211,7 +245,6 @@ function ensureAlbumObserver() {
   return albumObserver;
 }
 
-/* 视图切换到专辑网格时（重新）observe sentinel */
 watch(isAlbumGridView, (visible) => {
   if (visible) {
     nextTick(() => {
@@ -235,60 +268,9 @@ function onAlbumSelect(album: Album) {
   playerStore.activeAlbumId = album.id;
 }
 
-/* ============ 专辑详情 ============ */
-
-const album = computed(() => playerStore.currentAlbumDetails);
-const albumTracks = computed(() => album.value?.tracks ?? []);
-const isLoadingAlbum = computed(() =>
-  playerStore.activeAlbumId !== null && !album.value
-);
-
-function albumMetaText(): string {
-  if (!album.value) return '';
-  const parts: string[] = [];
-  if (album.value.year) parts.push(String(album.value.year));
-  parts.push(`${albumTracks.value.length} TRACKS`);
-  const totalSec = albumTracks.value.reduce((sum, t) => sum + (t.durationSec || 0), 0);
-  const m = Math.floor(totalSec / 60);
-  parts.push(`${m} 分钟`);
-  return parts.join(' · ');
-}
-
-function albumIsFav(): boolean {
-  return playerStore.favoriteAlbums.some(a => a.id === playerStore.activeAlbumId);
-}
-
-function toggleAlbumFav() {
-  if (playerStore.activeAlbumId !== null) {
-    playerStore.toggleFavoriteAlbum(playerStore.activeAlbumId, !albumIsFav());
-  }
-}
-
-function playAlbumAll() {
-  if (albumTracks.value.length > 0) playerStore.playAll(albumTracks.value, 0);
-}
-
-function shuffleAlbum() {
-  if (albumTracks.value.length === 0) return;
-  const idx = Math.floor(Math.random() * albumTracks.value.length);
-  playerStore.playAll(albumTracks.value, idx);
-}
-
-function playAlbumTrack(index: number) {
-  playerStore.playAll(albumTracks.value, index);
-}
-
-function isAlbumTrackPlaying(trackId: number): boolean {
-  const t = playerStore.currentTrack;
-  return !!t && t.id === trackId;
-}
-
-const albumCoverSrc = useArtworkSrc(() => album.value?.cover_artwork_id ?? null);
-
 /* ============ 艺术家网格 ============ */
 
 function selectArtist(artistId: number) {
-  // 统一走 store 导航函数（取消历史还原标志 + 只记一条历史）
   playerStore.navigateToArtist(artistId);
 }
 
@@ -296,27 +278,6 @@ function selectArtist(artistId: number) {
 
 function selectPlaylist(id: number) {
   playerStore.openPlaylist(id);
-}
-
-/* ============ 歌单详情 ============ */
-
-const playlistDetail = computed(() => playerStore.currentPlaylistDetails);
-const playlistTracks = computed(() => playlistDetail.value?.tracks ?? []);
-
-function onPlaylistTrackLongPress(trackId: number) {
-  const found = playlistTracks.value.find(t => t.id === trackId);
-  if (found) {
-    sheetTrack.value = found;
-    sheetVisible.value = true;
-  }
-}
-
-function onAlbumTrackLongPress(trackId: number) {
-  const found = albumTracks.value.find(t => t.id === trackId);
-  if (found) {
-    sheetTrack.value = found;
-    sheetVisible.value = true;
-  }
 }
 </script>
 
@@ -326,61 +287,14 @@ function onAlbumTrackLongPress(trackId: number) {
     <!-- ===== 首页（自管数据，统计卡 + 排行榜） ===== -->
     <HomeView v-if="isHomeView" />
 
-    <!-- ===== 专辑详情 ===== -->
-    <template v-else-if="isAlbumDetailView">
-      <div v-if="isLoadingAlbum" class="flex-1 flex flex-col items-center justify-center gap-3 text-text-muted">
-        <Loader2 class="w-5 h-5 animate-spin text-brand-orange" aria-hidden="true" />
-        <span class="text-[12px]">加载专辑…</span>
-      </div>
+    <!-- ===== AI 电台 ===== -->
+    <MobileAiRadio v-else-if="isAiRadioView" />
 
-      <template v-else-if="album">
-        <div ref="albumDetailScrollEl" class="flex-1 overflow-y-auto">
-          <div class="flex flex-col items-center px-6 pt-6 pb-2">
-            <div class="relative w-[60%] max-w-[260px] aspect-square rounded-[10px] overflow-hidden bg-bg-hover mb-4">
-              <img v-if="albumCoverSrc" :src="albumCoverSrc" class="w-full h-full object-cover" alt="cover" />
-              <Disc3 v-else class="w-10 h-10 text-text-disabled absolute inset-0 m-auto" aria-hidden="true" />
-            </div>
-            <h1 class="text-[20px] font-bold text-text-primary tracking-tight leading-tight text-center mb-1">
-              {{ album.title }}
-            </h1>
-            <p class="text-[14px] text-text-secondary mb-1">{{ album.artist }}</p>
-            <p class="text-[11px] font-mono uppercase tracking-wider text-text-muted mb-4">
-              {{ albumMetaText() }}
-            </p>
-            <div class="flex items-center gap-3 w-full max-w-[280px]">
-              <button class="flex-1 h-11 rounded-full bg-text-primary text-bg-canvas text-[14px] font-medium flex items-center justify-center gap-2 active:opacity-80 transition-opacity" @click="playAlbumAll">
-                <Play class="w-[16px] h-[16px] fill-current" aria-hidden="true" />
-                播放全部
-              </button>
-              <button class="flex-1 h-11 rounded-full border border-border-solid text-[14px] font-medium text-text-primary flex items-center justify-center gap-2 active:bg-list-hover transition-colors-smooth" @click="shuffleAlbum">
-                <Shuffle class="w-[16px] h-[16px]" aria-hidden="true" />
-                随机播放
-              </button>
-              <button class="w-11 h-11 rounded-full flex items-center justify-center border border-border-solid transition-colors-smooth active:bg-list-hover flex-shrink-0" :class="albumIsFav() ? 'text-brand-orange' : 'text-text-muted'" :aria-label="albumIsFav() ? '取消收藏' : '收藏专辑'" @click="toggleAlbumFav">
-                <Heart class="w-[20px] h-[20px]" :class="albumIsFav() ? 'fill-current' : ''" aria-hidden="true" />
-              </button>
-            </div>
-          </div>
-          <div class="h-px bg-border-color mx-4 mt-4"></div>
-          <div v-if="albumTracks.length === 0" class="flex flex-col items-center justify-center py-12 gap-3 text-text-muted">
-            <span class="text-[13px]">该专辑暂无曲目</span>
-          </div>
-          <div v-else class="py-1">
-            <MobileSongRow
-              v-for="(track, index) in albumTracks"
-              :key="track.id"
-              :track="track"
-              :index="index"
-              :is-playing="playerStore.isPlaying"
-              :is-current="isAlbumTrackPlaying(track.id)"
-              @play="playAlbumTrack($event)"
-              @toggle-fav="toggleFav"
-              @long-press="onAlbumTrackLongPress"
-            />
-          </div>
-        </div>
-      </template>
-    </template>
+    <!-- ===== 智能歌单 ===== -->
+    <MobileSmartPlaylist v-else-if="isSmartPlaylistView" />
+
+    <!-- ===== 专辑详情 ===== -->
+    <MobileAlbumDetail v-else-if="isAlbumDetailView" />
 
     <!-- ===== 专辑网格 ===== -->
     <div v-else-if="isAlbumGridView" ref="albumScrollContainer" class="flex-1 overflow-y-auto px-4 pt-3">
@@ -499,34 +413,7 @@ function onAlbumTrackLongPress(trackId: number) {
     </div>
 
     <!-- ===== 歌单详情 ===== -->
-    <div v-else-if="isPlaylistDetailView" class="flex-1 flex flex-col">
-      <div v-if="!playlistDetail" class="flex-1 flex flex-col items-center justify-center gap-3 text-text-muted">
-        <Loader2 class="w-5 h-5 animate-spin text-brand-orange" aria-hidden="true" />
-        <span class="text-[12px]">加载歌单…</span>
-      </div>
-      <template v-else>
-        <div class="text-center px-6 pt-4 pb-2">
-          <h1 class="text-[20px] font-bold text-text-primary">{{ playlistDetail.name }}</h1>
-          <p class="text-text-muted font-mono uppercase tracking-wider" style="font-size: var(--text-11);">
-            {{ playlistTracks.length }} TRACKS
-          </p>
-        </div>
-        <div class="h-px bg-border-color mx-4 mt-2"></div>
-        <div ref="playlistDetailScrollEl" class="flex-1 overflow-y-auto py-1">
-          <MobileSongRow
-            v-for="(track, index) in playlistTracks"
-            :key="track.id"
-            :track="track"
-            :index="index"
-            :is-playing="playerStore.isPlaying"
-            :is-current="isCurrentTrack(track.id)"
-            @play="(i: number) => playerStore.playAll(playlistTracks, i)"
-            @toggle-fav="toggleFav"
-            @long-press="onPlaylistTrackLongPress"
-          />
-        </div>
-      </template>
-    </div>
+    <MobilePlaylistDetail v-else-if="isPlaylistDetailView" />
 
     <!-- ===== 文件夹视图（简化） ===== -->
     <div v-else-if="isFolderView" ref="folderScrollEl" class="flex-1 overflow-y-auto px-4 pt-3">
@@ -610,7 +497,15 @@ function onAlbumTrackLongPress(trackId: number) {
       @close="onSheetClose"
     />
 
-    <!-- ===== 添加本地来源（MA1 A1-3）：覆盖层，不受 v-else-if 链限制 ===== -->
+    <!-- ===== 歌曲版本与规格抽屉 ===== -->
+    <MobileTrackVersions
+      :visible="showVersionDrawer"
+      :track="versionTargetTrack"
+      @close="showVersionDrawer = false"
+      @version-changed="onVersionChanged"
+    />
+
+    <!-- ===== 添加本地来源 ===== -->
     <div
       v-if="showAddLocalSource"
       class="absolute inset-0 z-[60] bg-bg-canvas"
@@ -618,7 +513,7 @@ function onAlbumTrackLongPress(trackId: number) {
       <MobileAddLocalSource @close="closeAddLocalSource" />
     </div>
 
-    <!-- ===== 添加 WebDAV 来源（MA3 A3-2）：覆盖层 ===== -->
+    <!-- ===== 添加 WebDAV 来源 ===== -->
     <div
       v-if="showAddWebdavSource"
       class="absolute inset-0 z-[60] bg-bg-canvas"

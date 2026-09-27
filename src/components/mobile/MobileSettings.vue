@@ -1,18 +1,28 @@
 <script setup lang="ts">
 import { computed, onMounted, onBeforeUnmount, ref } from 'vue';
-import { Sun, Moon, Monitor, Disc3, HardDrive, Server, Info, Scan, Volume2, Wifi, Plus, Trash2, Database, Image, Music2, CloudUpload, CloudDownload, RefreshCw, AlertCircle } from 'lucide-vue-next';
+import { 
+  Sun, Moon, Monitor, Disc3, HardDrive, Server, Info, Scan, Volume2, Wifi, 
+  Plus, Trash2, Database, Image, Music2, CloudUpload, CloudDownload, RefreshCw, 
+  AlertCircle, Users 
+} from 'lucide-vue-next';
 import { invoke } from '../../utils/tauriInvoke';
-import { storageGetDbSize, libraryGetCacheSize } from '../../api/library';
+import { 
+  storageGetDbSize, libraryGetCacheSize,
+  libraryGetAlbumMatchTargets, libraryGetArtistMatchTargets,
+  libraryMatchSingleAlbumCover, libraryMatchSingleArtistCover,
+} from '../../api/library';
 import { playbackGetAudioCacheSize } from '../../api/playback';
 import { getAppVersion, restartApp } from '../../api/platform';
 import { syncGetConfig, syncUploadNow, syncRestoreNow, type SyncConfig } from '../../api/sync';
 import { APP_NAME_CN, APP_VERSION_LABEL, APP_TAGLINE } from '../../config/appInfo';
 import { usePlayerStore } from '../../stores/player';
 import { useUiStore } from '../../stores/ui';
+import { useAiStore } from '../../stores/ai';
 import { registerBackHandler } from '../../composables/useMobileBack';
 
 const playerStore = usePlayerStore();
 const uiStore = useUiStore();
+const aiStore = useAiStore();
 
 /* ============ 主题设置 ============ */
 
@@ -194,6 +204,181 @@ async function onExportDiagnostics() {
   }
 }
 
+/* ============ 网络封面与艺人头像匹配 ============ */
+const missingAlbumsCount = ref<number | null>(null);
+const missingArtistsCount = ref<number | null>(null);
+const isMatchingAlbums = ref(false);
+const albumMatchProcessed = ref(0);
+const albumMatchTotal = ref(0);
+const currentMatchingAlbum = ref('');
+let abortAlbumMatch = false;
+
+const isMatchingArtists = ref(false);
+const artistMatchProcessed = ref(0);
+const artistMatchTotal = ref(0);
+const currentMatchingArtist = ref('');
+let abortArtistMatch = false;
+
+async function refreshMatchTargets() {
+  try {
+    const [albums, artists] = await Promise.all([
+      libraryGetAlbumMatchTargets(true),
+      libraryGetArtistMatchTargets(true),
+    ]);
+    missingAlbumsCount.value = albums.length;
+    missingArtistsCount.value = artists.length;
+  } catch (e) {
+    console.error('获取匹配目标失败:', e);
+  }
+}
+
+async function startAlbumMatch() {
+  if (isMatchingAlbums.value) return;
+  abortAlbumMatch = false;
+  try {
+    let targets = await libraryGetAlbumMatchTargets(true);
+    if (targets.length === 0) {
+      targets = await libraryGetAlbumMatchTargets(false);
+    }
+    if (targets.length === 0) {
+      uiStore.showToast('曲库暂无专辑可供匹配', 'info');
+      return;
+    }
+    isMatchingAlbums.value = true;
+    albumMatchTotal.value = targets.length;
+    albumMatchProcessed.value = 0;
+    
+    for (let i = 0; i < targets.length; i++) {
+      if (abortAlbumMatch) break;
+      const cur = targets[i];
+      currentMatchingAlbum.value = cur.artistName ? `${cur.title} - ${cur.artistName}` : cur.title;
+      try {
+        await libraryMatchSingleAlbumCover(cur.id, true);
+      } catch (e) {
+        console.error('匹配专辑封面失败:', cur.title, e);
+      }
+      albumMatchProcessed.value = i + 1;
+      await new Promise(r => setTimeout(r, 120));
+    }
+    await playerStore.fetchAlbums(true);
+    refreshMatchTargets();
+    uiStore.showToast('专辑封面匹配已完成', 'info');
+  } catch (e: any) {
+    uiStore.showToast(e.message || '匹配失败', 'error');
+  } finally {
+    isMatchingAlbums.value = false;
+    currentMatchingAlbum.value = '';
+  }
+}
+
+function stopAlbumMatch() {
+  abortAlbumMatch = true;
+}
+
+async function startArtistMatch() {
+  if (isMatchingArtists.value) return;
+  abortArtistMatch = false;
+  try {
+    let targets = await libraryGetArtistMatchTargets(true);
+    if (targets.length === 0) {
+      targets = await libraryGetArtistMatchTargets(false);
+    }
+    if (targets.length === 0) {
+      uiStore.showToast('曲库暂无艺人可供匹配', 'info');
+      return;
+    }
+    isMatchingArtists.value = true;
+    artistMatchTotal.value = targets.length;
+    artistMatchProcessed.value = 0;
+    
+    for (let i = 0; i < targets.length; i++) {
+      if (abortArtistMatch) break;
+      const cur = targets[i];
+      currentMatchingArtist.value = cur.name;
+      try {
+        await libraryMatchSingleArtistCover(cur.id, true);
+      } catch (e) {
+        console.error('匹配艺人头像失败:', cur.name, e);
+      }
+      artistMatchProcessed.value = i + 1;
+      await new Promise(r => setTimeout(r, 120));
+    }
+    await playerStore.fetchArtists(true);
+    refreshMatchTargets();
+    uiStore.showToast('艺人头像匹配已完成', 'info');
+  } catch (e: any) {
+    uiStore.showToast(e.message || '匹配失败', 'error');
+  } finally {
+    isMatchingArtists.value = false;
+    currentMatchingArtist.value = '';
+  }
+}
+
+function stopArtistMatch() {
+  abortArtistMatch = true;
+}
+
+/* ============ AI 电台配置 ============ */
+const aiEnabled = ref(false);
+const aiBaseUrl = ref('');
+const aiModel = ref('');
+const aiApiKey = ref('');
+const aiTesting = ref(false);
+const aiTestResult = ref<{ ok: boolean; message: string } | null>(null);
+const aiSaving = ref(false);
+
+async function loadAiSettings() {
+  await aiStore.fetchSettings();
+  if (aiStore.settings) {
+    aiEnabled.value = aiStore.settings.enabled;
+    aiBaseUrl.value = aiStore.settings.base_url;
+    aiModel.value = aiStore.settings.model;
+  }
+}
+
+async function onSaveAiSettings() {
+  aiSaving.value = true;
+  aiTestResult.value = null;
+  try {
+    const ok = await aiStore.saveSettings({
+      enabled: aiEnabled.value,
+      baseUrl: aiBaseUrl.value.trim(),
+      model: aiModel.value.trim(),
+      apiKey: aiApiKey.value.trim() ? aiApiKey.value.trim() : null,
+    });
+    if (ok) {
+      aiApiKey.value = '';
+      uiStore.showToast('AI 配置已保存', 'info');
+    } else {
+      uiStore.showToast('保存失败，请检查输入', 'error');
+    }
+  } catch (e: any) {
+    uiStore.showToast(e.message || '保存失败', 'error');
+  } finally {
+    aiSaving.value = false;
+  }
+}
+
+async function onTestAiConnection() {
+  aiTesting.value = true;
+  aiTestResult.value = null;
+  try {
+    await aiStore.saveSettings({
+      enabled: aiEnabled.value,
+      baseUrl: aiBaseUrl.value.trim(),
+      model: aiModel.value.trim(),
+      apiKey: aiApiKey.value.trim() ? aiApiKey.value.trim() : null,
+    });
+    aiApiKey.value = '';
+    const res = await aiStore.testConnection();
+    aiTestResult.value = { ok: res.ok, message: res.message };
+  } catch (e: any) {
+    aiTestResult.value = { ok: false, message: e.message || '连接失败' };
+  } finally {
+    aiTesting.value = false;
+  }
+}
+
 /* ============ 关于 ============ */
 
 const appVersion = ref('...');
@@ -201,6 +386,8 @@ onMounted(async () => {
   appVersion.value = await getAppVersion().catch(() => '');
   refreshStorage();
   refreshSyncConfig();
+  refreshMatchTargets();
+  loadAiSettings();
 });
 
 const isScanning = computed(() =>
@@ -382,6 +569,101 @@ async function runProbe() {
       </div>
     </section>
 
+    <!-- ===== 网络封面与艺人头像匹配 ===== -->
+    <section class="px-4 py-1">
+      <div class="flex items-center justify-between px-1 py-2">
+        <h2 class="text-text-muted font-semibold uppercase tracking-widest" style="font-size: var(--text-10);">
+          封面与头像匹配
+        </h2>
+        <button class="text-brand-orange text-[12px] font-medium" @click="refreshMatchTargets">刷新</button>
+      </div>
+
+      <div class="rounded-[10px] bg-bg-canvas border border-border-color p-4 space-y-3">
+        <!-- 待匹配统计 -->
+        <div class="flex items-center justify-between text-[13px]">
+          <span class="text-text-secondary">待补全封面专辑</span>
+          <span class="font-mono text-text-primary">
+            {{ missingAlbumsCount !== null ? `${missingAlbumsCount} 张` : '…' }}
+          </span>
+        </div>
+        <div class="flex items-center justify-between text-[13px]">
+          <span class="text-text-secondary">待补全头像艺人</span>
+          <span class="font-mono text-text-primary">
+            {{ missingArtistsCount !== null ? `${missingArtistsCount} 位` : '…' }}
+          </span>
+        </div>
+
+        <!-- 匹配进度提示：专辑 -->
+        <div v-if="isMatchingAlbums" class="p-3 rounded-[8px] bg-brand-orange/10 border border-brand-orange/20 space-y-2">
+          <div class="flex items-center justify-between text-[12px]">
+            <span class="text-brand-orange font-medium">正在匹配专辑封面…</span>
+            <span class="font-mono text-brand-orange">{{ albumMatchProcessed }} / {{ albumMatchTotal }}</span>
+          </div>
+          <p class="text-[11px] text-text-muted truncate font-mono">
+            {{ currentMatchingAlbum }}
+          </p>
+          <div class="w-full h-1.5 rounded-full bg-brand-orange/20 overflow-hidden">
+            <div
+              class="h-full bg-brand-orange transition-all duration-150"
+              :style="{ width: `${albumMatchTotal ? (albumMatchProcessed / albumMatchTotal) * 100 : 0}%` }"
+            ></div>
+          </div>
+          <button
+            class="text-[12px] text-red-500 font-medium active:opacity-75 pt-1"
+            @click="stopAlbumMatch"
+          >
+            停止匹配
+          </button>
+        </div>
+
+        <!-- 匹配进度提示：艺人 -->
+        <div v-if="isMatchingArtists" class="p-3 rounded-[8px] bg-brand-orange/10 border border-brand-orange/20 space-y-2">
+          <div class="flex items-center justify-between text-[12px]">
+            <span class="text-brand-orange font-medium">正在匹配艺人头像…</span>
+            <span class="font-mono text-brand-orange">{{ artistMatchProcessed }} / {{ artistMatchTotal }}</span>
+          </div>
+          <p class="text-[11px] text-text-muted truncate font-mono">
+            {{ currentMatchingArtist }}
+          </p>
+          <div class="w-full h-1.5 rounded-full bg-brand-orange/20 overflow-hidden">
+            <div
+              class="h-full bg-brand-orange transition-all duration-150"
+              :style="{ width: `${artistMatchTotal ? (artistMatchProcessed / artistMatchTotal) * 100 : 0}%` }"
+            ></div>
+          </div>
+          <button
+            class="text-[12px] text-red-500 font-medium active:opacity-75 pt-1"
+            @click="stopArtistMatch"
+          >
+            停止匹配
+          </button>
+        </div>
+
+        <!-- 操作按钮 -->
+        <div class="grid grid-cols-2 gap-2 pt-1">
+          <button
+            class="h-10 rounded-[8px] border border-border-solid text-[13px] font-medium text-text-secondary active:bg-list-hover transition-colors-smooth flex items-center justify-center gap-1.5 disabled:opacity-50"
+            :disabled="isMatchingAlbums || isMatchingArtists"
+            @click="startAlbumMatch"
+          >
+            <RefreshCw v-if="isMatchingAlbums" class="w-3.5 h-3.5 animate-spin" />
+            <Disc3 v-else class="w-3.5 h-3.5" />
+            <span>{{ isMatchingAlbums ? '匹配中…' : '匹配全部专辑' }}</span>
+          </button>
+
+          <button
+            class="h-10 rounded-[8px] border border-border-solid text-[13px] font-medium text-text-secondary active:bg-list-hover transition-colors-smooth flex items-center justify-center gap-1.5 disabled:opacity-50"
+            :disabled="isMatchingAlbums || isMatchingArtists"
+            @click="startArtistMatch"
+          >
+            <RefreshCw v-if="isMatchingArtists" class="w-3.5 h-3.5 animate-spin" />
+            <Users v-else class="w-3.5 h-3.5" />
+            <span>{{ isMatchingArtists ? '匹配中…' : '匹配全部艺人' }}</span>
+          </button>
+        </div>
+      </div>
+    </section>
+
     <!-- ===== 数据源 ===== -->
     <section class="px-4 py-1">
       <div class="flex items-center justify-between px-1 py-2">
@@ -502,6 +784,97 @@ async function runProbe() {
             <span>从云端恢复</span>
           </button>
         </div>
+      </div>
+    </section>
+
+    <!-- ===== AI 大模型推荐配置 ===== -->
+    <section class="px-4 py-1">
+      <div class="flex items-center justify-between px-1 py-2">
+        <h2 class="text-text-muted font-semibold uppercase tracking-widest" style="font-size: var(--text-10);">
+          AI 电台大模型配置
+        </h2>
+      </div>
+
+      <div class="rounded-[10px] bg-bg-canvas border border-border-color p-4 space-y-3">
+        <!-- 启用开关 -->
+        <div class="flex items-center justify-between">
+          <div>
+            <span class="text-[15px] font-medium text-text-primary">启用 AI 推荐歌单</span>
+            <p class="text-text-muted" style="font-size: var(--text-11);">用于首页 AI 电台与智能分析</p>
+          </div>
+          <button
+            class="w-10 h-6 rounded-full transition-colors-smooth relative"
+            :class="aiEnabled ? 'bg-brand-orange' : 'bg-text-disabled'"
+            @click="aiEnabled = !aiEnabled"
+          >
+            <div
+              class="w-4 h-4 bg-white rounded-full absolute top-1 transition-transform"
+              :class="aiEnabled ? 'translate-x-5' : 'translate-x-1'"
+            ></div>
+          </button>
+        </div>
+
+        <template v-if="aiEnabled">
+          <div class="h-px bg-border-color"></div>
+
+          <!-- Base URL -->
+          <div class="space-y-1">
+            <label class="block text-text-muted" style="font-size: var(--text-11);">API 服务地址 (Base URL)</label>
+            <input
+              v-model="aiBaseUrl"
+              placeholder="http://localhost:11434/v1"
+              class="w-full h-10 px-3 rounded-[8px] bg-bg-content border border-border-solid text-[13px] text-text-primary placeholder:text-text-disabled outline-none focus:border-brand-orange font-mono"
+            />
+          </div>
+
+          <!-- Model -->
+          <div class="space-y-1">
+            <label class="block text-text-muted" style="font-size: var(--text-11);">模型名称 (Model)</label>
+            <input
+              v-model="aiModel"
+              placeholder="如 deepseek-chat 或 llama3"
+              class="w-full h-10 px-3 rounded-[8px] bg-bg-content border border-border-solid text-[13px] text-text-primary placeholder:text-text-disabled outline-none focus:border-brand-orange font-mono"
+            />
+          </div>
+
+          <!-- API Key -->
+          <div class="space-y-1">
+            <label class="block text-text-muted" style="font-size: var(--text-11);">API 密钥 (留空表示不修改)</label>
+            <input
+              v-model="aiApiKey"
+              type="password"
+              placeholder="sk-..."
+              class="w-full h-10 px-3 rounded-[8px] bg-bg-content border border-border-solid text-[13px] text-text-primary placeholder:text-text-disabled outline-none focus:border-brand-orange font-mono"
+            />
+          </div>
+
+          <!-- 测试反馈 -->
+          <div v-if="aiTestResult" class="p-2.5 rounded-[6px] text-[12px] flex items-center gap-2" :class="aiTestResult.ok ? 'bg-emerald-500/10 text-emerald-600' : 'bg-red-500/10 text-red-600'">
+            <AlertCircle class="w-3.5 h-3.5 flex-shrink-0" />
+            <span class="truncate">{{ aiTestResult.message }}</span>
+          </div>
+
+          <!-- 按钮栏 -->
+          <div class="grid grid-cols-2 gap-2 pt-1">
+            <button
+              class="h-10 rounded-[8px] border border-border-solid text-[13px] font-medium text-text-secondary active:bg-list-hover transition-colors-smooth flex items-center justify-center gap-1.5 disabled:opacity-50"
+              :disabled="aiTesting || !aiBaseUrl"
+              @click="onTestAiConnection"
+            >
+              <RefreshCw v-if="aiTesting" class="w-3.5 h-3.5 animate-spin" />
+              <span>{{ aiTesting ? '测试中…' : '测试连接' }}</span>
+            </button>
+
+            <button
+              class="h-10 rounded-[8px] bg-brand-orange text-white text-[13px] font-semibold active:opacity-85 transition-opacity flex items-center justify-center gap-1.5 disabled:opacity-50"
+              :disabled="aiSaving"
+              @click="onSaveAiSettings"
+            >
+              <RefreshCw v-if="aiSaving" class="w-3.5 h-3.5 animate-spin" />
+              <span>{{ aiSaving ? '保存中…' : '保存设置' }}</span>
+            </button>
+          </div>
+        </template>
       </div>
     </section>
 
