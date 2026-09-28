@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, onBeforeUnmount } from 'vue';
-import { ArrowLeft, MoreHorizontal, ChevronDown, Check, Music, Disc, Users, Folder, ListMusic, Clock, Heart } from 'lucide-vue-next';
+import { ArrowLeft, MoreHorizontal, ChevronDown, Check, Music, Disc, Users, Folder, ListMusic, Clock, Heart, Zap } from 'lucide-vue-next';
 import { usePlayerStore } from '../../stores/player';
 import { useUiStore } from '../../stores/ui';
 import { registerBackHandler } from '../../composables/useMobileBack';
@@ -27,7 +27,16 @@ const pageTitle = computed(() => {
     case '艺术家': return isDetailPage.value ? '艺术家详情' : '艺术家';
     case '文件夹': return '文件夹';
     case '播放列表': return isDetailPage.value ? '歌单详情' : '播放列表';
-    case '智能歌单': return '智能歌单';
+    case '智能歌单': {
+      switch (playerStore.activeSmartPlaylistKind) {
+        case 'most_played': return '播放最多';
+        case 'recently_added': return '最近添加';
+        case 'recently_played': return '最近播放';
+        case 'never_played': return '未曾播放';
+        default: return '智能歌单';
+      }
+    }
+    case 'AI 电台': return 'AI 电台';
     case '设置': return '设置';
     default: return '全部歌曲';
   }
@@ -41,11 +50,12 @@ const metaText = computed(() => {
   if (playerStore.activeLibraryTab === '喜欢的音乐') return `${playerStore.libraryCounts.favorite_tracks.toLocaleString()} 首歌曲`;
   if (playerStore.activeLibraryTab === '收藏的专辑') return `${playerStore.libraryCounts.favorite_albums.toLocaleString()} 张专辑`;
   if (playerStore.activeLibraryTab === '收藏的歌手') return `${playerStore.libraryCounts.favorite_artists.toLocaleString()} 位艺术家`;
+  if (playerStore.activeLibraryTab === '智能歌单') return `${playerStore.smartPlaylistTracks.length} 首歌曲`;
   return `${playerStore.tracksTotalCount.toLocaleString()} 首歌曲`;
 });
 
 // 是否显示元信息（详情页与首页不显示）
-const showMeta = computed(() => !isDetailPage.value && playerStore.activeLibraryTab !== '首页');
+const showMeta = computed(() => !isDetailPage.value && playerStore.activeLibraryTab !== '首页' && playerStore.activeLibraryTab !== 'AI 电台');
 
 function onBack() {
   if (isDetailPage.value) {
@@ -53,12 +63,21 @@ function onBack() {
     playerStore.activeAlbumId = null;
     playerStore.activeArtistId = null;
     playerStore.activePlaylistId = null;
+  } else if (playerStore.activeLibraryTab === '智能歌单') {
+    if (uiStore.activeMobileTab === 'home') {
+      playerStore.activeLibraryTab = '首页';
+    } else {
+      playerStore.activeLibraryTab = '全部歌曲';
+    }
   } else if (uiStore.activeMobileTab === 'library' && playerStore.activeLibraryTab !== '全部歌曲') {
     // 二级分类返回全部歌曲
     playerStore.activeLibraryTab = '全部歌曲';
   } else if (uiStore.activeMobileTab === 'favorites' && playerStore.activeLibraryTab !== '喜欢的音乐') {
     // 二级分类返回我喜欢的音乐
     playerStore.activeLibraryTab = '喜欢的音乐';
+  } else if (uiStore.activeMobileTab === 'home' && playerStore.activeLibraryTab !== '首页') {
+    // AI 电台等首页子页面返回首页
+    playerStore.activeLibraryTab = '首页';
   }
 }
 
@@ -66,6 +85,9 @@ function onBack() {
 const showBackButton = computed(() => {
   if (isDetailPage.value) return true;
   if (playerStore.activeLibraryTab === '首页') return false;
+  if (playerStore.activeLibraryTab === '智能歌单') return true;
+  // 从首页进入 AI 电台时，显示返回按钮
+  if (uiStore.activeMobileTab === 'home' && playerStore.activeLibraryTab !== '首页') return true;
   if (uiStore.activeMobileTab === 'library' && playerStore.activeLibraryTab !== '全部歌曲') return true;
   if (uiStore.activeMobileTab === 'favorites' && playerStore.activeLibraryTab !== '喜欢的音乐') return true;
   return false;
@@ -81,6 +103,7 @@ const libraryCategories = [
   { key: '文件夹', label: '文件夹', icon: Folder },
   { key: '播放列表', label: '播放列表', icon: ListMusic },
   { key: '最近播放', label: '最近播放', icon: Clock },
+  { key: '智能歌单', label: '智能歌单', icon: Zap },
 ];
 
 const favoritesCategories = [

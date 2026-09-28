@@ -28,15 +28,16 @@ withDefaults(defineProps<{
 <style scoped>
 .eq-bar {
   width: 2px;
+  height: 100%;
   border-radius: 1px;
   transform-origin: bottom;
-  will-change: height;
+  will-change: transform;
 }
 
 /* 静态时：自然起伏的高低姿态 */
-.eq-bar-1 { height: 40%; }
-.eq-bar-2 { height: 85%; }
-.eq-bar-3 { height: 55%; }
+.eq-bar-1 { transform: scaleY(0.4); }
+.eq-bar-2 { transform: scaleY(0.85); }
+.eq-bar-3 { transform: scaleY(0.55); }
 
 /* 播放中：交错优雅呼吸律动动画 */
 .is-playing .eq-bar-1 {
@@ -50,19 +51,19 @@ withDefaults(defineProps<{
 }
 
 @keyframes eq-bounce-1 {
-  0% { height: 25%; }
-  50% { height: 85%; }
-  100% { height: 35%; }
+  0% { transform: scaleY(0.25); }
+  50% { transform: scaleY(0.85); }
+  100% { transform: scaleY(0.35); }
 }
 @keyframes eq-bounce-2 {
-  0% { height: 90%; }
-  50% { height: 30%; }
-  100% { height: 100%; }
+  0% { transform: scaleY(0.9); }
+  50% { transform: scaleY(0.3); }
+  100% { transform: scaleY(1); }
 }
 @keyframes eq-bounce-3 {
-  0% { height: 30%; }
-  50% { height: 70%; }
-  100% { height: 20%; }
+  0% { transform: scaleY(0.3); }
+  50% { transform: scaleY(0.7); }
+  100% { transform: scaleY(0.2); }
 }
 
 @media (prefers-reduced-motion: reduce) {
