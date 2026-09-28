@@ -17,10 +17,7 @@ fn main() {
         // 此处将 NDK sysroot 中 API 26 的库路径注入 link-search，确保链接器顺利找到 libaaudio.so。
         if let Ok(ndk) = std::env::var("ANDROID_NDK_HOME")
             .or_else(|_| std::env::var("NDK_HOME"))
-            .or_else(|_| {
-                std::env::var("ANDROID_HOME")
-                    .map(|h| format!("{}/ndk/28.2.13676358", h))
-            })
+            .or_else(|_| std::env::var("ANDROID_HOME").map(|h| format!("{}/ndk/28.2.13676358", h)))
         {
             let arch = match std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() {
                 Ok("aarch64") => "aarch64-linux-android",
@@ -33,7 +30,13 @@ fn main() {
                 let prebuilt_dir = std::path::Path::new(&ndk).join("toolchains/llvm/prebuilt");
                 if let Ok(entries) = std::fs::read_dir(prebuilt_dir) {
                     for entry in entries.flatten() {
-                        let sysroot_lib_26 = entry.path().join("sysroot").join("usr").join("lib").join(arch).join("26");
+                        let sysroot_lib_26 = entry
+                            .path()
+                            .join("sysroot")
+                            .join("usr")
+                            .join("lib")
+                            .join(arch)
+                            .join("26");
                         if sysroot_lib_26.exists() {
                             println!("cargo:rustc-link-search={}", sysroot_lib_26.display());
                             break;

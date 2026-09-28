@@ -20,6 +20,49 @@ import { invoke as rawInvoke, type InvokeArgs } from '@tauri-apps/api/core';
 /** 当前正在飞行（已发出、未返回）的 invoke 数量 */
 let inFlightCount = 0;
 
+/** Opt-in renderer/IPC timing probe. Enable in DevTools with:
+ * localStorage.setItem('lumo_ipc_diagnostics', '1'); location.reload();
+ */
+const IPC_DIAGNOSTICS_ENABLED = (() => {
+  try {
+    return typeof window !== 'undefined'
+      && window.localStorage.getItem('lumo_ipc_diagnostics') === '1';
+  } catch {
+    return false;
+  }
+})();
+
+let ipcDiagnosticSequence = 0;
+
+if (IPC_DIAGNOSTICS_ENABLED && typeof window !== 'undefined') {
+  let previousBeat = performance.now();
+  window.setInterval(() => {
+    const now = performance.now();
+    const gapMs = now - previousBeat;
+    if (gapMs > 750) {
+      console.warn(
+        `[IPC-DIAG] renderer heartbeat gap=${Math.round(gapMs)}ms at=${new Date().toISOString()} visibility=${document.visibilityState}`,
+      );
+    }
+    previousBeat = now;
+  }, 250);
+
+  if (typeof PerformanceObserver !== 'undefined') {
+    try {
+      const observer = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          console.warn(
+            `[IPC-DIAG] long-task duration=${Math.round(entry.duration)}ms start=${Math.round(entry.startTime)}ms wall=${new Date().toISOString()}`,
+          );
+        }
+      });
+      observer.observe({ type: 'longtask', buffered: true });
+    } catch {
+      console.info('[IPC-DIAG] Long Task API unavailable');
+    }
+  }
+}
+
 /** 用于在慢调用时打出"当时还有谁在飞"，辅助定位并发冲突 */
 interface InFlightRecord {
   cmd: string;
@@ -60,6 +103,9 @@ function summarizeArgs(args: unknown): string {
 
 function summarizeResult(result: unknown): string {
   if (result === undefined || result === null) return 'null';
+  if (typeof result === 'string') {
+    return result.length > 300 ? `string(${result.length} chars)` : result;
+  }
   if (Array.isArray(result)) return `${result.length}items`;
   if (typeof result === 'object') {
     try {
@@ -81,10 +127,18 @@ function logStyle(elapsedMs: number): string {
 
 export async function invoke<T = unknown>(cmd: string, args?: InvokeArgs): Promise<T> {
   const t0 = performance.now();
+  const wallStart = Date.now();
+  const diagnosticId = IPC_DIAGNOSTICS_ENABLED ? ++ipcDiagnosticSequence : 0;
   const myInFlight = inFlightCount;
   inFlightCount++;
   const myRecord: InFlightRecord = { cmd, startedAt: t0 };
   inFlightRecords.push(myRecord);
+
+  if (IPC_DIAGNOSTICS_ENABLED) {
+    console.info(
+      `[IPC-DIAG] start id=${diagnosticId} cmd=${cmd} wall=${new Date(wallStart).toISOString()} mono=${Math.round(t0)}`,
+    );
+  }
 
   // 发出请求时记录：当前在飞数量（含自己）
   const othersInFlight = myInFlight; // 之前已经在飞的数量
@@ -106,6 +160,12 @@ export async function invoke<T = unknown>(cmd: string, args?: InvokeArgs): Promi
     const result = await rawInvoke<T>(cmd, args);
     const elapsed = performance.now() - t0;
 
+    if (IPC_DIAGNOSTICS_ENABLED) {
+      console.info(
+        `[IPC-DIAG] resolved id=${diagnosticId} cmd=${cmd} wall=${new Date().toISOString()} elapsed=${Math.round(elapsed)}ms`,
+      );
+    }
+
     console.log(
       `%c[IPC] ✅ ${cmd} %c${Math.round(elapsed)}ms %cret=${summarizeResult(result)}`,
       'color:#888',
@@ -115,6 +175,11 @@ export async function invoke<T = unknown>(cmd: string, args?: InvokeArgs): Promi
     return result;
   } catch (err) {
     const elapsed = performance.now() - t0;
+    if (IPC_DIAGNOSTICS_ENABLED) {
+      console.error(
+        `[IPC-DIAG] rejected id=${diagnosticId} cmd=${cmd} wall=${new Date().toISOString()} elapsed=${Math.round(elapsed)}ms`,
+      );
+    }
     console.error(
       `%c[IPC] ❌ ${cmd} ${Math.round(elapsed)}ms ERROR:`,
       'color:#e22;font-weight:bold',
