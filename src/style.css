@@ -54,6 +54,20 @@
   --scrollbar-thumb-hover: #BCB7AB;
 
   /* ============================================================
+     LDL Desktop Spatial Tokens — 桌面端区域尺寸（1200×720 基线）
+     组件引用 w-(--width-sidebar) / h-(--height-playback-bar) 等，
+     禁止再写死像素值，保证规范与实现单一来源。
+     ============================================================ */
+  --width-sidebar: 220px;        /* 左侧导航栏（原 240px） */
+  --width-inspector: 320px;      /* 右侧 Inspector 浮层宽度 */
+  --height-topbar: 60px;         /* 顶栏 */
+  --height-playback-bar: 92px;   /* 底部播放栏（原 110px） */
+  --height-track-row: 40px;      /* 歌曲行高（虚拟列表依赖固定行高） */
+  --size-play-cover: 48px;       /* 底栏封面（正方形） */
+  --size-play-button: 46px;      /* 主播放按钮 */
+  --text-page-title: 28px;       /* 页面大标题（原 32px） */
+
+  /* ============================================================
      LDL Mobile Tokens — 移动端专用（M1 骨架）
      继承所有颜色/字体/圆角/动效 token，仅新增尺寸/间距/高度。
      断点：< 768px → MobileLayout

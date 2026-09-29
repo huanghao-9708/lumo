@@ -15,6 +15,7 @@ import MobileNowPlaying from './components/mobile/MobileNowPlaying.vue';
 import { useUiStore } from './stores/ui';
 import { usePlatform } from './composables/usePlatform';
 import { useAutoScrollbar } from './composables/useAutoScrollbar';
+import { setupWindowPersistence } from './composables/useWindowPersistence';
 
 const playerStore = usePlayerStore();
 const uiStore = useUiStore();
@@ -75,6 +76,8 @@ const handleGlobalKeyDown = (e: KeyboardEvent) => {
 
 const handleOnline = () => uiStore.setOnline(true);
 const handleOffline = () => uiStore.setOnline(false);
+let disposeWindowPersistence: (() => void) | null = null;
+let appUnmounted = false;
 
 onMounted(async () => {
   window.addEventListener('keydown', handleGlobalKeyDown);
@@ -82,6 +85,14 @@ onMounted(async () => {
   // 网络状态监听（断网降级用）
   window.addEventListener('online', handleOnline);
   window.addEventListener('offline', handleOffline);
+
+  // 桌面窗口尺寸：默认 1200×720、按工作区限幅、记住用户调整（仅 Tauri 桌面生效）
+  if (!isMobile.value) {
+    setupWindowPersistence().then((dispose) => {
+      if (appUnmounted) dispose();
+      else disposeWindowPersistence = dispose;
+    }).catch((e) => console.warn('[window] 窗口状态监听失败', e));
+  }
 
   // 1. 启动数据包（遗留事项 2）：一次 IPC 拿回 counts/playlists/albums/artists/play_queue，
   //    加上 fetchSources（凭据解析在 scanner 模块）共 2 个启动 IPC（此前 ~7 个）
@@ -93,6 +104,8 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  appUnmounted = true;
+  disposeWindowPersistence?.();
   window.removeEventListener('keydown', handleGlobalKeyDown);
   window.removeEventListener('online', handleOnline);
   window.removeEventListener('offline', handleOffline);
@@ -119,7 +132,7 @@ onUnmounted(() => {
       <!-- Top Area -->
       <div class="flex-1 flex overflow-hidden">
 
-        <!-- Region 01: Sidebar (w: 240px) -->
+        <!-- Region 01: Sidebar (w: var(--width-sidebar) = 220px) -->
         <SidebarLeft />
 
         <!-- Divider A (Sidebar ↓ Content/TopBar) -->
@@ -146,7 +159,7 @@ onUnmounted(() => {
       <!-- Divider D (Playback ↓ Workspace) -->
       <div class="h-px w-full bg-border-color shrink-0"></div>
 
-      <!-- Region 05: Playback Bar (h: 110px) -->
+      <!-- Region 05: Playback Bar (h: var(--height-playback-bar) = 92px) -->
       <BottomPlayer />
 
       <!-- 沉浸式播放页（覆盖整窗，z-[200]；进/出为抽屉式上下滑动） -->

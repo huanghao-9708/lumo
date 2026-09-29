@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onBeforeUnmount, ref } from 'vue';
 import { Play, Loader2, Disc3, Sparkles, CheckCircle2, X } from 'lucide-vue-next';
-import { usePlayerStore, type Album } from '../../stores/player';
+import { usePlayerStore, mapTrackDTO, type Album } from '../../stores/player';
 import { getArtworkUrl } from '../../utils';
 import { libraryGetAlbumTracks, libraryGetAlbumMatchTargets, libraryMatchSingleAlbumCover } from '../../api/library';
 import type { AlbumMatchTargetDTO } from '../../api/types';
@@ -24,31 +24,11 @@ function selectAlbum(album: Album) {
   emit('select', album);
 }
 
-/** 双击专辑封面 → 直接播放第一首 */
+/** 双击专辑封面 → 直接播放第一首（DTO 映射走统一 mapTrackDTO 通道） */
 async function playAlbum(album: Album) {
   try {
     const result = await libraryGetAlbumTracks(album.id);
-    const tracks = result.map(t => {
-      const durationMs = t.duration_ms ?? 0;
-      const sec = Math.floor(durationMs / 1000);
-      return {
-        id: t.id,
-        title: t.title,
-        artist: t.artist_name || '未知艺人',
-        album: t.album_title || album.title,
-        duration: `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`,
-        durationSec: sec,
-        format: t.format ? t.format.toUpperCase() : 'UNKNOWN',
-        artistId: t.artist_id ?? null,
-        albumId: t.album_id ?? null,
-        coverColor: '',
-        isFavorite: false,
-        primary_file_id: t.media_file_id,
-        cover_artwork_id: t.cover_artwork_id,
-        fileSize: t.file_size ?? null,
-        sourceKind: (t.source_kind === 'webdav' ? 'webdav' : 'local') as 'local' | 'webdav',
-      };
-    });
+    const tracks = result.map(mapTrackDTO);
     if (tracks.length > 0) {
       await playerStore.playAll(tracks, 0);
     }

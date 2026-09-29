@@ -25,7 +25,12 @@ impl TrackRepo {
                     ft.track_id IS NOT NULL AS is_favorite,
                     al.cover_artwork_id,
                     m.file_size,
-                    (SELECT s.kind FROM sources s JOIN media_files mf ON mf.source_id = s.id WHERE mf.id = m.id) AS source_kind
+                    (SELECT s.kind FROM sources s JOIN media_files mf ON mf.source_id = s.id WHERE mf.id = m.id) AS source_kind,
+                    COALESCE(t.year, al.release_year),
+                    (SELECT GROUP_CONCAT(g.name, '; ') FROM track_genres tg JOIN genres g ON g.id = tg.genre_id WHERE tg.track_id = t.id),
+                    m.bitrate,
+                    m.sample_rate,
+                    m.bit_depth
                 FROM tracks t
                 LEFT JOIN albums al ON t.album_id = al.id
                 JOIN media_files m ON m.id = COALESCE(t.primary_file_id, (SELECT mf.id FROM media_files mf WHERE mf.track_id = t.id ORDER BY mf.id LIMIT 1))
@@ -146,7 +151,12 @@ impl TrackRepo {
                     al.title AS album_title, m.duration_ms, m.file_ext, m.id AS media_file_id, ft.track_id IS NOT NULL AS is_favorite, al.cover_artwork_id,
                     m.file_size,
                     (SELECT s.kind FROM sources s JOIN media_files mf ON mf.source_id = s.id WHERE mf.id = m.id) AS source_kind,
-                    t.last_played_at
+                    t.last_played_at,
+                    COALESCE(t.year, al.release_year),
+                    (SELECT GROUP_CONCAT(g.name, '; ') FROM track_genres tg JOIN genres g ON g.id = tg.genre_id WHERE tg.track_id = t.id),
+                    m.bitrate,
+                    m.sample_rate,
+                    m.bit_depth
                 FROM tracks t
                 LEFT JOIN albums al ON t.album_id = al.id
                 JOIN media_files m ON m.id = COALESCE(t.primary_file_id, (SELECT mf.id FROM media_files mf WHERE mf.track_id = t.id ORDER BY mf.id LIMIT 1))
@@ -170,6 +180,11 @@ impl TrackRepo {
                 file_size: row.get::<_, Option<i64>>(11)?,
                 source_kind: row.get::<_, String>(12)?,
                 last_played_at: row.get(13)?,
+                year: row.get::<_, Option<i64>>(14)?,
+                genres: row.get::<_, Option<String>>(15)?,
+                bitrate: row.get::<_, Option<i64>>(16)?,
+                sample_rate: row.get::<_, Option<i64>>(17)?,
+                bit_depth: row.get::<_, Option<i64>>(18)?,
             })
         })?;
         let mut result = Vec::new();
@@ -187,7 +202,12 @@ impl TrackRepo {
                     (SELECT GROUP_CONCAT(a.name, ', ') FROM track_artists ta JOIN artists a ON ta.artist_id = a.id WHERE ta.track_id = t.id ORDER BY ta.position) AS artist_name, 
                     t.album_id,
                     al.title AS album_title, m.duration_ms, m.file_ext, m.id AS media_file_id, 1 AS is_favorite, al.cover_artwork_id, m.file_size,
-                    (SELECT s.kind FROM sources s JOIN media_files mf ON mf.source_id = s.id WHERE mf.id = m.id) AS source_kind
+                    (SELECT s.kind FROM sources s JOIN media_files mf ON mf.source_id = s.id WHERE mf.id = m.id) AS source_kind,
+                    COALESCE(t.year, al.release_year),
+                    (SELECT GROUP_CONCAT(g.name, '; ') FROM track_genres tg JOIN genres g ON g.id = tg.genre_id WHERE tg.track_id = t.id),
+                    m.bitrate,
+                    m.sample_rate,
+                    m.bit_depth
                 FROM favorite_tracks ft
                 JOIN tracks t ON ft.track_id = t.id
                 LEFT JOIN albums al ON t.album_id = al.id
@@ -214,7 +234,12 @@ impl TrackRepo {
                     (SELECT GROUP_CONCAT(a.name, ', ') FROM track_artists ta JOIN artists a ON ta.artist_id = a.id WHERE ta.track_id = t.id ORDER BY ta.position) AS artist_name,
                     t.album_id,
                     al.title AS album_title, m.duration_ms, m.file_ext, m.id AS media_file_id, ft.track_id IS NOT NULL AS is_favorite, al.cover_artwork_id, m.file_size,
-                    (SELECT s.kind FROM sources s JOIN media_files mf ON mf.source_id = s.id WHERE mf.id = m.id) AS source_kind
+                    (SELECT s.kind FROM sources s JOIN media_files mf ON mf.source_id = s.id WHERE mf.id = m.id) AS source_kind,
+                    COALESCE(t.year, al.release_year),
+                    (SELECT GROUP_CONCAT(g.name, '; ') FROM track_genres tg JOIN genres g ON g.id = tg.genre_id WHERE tg.track_id = t.id),
+                    m.bitrate,
+                    m.sample_rate,
+                    m.bit_depth
                 FROM media_files m
                 JOIN tracks t ON m.track_id = t.id
                 LEFT JOIN albums al ON t.album_id = al.id
@@ -257,7 +282,12 @@ impl TrackRepo {
                     (ft.track_id IS NOT NULL) AS is_favorite,
                     al.cover_artwork_id,
                     m.file_size,
-                    (SELECT s.kind FROM sources s JOIN media_files mf ON mf.source_id = s.id WHERE mf.id = m.id) AS source_kind
+                    (SELECT s.kind FROM sources s JOIN media_files mf ON mf.source_id = s.id WHERE mf.id = m.id) AS source_kind,
+                    COALESCE(t.year, al.release_year),
+                    (SELECT GROUP_CONCAT(g.name, '; ') FROM track_genres tg JOIN genres g ON g.id = tg.genre_id WHERE tg.track_id = t.id),
+                    m.bitrate,
+                    m.sample_rate,
+                    m.bit_depth
                 FROM play_queue pq
                 JOIN tracks t ON pq.track_id = t.id
                 LEFT JOIN albums al ON t.album_id = al.id
@@ -490,7 +520,12 @@ impl TrackRepo {
                     ft.track_id IS NOT NULL AS is_favorite,
                     al.cover_artwork_id,
                     m.file_size,
-                    (SELECT s.kind FROM sources s WHERE s.id = m.source_id) AS source_kind
+                    (SELECT s.kind FROM sources s WHERE s.id = m.source_id) AS source_kind,
+                    COALESCE(t.year, al.release_year),
+                    (SELECT GROUP_CONCAT(g.name, '; ') FROM track_genres tg JOIN genres g ON g.id = tg.genre_id WHERE tg.track_id = t.id),
+                    m.bitrate,
+                    m.sample_rate,
+                    m.bit_depth
                 {} {}
                 ORDER BY m.normalized_path ASC
                 LIMIT ?4 OFFSET ?5
@@ -528,7 +563,12 @@ impl TrackRepo {
                 ft.track_id IS NOT NULL AS is_favorite,
                 al.cover_artwork_id,
                 m.file_size,
-                (SELECT s.kind FROM sources s JOIN media_files mf ON mf.source_id = s.id WHERE mf.id = m.id) AS source_kind
+                (SELECT s.kind FROM sources s JOIN media_files mf ON mf.source_id = s.id WHERE mf.id = m.id) AS source_kind,
+                COALESCE(t.year, al.release_year),
+                (SELECT GROUP_CONCAT(g.name, '; ') FROM track_genres tg JOIN genres g ON g.id = tg.genre_id WHERE tg.track_id = t.id),
+                m.bitrate,
+                m.sample_rate,
+                m.bit_depth
             FROM tracks t
             LEFT JOIN albums al ON t.album_id = al.id
             JOIN media_files m ON m.id = COALESCE(t.primary_file_id, (SELECT mf.id FROM media_files mf WHERE mf.track_id = t.id ORDER BY mf.id LIMIT 1))
@@ -565,7 +605,12 @@ impl TrackRepo {
                 ft.track_id IS NOT NULL AS is_favorite,
                 al.cover_artwork_id,
                 m.file_size,
-                (SELECT s.kind FROM sources s JOIN media_files mf ON mf.source_id = s.id WHERE mf.id = m.id) AS source_kind
+                (SELECT s.kind FROM sources s JOIN media_files mf ON mf.source_id = s.id WHERE mf.id = m.id) AS source_kind,
+                COALESCE(t.year, al.release_year),
+                (SELECT GROUP_CONCAT(g.name, '; ') FROM track_genres tg JOIN genres g ON g.id = tg.genre_id WHERE tg.track_id = t.id),
+                m.bitrate,
+                m.sample_rate,
+                m.bit_depth
             FROM tracks t
             LEFT JOIN albums al ON t.album_id = al.id
             JOIN media_files m ON m.id = COALESCE(t.primary_file_id, (SELECT mf.id FROM media_files mf WHERE mf.track_id = t.id ORDER BY mf.id LIMIT 1))
@@ -601,7 +646,12 @@ impl TrackRepo {
                 ft.track_id IS NOT NULL AS is_favorite,
                 al.cover_artwork_id,
                 m.file_size,
-                (SELECT s.kind FROM sources s JOIN media_files mf ON mf.source_id = s.id WHERE mf.id = m.id) AS source_kind
+                (SELECT s.kind FROM sources s JOIN media_files mf ON mf.source_id = s.id WHERE mf.id = m.id) AS source_kind,
+                COALESCE(t.year, al.release_year),
+                (SELECT GROUP_CONCAT(g.name, '; ') FROM track_genres tg JOIN genres g ON g.id = tg.genre_id WHERE tg.track_id = t.id),
+                m.bitrate,
+                m.sample_rate,
+                m.bit_depth
             FROM tracks t
             LEFT JOIN albums al ON t.album_id = al.id
             JOIN media_files m ON m.id = COALESCE(t.primary_file_id, (SELECT mf.id FROM media_files mf WHERE mf.track_id = t.id ORDER BY mf.id LIMIT 1))
@@ -638,7 +688,12 @@ impl TrackRepo {
                 ft.track_id IS NOT NULL AS is_favorite,
                 al.cover_artwork_id,
                 m.file_size,
-                (SELECT s.kind FROM sources s JOIN media_files mf ON mf.source_id = s.id WHERE mf.id = m.id) AS source_kind
+                (SELECT s.kind FROM sources s JOIN media_files mf ON mf.source_id = s.id WHERE mf.id = m.id) AS source_kind,
+                COALESCE(t.year, al.release_year),
+                (SELECT GROUP_CONCAT(g.name, '; ') FROM track_genres tg JOIN genres g ON g.id = tg.genre_id WHERE tg.track_id = t.id),
+                m.bitrate,
+                m.sample_rate,
+                m.bit_depth
             FROM tracks t
             LEFT JOIN albums al ON t.album_id = al.id
             JOIN media_files m ON m.id = COALESCE(t.primary_file_id, (SELECT mf.id FROM media_files mf WHERE mf.track_id = t.id ORDER BY mf.id LIMIT 1))
@@ -663,9 +718,11 @@ impl TrackRepo {
     // （实测播放最多榜单 6.7s）。两步法把扫描留给第一步的纯 ID 查询（只读索引列），
     // 第二步仅对 LIMIT 后的少量 ID 补齐展示列，复杂度从 O(全表 × 子查询) 降为 O(limit × 子查询)。
     //
-    // 注意：SELECT 列模板与 map_track_row 的 13 列强耦合，改动列序必须同步两处。
+    // 注意：SELECT 列模板与 map_track_row / 内联构造器的列序强耦合，改动列序必须同步两处。
 
-    /// 排行榜第二步：按 ID 集合补齐 13 列标准 TrackDTO + play_count(13) + last_played_at(14)。
+    /// 排行榜第二步：按 ID 集合补齐 13 列标准 TrackDTO + play_count(13) + last_played_at(14)
+    /// + 扩展列 year(15) genres(16) bitrate(17) sample_rate(18) bit_depth(19)。
+    ///
     /// `order_by` 由调用方以白名单字面量传入（非用户输入，无注入面），
     /// 可引用模板中的别名与 `ft`（favorite_tracks LEFT JOIN 在模板内）。
     fn ranked_details(
@@ -693,7 +750,12 @@ impl TrackRepo {
                 m.file_size,
                 (SELECT s.kind FROM sources s JOIN media_files mf ON mf.source_id = s.id WHERE mf.id = m.id) AS source_kind,
                 t.play_count,
-                t.last_played_at
+                t.last_played_at,
+                COALESCE(t.year, al.release_year),
+                (SELECT GROUP_CONCAT(g.name, '; ') FROM track_genres tg JOIN genres g ON g.id = tg.genre_id WHERE tg.track_id = t.id),
+                m.bitrate,
+                m.sample_rate,
+                m.bit_depth
             FROM tracks t
             LEFT JOIN albums al ON t.album_id = al.id
             JOIN media_files m ON m.id = COALESCE(t.primary_file_id, (SELECT mf.id FROM media_files mf WHERE mf.track_id = t.id ORDER BY mf.id LIMIT 1))
@@ -719,6 +781,11 @@ impl TrackRepo {
                     file_size: row.get::<_, Option<i64>>(11)?,
                     source_kind: row.get::<_, String>(12)?,
                     last_played_at: row.get(14)?,
+                    year: row.get::<_, Option<i64>>(15)?,
+                    genres: row.get::<_, Option<String>>(16)?,
+                    bitrate: row.get::<_, Option<i64>>(17)?,
+                    sample_rate: row.get::<_, Option<i64>>(18)?,
+                    bit_depth: row.get::<_, Option<i64>>(19)?,
                 },
                 play_count: row.get(13)?,
             })

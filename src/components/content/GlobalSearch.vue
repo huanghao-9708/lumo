@@ -1,12 +1,16 @@
 <script setup lang="ts">
 import { ref, reactive, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
 import {
-  Play, Loader2, Music, Search, Disc3, User,
+  Loader2, Music, Search, Disc3, User,
 } from 'lucide-vue-next';
-import { usePlayerStore } from '../../stores/player';
+import { usePlayerStore, mapTrackDTO } from '../../stores/player';
 import { getArtworkUrl } from '../../utils';
 import { libraryGetTracks, libraryGetAlbums, libraryGetArtists } from '../../api/library';
 import { useScrollRestore } from '../../composables/useScrollRestore';
+import TrackListHeader from '../shared/trackList/TrackListHeader.vue';
+import TrackRow from '../shared/trackList/TrackRow.vue';
+import { useTrackColumns } from '../shared/trackList/useTrackColumns';
+import type { TrackListContext } from '../shared/trackList/columns';
 import type { TrackDTO, AlbumDTO, ArtistDTO } from '../../api/types';
 
 const playerStore = usePlayerStore();
@@ -170,25 +174,20 @@ const totalCount = computed(() =>
   trackResults.value.length + albumResults.value.length + artistResults.value.length
 );
 
-function playTrack(index: number, dto: TrackDTO) {
-  const sec = Math.floor((dto.duration_ms || 0) / 1000);
-  playerStore.playAll([{
-    id: dto.id,
-    title: dto.title,
-    artist: dto.artist_name || '未知艺人',
-    album: dto.album_title || '未知专辑',
-    duration: `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`,
-    durationSec: sec,
-    format: dto.format ? dto.format.toUpperCase() : 'UNKNOWN',
-    artistId: dto.artist_id ?? null,
-    albumId: dto.album_id ?? null,
-    coverColor: '',
-    cover_artwork_id: dto.cover_artwork_id,
-    isFavorite: dto.is_favorite || false,
-    primary_file_id: dto.media_file_id,
-    fileSize: dto.file_size ?? null,
-    sourceKind: (dto.source_kind === 'webdav' ? 'webdav' : 'local') as 'local' | 'webdav',
-  }], index);
+/** 统一列解析：搜索结果行是轻列表（无收藏、无批量、无 more），字段映射走统一 mapTrackDTO */
+const listContext = computed<TrackListContext>(() => ({ hidden: ['favorite'] }));
+const { resolvedColumns } = useTrackColumns({
+  containerRef: scrollContainer,
+  context: listContext,
+});
+
+/** DTO → 前端 Track：不再各自手写映射，全部走 store 的统一通道 */
+const trackRows = computed(() => trackResults.value.map(mapTrackDTO));
+
+function playTrack(index: number) {
+  // 与旧行为一致：从搜索结果双击只播这一首（不整单入队）
+  const t = trackRows.value[index];
+  if (t) playerStore.playAll([t], 0);
 }
 
 function selectAlbum(album: AlbumDTO) {
@@ -210,7 +209,7 @@ function selectArtist(artist: ArtistDTO) {
     <div class="px-8 pt-6 pb-0 flex-shrink-0">
       <div class="flex items-end justify-between mb-2">
         <div>
-          <h1 class="text-[32px] font-bold text-text-primary tracking-tight leading-none mb-2">搜索</h1>
+          <h1 class="text-(--text-page-title) font-bold text-text-primary tracking-tight leading-none mb-2">搜索</h1>
           <p class="text-[12px] text-text-muted font-mono">
             <template v-if="isSearching">搜索中…</template>
             <template v-else-if="totalCount > 0">找到 {{ totalCount }} 个结果</template>
@@ -257,32 +256,18 @@ function selectArtist(artist: ArtistDTO) {
             <span class="text-[12px]">没有找到歌曲</span>
           </div>
           <div v-else>
-            <div class="flex items-center text-[10px] text-text-muted uppercase tracking-wider py-2 border-b border-border-color sticky top-0 bg-bg-content z-10">
-              <div class="w-10 text-center shrink-0">#</div>
-              <div class="flex-[2] min-w-0 pl-1">标题</div>
-              <div class="flex-[1.5] min-w-0 hidden sm:block">艺术家</div>
-              <div class="flex-[1.5] min-w-0 hidden md:block">专辑</div>
-              <div class="w-[56px] text-right shrink-0 hidden lg:block">时长</div>
-            </div>
-            <div
-              v-for="(t, i) in trackResults"
+            <TrackListHeader :columns="resolvedColumns" />
+            <TrackRow
+              v-for="(t, i) in trackRows"
               :key="t.id"
-              class="flex items-center hover:bg-list-hover transition-colors-smooth group cursor-pointer"
-              style="height: 40px;"
-              @dblclick="playTrack(i, t)"
-            >
-              <div class="w-10 text-center shrink-0 text-[12px] font-mono">
-                <Play class="w-[12px] h-[12px] fill-current mx-auto text-text-muted group-hover:text-text-secondary" />
-              </div>
-              <div class="flex-[2] min-w-0 pl-1">
-                <span class="text-[13px] truncate block text-text-primary font-medium">{{ t.title }}</span>
-              </div>
-              <div class="flex-[1.5] min-w-0 hidden sm:block text-[13px] text-text-secondary truncate">{{ t.artist_name }}</div>
-              <div class="flex-[1.5] min-w-0 hidden md:block text-[13px] text-text-secondary truncate">{{ t.album_title }}</div>
-              <div class="w-[56px] text-right shrink-0 hidden lg:block text-[12px] font-mono text-text-muted tabular-nums">
-                {{ Math.floor((t.duration_ms || 0) / 60000) }}:{{ String(Math.floor(((t.duration_ms || 0) % 60000) / 1000)).padStart(2, '0') }}
-              </div>
-            </div>
+              :track="t"
+              :columns="resolvedColumns"
+              :index="i"
+              :playing="playerStore.currentTrack?.id === t.id"
+              :is-playing-now="playerStore.isPlaying"
+              :show-more="false"
+              @play="playTrack(i)"
+            />
           </div>
         </template>
 

@@ -6,7 +6,6 @@ import { useUiStore } from '../../stores/ui';
 import { useScrollRestore } from '../../composables/useScrollRestore';
 import { getArtworkUrl } from '../../utils';
 import { libraryFetchMissingArtistCover } from '../../api/library';
-import FooterStatus from '../shared/FooterStatus.vue';
 
 const playerStore = usePlayerStore();
 const uiStore = useUiStore();
@@ -110,6 +109,5 @@ function toggleFav(artistId: number, e: Event) {
       </div>
     </div>
 
-    <FooterStatus v-if="artists.length > 0" :count="`${artists.length.toLocaleString()} 位艺术家`" />
   </div>
 </template>

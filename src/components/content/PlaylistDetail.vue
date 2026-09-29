@@ -1,8 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import {
-  Play, Shuffle, Loader2, ListMusic, Heart, MoreHorizontal, Clock, CheckSquare, Trash2,
-} from 'lucide-vue-next';
+import { Play, Shuffle, Loader2, ListMusic, CheckSquare, Trash2 } from 'lucide-vue-next';
 import { usePlayerStore, type Track } from '../../stores/player';
 import { useUiStore } from '../../stores/ui';
 import { useBatchSelect } from '../../composables/useBatchSelect';
@@ -10,7 +8,10 @@ import { useScrollRestore } from '../../composables/useScrollRestore';
 import { useArtworkSrc } from '../../composables/useArtworkSrc';
 import BatchActionBar from '../shared/BatchActionBar.vue';
 import ConfirmDialog from '../shared/ConfirmDialog.vue';
-import EqualizerIndicator from '../shared/EqualizerIndicator.vue';
+import TrackListHeader from '../shared/trackList/TrackListHeader.vue';
+import TrackRow from '../shared/trackList/TrackRow.vue';
+import { useTrackColumns } from '../shared/trackList/useTrackColumns';
+import type { TrackListContext } from '../shared/trackList/columns';
 
 const playerStore = usePlayerStore();
 const uiStore = useUiStore();
@@ -37,6 +38,13 @@ const artworkSrc = useArtworkSrc(
   () => detail.value?.cover_artwork_id ?? detail.value?.tracks?.[0]?.cover_artwork_id ?? null
 );
 const coverSrc = computed(() => detail.value?.cover_thumb || artworkSrc.value || '');
+
+/* ============ 统一列解析（容器宽度 + 用户列偏好） ============ */
+const listContext = computed<TrackListContext>(() => ({}));
+const { resolvedColumns, menuColumns, trailingExtraWidth } = useTrackColumns({
+  containerRef: listScrollEl,
+  context: listContext,
+});
 
 /* ============ 删除歌单 ============ */
 const showDeleteConfirm = ref(false);
@@ -94,11 +102,6 @@ function shufflePlay() {
 function playTrack(index: number) {
   playerStore.playAll(tracks.value, index);
 }
-
-function toggleFav(trackId: number, e: Event) {
-  e.stopPropagation();
-  playerStore.toggleFavorite(trackId);
-}
 </script>
 
 <template>
@@ -114,15 +117,15 @@ function toggleFav(trackId: number, e: Event) {
       <!-- 歌单头部 -->
       <div class="px-8 pt-8 pb-4 flex-shrink-0">
         <div class="flex items-start gap-8">
-          <!-- 封面：歌单内第一首歌曲的专辑封面（无封面时退回图标占位） -->
-          <div class="w-[180px] h-[180px] rounded-[10px] overflow-hidden flex-shrink-0 bg-bg-hover flex items-center justify-center">
+          <!-- 封面：歌单内第一首歌曲的专辑封面（无封面时退回图标占位）；1200 基线 152px -->
+          <div class="w-[152px] h-[152px] rounded-[10px] overflow-hidden flex-shrink-0 bg-bg-hover flex items-center justify-center">
             <img v-if="coverSrc" :src="coverSrc" class="w-full h-full object-cover" alt="cover" />
             <ListMusic v-else class="w-12 h-12 text-text-disabled" />
           </div>
 
           <!-- 标题 + 元数据 + 按钮 -->
           <div class="flex-1 min-w-0 pt-2">
-            <h1 class="text-[28px] font-bold text-text-primary tracking-tight leading-tight mb-1">{{ detail?.name || '歌单' }}</h1>
+            <h1 class="text-(--text-page-title) font-bold text-text-primary tracking-tight leading-tight mb-1">{{ detail?.name || '歌单' }}</h1>
 
             <p class="text-[11px] text-text-muted font-mono uppercase tracking-wider mb-5">{{ metaText }}</p>
 
@@ -171,18 +174,8 @@ function toggleFav(trackId: number, e: Event) {
 
       <!-- 轨道列表 -->
       <div ref="listScrollEl" class="flex-1 overflow-y-auto px-8">
-        <!-- 表头 -->
-          <div class="flex items-center text-[10px] text-text-muted uppercase tracking-wider py-2 border-b border-border-color sticky top-0 bg-bg-content z-10">
-            <div class="w-10 text-center shrink-0">#</div>
-            <div class="w-8 shrink-0"></div>
-            <div class="flex-[2] min-w-0 pl-1">标题</div>
-            <div class="flex-[1] min-w-0 hidden sm:block">艺术家</div>
-            <div class="flex-[1.5] min-w-0 hidden md:block">专辑</div>
-            <div class="w-[56px] text-right shrink-0">
-              <Clock class="w-[12px] h-[12px] inline-block" />
-            </div>
-            <div class="w-8 shrink-0"></div>
-          </div>
+        <!-- 统一表头（右端含显示列菜单） -->
+        <TrackListHeader :columns="resolvedColumns" :menu-columns="menuColumns" />
 
         <!-- 空列表 -->
         <div v-if="tracks.length === 0" class="flex flex-col items-center justify-center py-16 gap-3 text-text-muted">
@@ -190,81 +183,22 @@ function toggleFav(trackId: number, e: Event) {
         </div>
 
         <!-- 轨道行 -->
-        <div
-          v-for="(track, index) in tracks"
-          :key="track.id"
-          class="flex items-center hover:bg-list-hover transition-colors-smooth group cursor-pointer"
-          style="height: 40px;"
-          :class="{ 'playing-row bg-list-selected': isPlayingTrack(track.id), 'bg-list-selected/60': batch.isActive && batch.isSelected(track.id) }"
-          @click="batch.isActive && batch.toggle(track)"
-          @dblclick="!batch.isActive && playTrack(index)"
-        >
-          <div class="w-10 text-center shrink-0 text-[12px] font-mono">
-            <!-- 多选态：序号列换成复选框 -->
-            <span
-              v-if="batch.isActive"
-              class="inline-flex items-center justify-center"
-              @click.stop="batch.toggle(track)"
-            >
-              <span
-                class="w-[14px] h-[14px] rounded-[3px] border flex items-center justify-center transition-colors-smooth"
-                :class="batch.isSelected(track.id) ? 'bg-brand-orange border-brand-orange' : 'border-border-solid'"
-              >
-                <CheckSquare v-if="batch.isSelected(track.id)" class="w-[10px] h-[10px] text-white" />
-              </span>
-            </span>
-            <template v-else>
-              <span v-if="isPlayingTrack(track.id)" class="inline-flex items-center justify-center">
-                <EqualizerIndicator :playing="playerStore.isPlaying" />
-              </span>
-              <template v-else>
-                <span class="text-text-muted group-hover:hidden tabular-nums">{{ String(index + 1).padStart(2, '0') }}</span>
-                <Play class="w-[12px] h-[12px] fill-current mx-auto hidden group-hover:block text-text-secondary" />
-              </template>
-            </template>
-          </div>
-
-          <div class="w-8 shrink-0 flex items-center justify-center">
-            <!-- 多选态：心形改为切换选择 -->
-            <template v-if="batch.isActive">
-              <span
-                class="w-[14px] h-[14px] rounded-[3px] border flex items-center justify-center transition-colors-smooth"
-                :class="batch.isSelected(track.id) ? 'bg-brand-orange border-brand-orange' : 'border-border-solid opacity-0 group-hover:opacity-100'"
-                @click.stop="batch.toggle(track)"
-              >
-                <CheckSquare v-if="batch.isSelected(track.id)" class="w-[10px] h-[10px] text-white" />
-              </span>
-            </template>
-            <template v-else>
-              <Heart
-                v-if="track.isFavorite"
-                class="w-[14px] h-[14px] text-brand-orange fill-current cursor-pointer"
-                @click="toggleFav(track.id, $event)"
-              />
-              <Heart
-                v-else
-                class="w-[14px] h-[14px] text-text-disabled opacity-0 group-hover:opacity-60 transition-opacity hover:!opacity-100 hover:!text-brand-orange cursor-pointer"
-                @click="toggleFav(track.id, $event)"
-              />
-            </template>
-          </div>
-
-          <div class="flex-[2] min-w-0 pl-1">
-            <span class="text-[13px] truncate block" :class="isPlayingTrack(track.id) ? 'text-brand-orange font-semibold' : 'text-text-primary font-medium'">
-              {{ track.title }}
-            </span>
-          </div>
-
-          <div class="flex-[1.5] min-w-0 hidden sm:block text-[13px] text-text-secondary truncate"><span class="hover:underline cursor-pointer" @click.stop="batch.isActive ? batch.toggle(track) : playerStore.navigateToArtist(track.artistId)">{{ track.artist }}</span></div>
-
-          <div class="flex-[1.5] min-w-0 hidden md:block text-[13px] text-text-secondary truncate"><span class="hover:underline cursor-pointer" @click.stop="batch.isActive ? batch.toggle(track) : playerStore.navigateToAlbum(track.albumId)">{{ track.album }}</span></div>
-
-          <div class="w-[56px] text-right shrink-0 text-[12px] font-mono text-text-muted tabular-nums">{{ track.duration }}</div>
-
-          <div class="w-8 shrink-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-            <MoreHorizontal class="w-4 h-4 text-text-muted" />
-          </div>
-        </div>
+        <template v-else>
+          <TrackRow
+            v-for="(track, index) in tracks"
+            :key="track.id"
+            :track="track"
+            :columns="resolvedColumns"
+            :index="index"
+            :playing="isPlayingTrack(track.id)"
+            :is-playing-now="playerStore.isPlaying"
+            :batch-mode="batch.isActive"
+            :selected="batch.isSelected(track.id)"
+            :trailing-width="trailingExtraWidth"
+            @play="playTrack(index)"
+            @toggle-select="batch.toggle(track)"
+          />
+        </template>
 
       </div>
 

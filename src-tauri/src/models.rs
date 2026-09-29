@@ -173,6 +173,17 @@ pub struct TrackDTO {
     pub file_size: Option<i64>,
     /// 来源类型："local" | "webdav"，用于前端离线降级判断
     pub source_kind: String,
+    // ===== 丰富歌曲信息（LDL v2 song-row；旧曲库补扫前均为 NULL，前端显示 —） =====
+    /// 歌曲年份（标签优先、专辑发行年份兜底；描述歌曲本身）
+    pub year: Option<i64>,
+    /// 流派聚合（多流派以 "; " 连接；描述歌曲本身）
+    pub genres: Option<String>,
+    /// 比特率 bps（描述当前首选媒体文件，跟随多音源切换）
+    pub bitrate: Option<i64>,
+    /// 采样率 Hz（描述当前首选媒体文件）
+    pub sample_rate: Option<i64>,
+    /// 位深（描述当前首选媒体文件；MP3/AAC 等无位深概念的格式为 NULL）
+    pub bit_depth: Option<i64>,
 }
 
 /// 传输给前端的专辑数据传输对象

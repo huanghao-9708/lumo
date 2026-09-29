@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import {
-  Search, Play, List, LayoutGrid, MoreHorizontal, Heart, Loader2, Music, CloudOff, CheckSquare, Filter,
+  Search, List, LayoutGrid, Loader2, Music, CheckSquare, Filter,
 } from 'lucide-vue-next';
 
 const SKELETON_ROWS = 8;
@@ -26,10 +26,15 @@ import FolderView from '../content/FolderView.vue';
 import SmartPlaylistView from '../content/SmartPlaylistView.vue';
 import HomeView from '../content/HomeView.vue';
 import AiPlaylistView from '../content/AiPlaylistView.vue';
-import EqualizerIndicator from '../shared/EqualizerIndicator.vue';
+import TrackListHeader from '../shared/trackList/TrackListHeader.vue';import TrackRow from '../shared/trackList/TrackRow.vue';
+import { useTrackColumns } from '../shared/trackList/useTrackColumns';
+import { TRACK_ROW_HEIGHT, columnCellStyle } from '../shared/trackList/columns';
 
 const playerStore = usePlayerStore();
 const uiStore = useUiStore();
+
+/* ============ 统一歌曲列表列配置（容器宽度驱动，见 trackList/columns.ts） ============ */
+const trackColumnsContext = computed(() => ({}));
 
 /* ============ 批量选择（本视图一份实例） ============ */
 const batch = useBatchSelect();
@@ -205,11 +210,6 @@ function playSong(index: number) {
   playerStore.playTrack(index);
 }
 
-function toggleFav(trackId: number, e: Event) {
-  e.stopPropagation();
-  playerStore.toggleFavorite(trackId);
-}
-
 /* ============ 批量选择（全选以已加载列表为准） ============ */
 const isAllSelected = computed(() => batch.count > 0 && batch.count === displayTracks.value.length);
 function onToggleSelectAll() {
@@ -218,7 +218,8 @@ function onToggleSelectAll() {
 }
 
 /* ============ 虚拟列表 ============ */
-const ROW_HEIGHT = 40;
+// 行高常量与 TrackRow 共用同一来源（虚拟列表占位高度计算依赖固定行高）
+const ROW_HEIGHT = TRACK_ROW_HEIGHT;
 // 滚动位置记忆：全部歌曲 / 播放列表（队列）各记一份
 const scrollContainer = useScrollRestore(
   () => `tracks:${playerStore.activeLibraryTab}:${playerStore.searchQuery}`
@@ -228,6 +229,12 @@ const { totalHeight, offsetY, visibleItems } = useVirtualList({
   items: displayTracks as any,
   itemHeight: ROW_HEIGHT,
   buffer: 8,
+});
+
+/* ============ 统一列解析（容器宽度 + 用户列偏好） ============ */
+const { resolvedColumns, menuColumns, trailingExtraWidth } = useTrackColumns({
+  containerRef: scrollContainer,
+  context: trackColumnsContext,
 });
 
 /* ============ 无限加载更多 ============ */
@@ -329,8 +336,8 @@ onMounted(() => {
       <div class="px-8 pt-6 pb-0 flex-shrink-0">
         <div class="flex items-end justify-between mb-2">
           <div>
-            <!-- LDL Page Title = 42px -->
-            <h1 class="text-[32px] font-bold text-text-primary tracking-tight leading-none mb-2">{{ pageTitle }}</h1>
+            <!-- LDL v2 页面标题 28px（1200×720 基线） -->
+            <h1 class="text-(--text-page-title) font-bold text-text-primary tracking-tight leading-none mb-2">{{ pageTitle }}</h1>
             <p class="text-[12px] text-text-muted leading-relaxed font-mono">{{ metaText }}</p>
           </div>
           <div class="flex items-center gap-2 flex-shrink-0">
@@ -421,17 +428,8 @@ onMounted(() => {
       <template v-else-if="isTracksView">
         <div ref="scrollContainer" class="flex-1 overflow-y-auto px-8" @scroll="onListScroll">
 
-          <!-- 表头（sticky） -->
-          <div class="flex items-center text-[10px] text-text-muted uppercase tracking-wider py-2 border-b border-border-color sticky top-0 bg-bg-content z-10">
-            <div class="w-10 text-center shrink-0">#</div>
-            <div class="w-8 shrink-0"></div>
-            <div class="flex-[2] min-w-0 pl-1">标题</div>
-            <div class="flex-[1.5] min-w-0 hidden sm:block">艺术家</div>
-            <div class="flex-[1.5] min-w-0 hidden md:block">专辑</div>
-            <div class="w-[56px] text-right shrink-0 hidden lg:block">时长</div>
-            <div class="w-[50px] text-center shrink-0 hidden lg:block">格式</div>
-            <div class="w-8 shrink-0"></div>
-          </div>
+          <!-- 统一表头（列配置与行共用；右端含显示列菜单） -->
+          <TrackListHeader :columns="resolvedColumns" :menu-columns="menuColumns" />
 
           <!-- 加载态（首次）骨架屏（播放队列是内存数据，不需要骨架屏） -->
           <div v-if="!isQueueView && playerStore.isLoadingTracks && displayTracks.length === 0" class="py-2">
@@ -441,28 +439,11 @@ onMounted(() => {
               class="flex items-center animate-pulse"
               :style="{ height: ROW_HEIGHT + 'px' }"
             >
-              <div class="w-10 text-center shrink-0 flex justify-center">
-                <div class="w-4 h-3 rounded-[3px] skeleton-bg"></div>
-              </div>
-              <div class="w-8 shrink-0 flex justify-center">
-                <div class="w-3.5 h-3.5 rounded-[3px] skeleton-bg"></div>
-              </div>
-              <div class="flex-[2] min-w-0 pl-1">
-                <div class="w-[60%] max-w-[200px] h-3 rounded-[3px] skeleton-bg"></div>
-              </div>
-              <div class="flex-[1.5] min-w-0 hidden sm:block">
-                <div class="w-[70%] max-w-[140px] h-3 rounded-[3px] skeleton-bg"></div>
-              </div>
-              <div class="flex-[1.5] min-w-0 hidden md:block">
-                <div class="w-[65%] max-w-[150px] h-3 rounded-[3px] skeleton-bg"></div>
-              </div>
-              <div class="w-[56px] shrink-0 hidden lg:block flex justify-end">
-                <div class="w-8 h-3 rounded-[3px] skeleton-bg"></div>
-              </div>
-              <div class="w-[50px] shrink-0 hidden lg:block flex justify-center">
-                <div class="w-6 h-3 rounded-[3px] skeleton-bg"></div>
-              </div>
-              <div class="w-8 shrink-0"></div>
+              <template v-for="col in resolvedColumns" :key="'skel-' + i + '-' + col.id">
+                <div :style="columnCellStyle(col)" class="shrink-0 min-w-0 flex px-0" :class="col.align === 'right' ? 'justify-end' : col.align === 'center' ? 'justify-center' : 'justify-start'">
+                  <div class="h-3 rounded-[3px] skeleton-bg" :class="col.id === 'title' ? 'w-[60%] max-w-[200px]' : col.kind === 'flex' ? 'w-[70%] max-w-[140px]' : 'w-8'"></div>
+                </div>
+              </template>
             </div>
           </div>
 
@@ -480,104 +461,23 @@ onMounted(() => {
           <!-- 虚拟列表 -->
           <div v-else :style="{ height: totalHeight + 'px', position: 'relative' }">
             <div :style="{ transform: `translateY(${offsetY}px)` }">
-              <div
+              <TrackRow
                 v-for="{ index, data: song } in visibleItems"
                 :key="song.id"
-                class="flex items-center hover:bg-list-hover transition-colors-smooth group cursor-pointer relative"
-                :style="{ height: ROW_HEIGHT + 'px' }"
-                :class="{
-                  'playing-row bg-list-selected': isPlayingTrack(song.id),
-                  'bg-list-selected/60': batch.isActive && batch.isSelected(song.id),
-                }"
-                @click="batch.isActive && batch.toggle(song)"
-                @dblclick="!batch.isActive && playSong(index)"
-              >
-                <!-- 序号 / 复选框 / 播放图标 -->
-                <div class="w-10 text-center shrink-0 text-[12px] font-mono">
-                  <!-- 多选态：序号列换成复选框 -->
-                  <span
-                    v-if="batch.isActive"
-                    class="inline-flex items-center justify-center"
-                    @click.stop="batch.toggle(song)"
-                  >
-                    <span
-                      class="w-[14px] h-[14px] rounded-[3px] border flex items-center justify-center transition-colors-smooth"
-                      :class="batch.isSelected(song.id) ? 'bg-brand-orange border-brand-orange' : 'border-border-solid'"
-                    >
-                      <CheckSquare v-if="batch.isSelected(song.id)" class="w-[10px] h-[10px] text-white" />
-                    </span>
-                  </span>
-                  <template v-else>
-                    <span v-if="isPlayingTrack(song.id)" class="inline-flex items-center justify-center">
-                      <EqualizerIndicator :playing="playerStore.isPlaying" />
-                    </span>
-                    <template v-else>
-                      <span class="text-text-muted group-hover:hidden tabular-nums">{{ String((isQueueView ? queueOriginalIndex(index) : index) + 1).padStart(2, '0') }}</span>
-                      <Play class="w-[12px] h-[12px] fill-current mx-auto hidden group-hover:block text-text-secondary" />
-                    </template>
-                  </template>
-                </div>
-
-                <!-- 收藏（多选态下改为切换选择） -->
-                <div class="w-8 shrink-0 flex items-center justify-center">
-                  <template v-if="batch.isActive">
-                    <span
-                      class="w-[14px] h-[14px] rounded-[3px] border flex items-center justify-center transition-colors-smooth"
-                      :class="batch.isSelected(song.id) ? 'bg-brand-orange border-brand-orange' : 'border-border-solid opacity-0 group-hover:opacity-100'"
-                      @click.stop="batch.toggle(song)"
-                    >
-                      <CheckSquare v-if="batch.isSelected(song.id)" class="w-[10px] h-[10px] text-white" />
-                    </span>
-                  </template>
-                  <template v-else>
-                    <Heart
-                      v-if="song.isFavorite"
-                      class="w-[14px] h-[14px] text-brand-orange fill-current cursor-pointer"
-                      @click="toggleFav(song.id, $event)"
-                    />
-                    <Heart
-                      v-else
-                      class="w-[14px] h-[14px] text-text-disabled opacity-0 group-hover:opacity-60 transition-opacity hover:!opacity-100 hover:!text-brand-orange cursor-pointer"
-                      @click="toggleFav(song.id, $event)"
-                    />
-                  </template>
-                </div>
-
-                <!-- 标题 -->
-                <div class="flex-[2] min-w-0 pl-1">
-                  <span class="text-[13px] truncate block" :class="isPlayingTrack(song.id) ? 'text-brand-orange font-semibold' : isTrackGreyed(song.id) ? 'text-text-disabled' : 'text-text-primary font-medium'">
-                    {{ song.title }}
-                  </span>
-                </div>
-
-                <!-- 艺术家（多选态下改为切换选择） -->
-                <div class="flex-[1.5] min-w-0 hidden sm:block text-[13px] truncate" :class="isTrackGreyed(song.id) ? 'text-text-disabled' : 'text-text-secondary'">
-                  <span class="hover:underline cursor-pointer" @click.stop="batch.isActive ? batch.toggle(song) : playerStore.navigateToArtist(song.artistId)">{{ song.artist }}</span>
-                </div>
-
-                <!-- 专辑（非斜体；多选态下改为切换选择） -->
-                <div class="flex-[1.5] min-w-0 hidden md:block text-[13px] truncate" :class="isTrackGreyed(song.id) ? 'text-text-disabled' : 'text-text-secondary'">
-                  <span class="hover:underline cursor-pointer" @click.stop="batch.isActive ? batch.toggle(song) : playerStore.navigateToAlbum(song.albumId)">{{ song.album }}</span>
-                </div>
-
-                <!-- 时长 -->
-                <div class="w-[56px] text-right shrink-0 hidden lg:block text-[12px] font-mono text-text-muted tabular-nums">{{ song.duration }}</div>
-
-                <!-- 格式 -->
-                <div class="w-[50px] text-center shrink-0 hidden lg:block">
-                  <span class="text-[10px] font-mono uppercase" :class="isTrackGreyed(song.id) ? 'text-text-disabled' : 'text-text-muted'">{{ song.format }}</span>
-                </div>
-
-                <!-- 离线不可播标记（纯云端未缓存 / 本地文件丢失） -->
-                <div v-if="isTrackGreyed(song.id)" class="w-8 shrink-0 flex items-center justify-center" :title="isOfflineRemote(song.id) ? '离线且未缓存' : '文件不可用'">
-                  <CloudOff class="w-3.5 h-3.5 text-text-disabled" />
-                </div>
-
-                <!-- more -->
-                <div class="w-8 shrink-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity" :class="{ 'hidden': isTrackGreyed(song.id) }">
-                  <MoreHorizontal class="w-4 h-4 text-text-muted" />
-                </div>
-              </div>
+                :track="song"
+                :columns="resolvedColumns"
+                :index="index"
+                :display-index="isQueueView ? queueOriginalIndex(index) + 1 : index + 1"
+                :playing="isPlayingTrack(song.id)"
+                :is-playing-now="playerStore.isPlaying"
+                :greyed="isTrackGreyed(song.id)"
+                :grey-title="isOfflineRemote(song.id) ? '离线且未缓存' : '文件不可用'"
+                :batch-mode="batch.isActive"
+                :selected="batch.isSelected(song.id)"
+                :trailing-width="trailingExtraWidth"
+                @play="playSong(index)"
+                @toggle-select="batch.toggle(song)"
+              />
             </div>
           </div>
 

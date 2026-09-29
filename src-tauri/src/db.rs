@@ -293,7 +293,7 @@ CREATE TABLE IF NOT EXISTS artwork (
 /// 当前代码支持的 schema 版本上界（= apply_migrations 的最后一个版本块）。
 /// 恢复云端快照时用它做下界校验：版本高于本机的快照说明来自更新版本的 Lumo，
 /// 就地迁移会写出本机读不懂的 schema，必须拒绝而不是强行升级。
-pub const TARGET_SCHEMA_VERSION: i64 = 12;
+pub const TARGET_SCHEMA_VERSION: i64 = 13;
 
 /// 读取当前已应用到的迁移版本（0 表示全新库）
 fn get_current_version(conn: &Connection) -> Result<i64> {
@@ -841,6 +841,33 @@ fn apply_migrations(conn: &Connection, app_dir: &std::path::Path) -> Result<()> 
         __tx.commit()?;
         current = 12;
         tracing::info!("数据库迁移：已升级至 V12（多艺人分隔符再补全：／ ､ + ）");
+    }
+
+    // ===== V13: 丰富歌曲信息（LDL v2 song-row）=====
+    // 背景：genres / track_genres 表自 V1 就存在但从未写入；media_files.bit_depth 列
+    // 同样存在却从未填充；tracks.year 也从不写入。本轮开始扫描侧写入这些字段。
+    // 这里只补基础设施：流派关联索引 + 元数据解析版本标记表（增量补扫用）。
+    //
+    // 增量补扫机制：扫描 producer 对「未变化的文件」直接跳过重解析。引入
+    // app_meta['tag_parse_version:source:<id>']：逐来源标记补扫状态，避免第一个
+    // 来源扫描完成后令其他来源的旧文件跳过重解析。一轮完整扫描成功后才置 1。
+    if current < 13 {
+        // 整个版本块在一个事务内完成：语句与 schema_migrations 版本号原子提交，
+        // 中途失败（断电/进程被杀/唯一约束冲突）一律回滚，不留半迁移状态。
+        let __tx = conn.unchecked_transaction()?;
+        let conn: &Connection = &__tx;
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_track_genres_track_id ON track_genres(track_id);
+             CREATE INDEX IF NOT EXISTS idx_track_genres_genre_id ON track_genres(genre_id);
+             CREATE TABLE IF NOT EXISTS app_meta (
+                 key TEXT PRIMARY KEY,
+                 value TEXT NOT NULL
+             );",
+        )?;
+        mark_migration_applied(conn, 13)?;
+        __tx.commit()?;
+        current = 13;
+        tracing::info!("数据库迁移：已升级至 V13（流派索引 + 元数据补扫版本标记）");
     }
 
     let _ = current;

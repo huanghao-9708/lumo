@@ -235,13 +235,13 @@ async function addCurrentToPlaylist(playlistId: number) {
 </script>
 
 <template>
-  <div class="relative h-[110px] w-full bg-bg-canvas/85 backdrop-blur-xl border-t border-border-color/60 flex items-center justify-between px-6 flex-shrink-0 select-none transition-colors-smooth">
+  <div class="relative h-(--height-playback-bar) w-full bg-bg-canvas/85 backdrop-blur-xl border-t border-border-color/60 flex items-center justify-between px-6 flex-shrink-0 select-none transition-colors-smooth">
 
     <!-- Left: Track Info & Actions (左侧自适应，设置最大宽度，不越界挤压中控) -->
     <div class="flex items-center min-w-0 max-w-[32vw] flex-shrink-0 z-10">
       <!-- 封面（悬浮有微质感与展开沉浸提示） -->
       <div
-        class="group relative w-[54px] h-[54px] bg-bg-hover rounded-[8px] overflow-hidden flex-shrink-0 mr-3.5 flex items-center justify-center cursor-pointer shadow-sm ring-1 ring-black/5 dark:ring-white/10 transition-transform duration-200 hover:scale-[1.02]"
+        class="group relative w-(--size-play-cover) h-(--size-play-cover) bg-bg-hover rounded-[8px] overflow-hidden flex-shrink-0 mr-3.5 flex items-center justify-center cursor-pointer shadow-sm ring-1 ring-black/5 dark:ring-white/10 transition-transform duration-200 hover:scale-[1.02]"
         title="进入沉浸式播放"
         @click="uiStore.openImmersiveView()"
       >
@@ -343,7 +343,7 @@ async function addCurrentToPlaylist(playlistId: number) {
 
         <!-- 播放/暂停 大圆钮（微阴影与高光交互） -->
         <button
-          class="w-[46px] h-[46px] rounded-full bg-text-primary text-bg-canvas flex items-center justify-center shadow-sm hover:shadow-md hover:scale-[1.04] active:scale-[0.96] transition-all disabled:opacity-50 disabled:hover:scale-100"
+          class="w-(--size-play-button) h-(--size-play-button) rounded-full bg-text-primary text-bg-canvas flex items-center justify-center shadow-sm hover:shadow-md hover:scale-[1.04] active:scale-[0.96] transition-all disabled:opacity-50 disabled:hover:scale-100"
           :disabled="!playerStore.currentTrack"
           @click="playerStore.togglePlay()"
           :title="playerStore.isPlaying ? '暂停' : '播放'"

@@ -15,7 +15,7 @@ const close = () => appWindow.close();
 
 <template>
   <div
-    class="h-[60px] w-full bg-bg-content/90 backdrop-blur-md flex items-center justify-between px-4 flex-shrink-0 select-none border-b border-border-color/50 transition-colors-smooth"
+    class="h-(--height-topbar) w-full bg-bg-content/90 backdrop-blur-md flex items-center justify-between px-4 flex-shrink-0 select-none border-b border-border-color/50 transition-colors-smooth"
     data-tauri-drag-region
   >
 

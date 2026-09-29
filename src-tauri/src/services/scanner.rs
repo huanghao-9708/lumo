@@ -260,6 +260,37 @@ fn flush_batch(
     batch.clear();
 }
 
+// ===================== 元数据补扫（V13 引入的增量回填路径） =====================
+//
+// 背景：year / genre / bit_depth 是后来才开始入库的字段；存量曲库的文件若从未变化，
+// producer 的增量跳过会让它们永远拿不到新字段。补扫版本必须按来源记录：
+// 一个来源完成扫描不能使其他来源的旧文件跳过重解析。失败不置位，下轮续扫。
+
+fn tag_backfill_key(source_id: i64) -> String {
+    format!("tag_parse_version:source:{source_id}")
+}
+
+/// 当前来源是否需要对存量文件做元数据补扫（版本缺失或 < 1）
+pub(crate) fn needs_tag_backfill(conn: &Connection, source_id: i64) -> bool {
+    conn.query_row(
+        "SELECT CAST(value AS INTEGER) FROM app_meta WHERE key = ?1",
+        rusqlite::params![tag_backfill_key(source_id)],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|v| v < 1)
+    .unwrap_or(true)
+}
+
+/// 当前来源完整扫描成功后标记补扫完成
+pub(crate) fn mark_tag_backfill_done(conn: &Connection, source_id: i64) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO app_meta (key, value) VALUES (?1, '1')
+         ON CONFLICT(key) DO UPDATE SET value = '1'",
+        rusqlite::params![tag_backfill_key(source_id)],
+    )?;
+    Ok(())
+}
+
 /// 执行本地目录扫描（并行流水线版）：
 ///   生产者（本线程）WalkDir + 增量跳过判定 → 路径通道
 ///   → K 个提取 worker（lofty 解析 + 封面哈希/写盘/缩略图 + lrc 预读）
@@ -292,8 +323,11 @@ pub fn scan_local_directory(app: AppHandle, source_id: i64, path: &Path, app_dat
 
     // Load existing files for incremental scan
     let mut file_cache: HashMap<String, (i64, i64, String)> = HashMap::new();
+    let mut tag_backfill_pending = false;
     if let Some(db_state) = app.try_state::<DbState>() {
         if let Ok(conn) = db_state.db.get() {
+            // 元数据补扫期间不跳过未变化文件，让存量曲库也能回填 year/genre/bit_depth
+            tag_backfill_pending = needs_tag_backfill(&conn, source_id);
             if let Ok(mut stmt) = conn.prepare("SELECT normalized_path, modified_at, file_size, availability FROM media_files WHERE source_id = ?1") {
                 if let Ok(rows) = stmt.query_map(rusqlite::params![source_id], |row| {
                     let mtime_str: Option<String> = row.get(1)?;
@@ -398,25 +432,28 @@ pub fn scan_local_directory(app: AppHandle, source_id: i64, path: &Path, app_dat
         // 记录已扫描的文件路径，用于后续的删除检测
         scanned_paths.insert(normalized_path.clone());
 
-        // 增量判定：如果数据库中已经有且大小和修改时间均一致，则跳过解析
-        if let Some(&(db_mtime, db_size, ref availability)) = file_cache.get(&normalized_path) {
-            if db_mtime == fs_mtime && db_size == fs_size && availability == "available" {
-                skipped_count += 1;
-                skipped_shared.store(skipped_count, Ordering::Relaxed);
+        // 增量判定：如果数据库中已经有且大小和修改时间均一致，则跳过解析。
+        // 元数据补扫期间（tag_parse_version < 1）不跳过，存量文件也要重解析一次。
+        if !tag_backfill_pending {
+            if let Some(&(db_mtime, db_size, ref availability)) = file_cache.get(&normalized_path) {
+                if db_mtime == fs_mtime && db_size == fs_size && availability == "available" {
+                    skipped_count += 1;
+                    skipped_shared.store(skipped_count, Ordering::Relaxed);
 
-                // 每 50 个 skipped 也发一次进度，避免长久卡顿感
-                if skipped_count.is_multiple_of(50) {
-                    let _ = app.emit(
-                        "scan-progress",
-                        ScanProgressPayload {
-                            source_id,
-                            scanned_count: scanned_shared.load(Ordering::Relaxed),
-                            skipped_count,
-                            current_path: entry_path.to_string_lossy().to_string(),
-                        },
-                    );
+                    // 每 50 个 skipped 也发一次进度，避免长久卡顿感
+                    if skipped_count.is_multiple_of(50) {
+                        let _ = app.emit(
+                            "scan-progress",
+                            ScanProgressPayload {
+                                source_id,
+                                scanned_count: scanned_shared.load(Ordering::Relaxed),
+                                skipped_count,
+                                current_path: entry_path.to_string_lossy().to_string(),
+                            },
+                        );
+                    }
+                    continue;
                 }
-                continue;
             }
         }
 
@@ -485,6 +522,18 @@ pub fn scan_local_directory(app: AppHandle, source_id: i64, path: &Path, app_dat
         }
     }
 
+    // 一轮完整（未失败）扫描结束后标记元数据补扫完成，之后的扫描恢复增量跳过
+    if !scan_failed {
+        if let Some(db_state) = app.try_state::<DbState>() {
+            if let Ok(conn) = db_state.db.get() {
+                if let Err(e) = mark_tag_backfill_done(&conn, source_id) {
+                    error!("Failed to mark tag backfill complete for source {source_id}: {e}");
+                    scan_failed = true;
+                }
+            }
+        }
+    }
+
     info!(
         "Scan completed for directory: {:?} (scanned={}, errors={}, skipped={}, missing={})",
         path, totals.scanned, totals.errors, skipped_count, missing_count
@@ -540,6 +589,7 @@ pub fn scan_webdav_directory(
     let _ = scan_conn.pragma_update(None, "temp_store", "MEMORY");
 
     let mut file_cache: HashMap<String, (i64, i64, String)> = HashMap::new();
+    let tag_backfill_pending = needs_tag_backfill(&scan_conn, source_id);
     if let Ok(mut stmt) = scan_conn.prepare("SELECT normalized_path, modified_at, file_size, availability FROM media_files WHERE source_id = ?1") {
         if let Ok(rows) = stmt.query_map(rusqlite::params![source_id], |row| {
             let mtime_str: Option<String> = row.get(1)?;
@@ -614,21 +664,26 @@ pub fn scan_webdav_directory(
             let normalized_path = relative_path.to_lowercase();
             scanned_paths.insert(normalized_path.clone());
 
-            if let Some(&(db_mtime, db_size, ref availability)) = file_cache.get(&normalized_path) {
-                if db_mtime == fs_mtime && db_size == fs_size && availability == "available" {
-                    skipped_count += 1;
-                    if skipped_count.is_multiple_of(50) {
-                        let _ = app.emit(
-                            "scan-progress",
-                            ScanProgressPayload {
-                                source_id,
-                                scanned_count,
-                                skipped_count,
-                                current_path: file.path.clone(),
-                            },
-                        );
+            // 增量判定：元数据补扫期间（tag_parse_version < 1）不跳过未变化文件
+            if !tag_backfill_pending {
+                if let Some(&(db_mtime, db_size, ref availability)) =
+                    file_cache.get(&normalized_path)
+                {
+                    if db_mtime == fs_mtime && db_size == fs_size && availability == "available" {
+                        skipped_count += 1;
+                        if skipped_count.is_multiple_of(50) {
+                            let _ = app.emit(
+                                "scan-progress",
+                                ScanProgressPayload {
+                                    source_id,
+                                    scanned_count,
+                                    skipped_count,
+                                    current_path: file.path.clone(),
+                                },
+                            );
+                        }
+                        continue;
                     }
-                    continue;
                 }
             }
 
@@ -749,6 +804,13 @@ pub fn scan_webdav_directory(
         "WebDAV Scan completed: scanned={}, skipped={}, missing={}",
         scanned_count, skipped_count, missing_count
     );
+    // 一轮完整（未失败）扫描结束后标记元数据补扫完成（在归还连接前写入）
+    if !scan_failed {
+        if let Err(e) = mark_tag_backfill_done(&scan_conn, source_id) {
+            error!("Failed to mark tag backfill complete for source {source_id}: {e}");
+            scan_failed = true;
+        }
+    }
     // 先归还贯穿整轮扫描的连接，再让终止出口自己去取一条：连接池只有 8 条，
     // 扫描期间不额外占第二条，收尾记账也就不会在满载时排队等待。
     drop(scan_conn);

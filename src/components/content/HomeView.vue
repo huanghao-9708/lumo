@@ -133,7 +133,7 @@ const favoriteList = computed(() => insights.value?.favoriteTracks ?? []);
 
       <!-- Header -->
       <div class="mb-4 md:mb-6">
-        <h1 class="text-[24px] md:text-[32px] font-bold text-text-primary tracking-tight leading-none mb-2">首页</h1>
+        <h1 class="text-[24px] md:text-(--text-page-title) font-bold text-text-primary tracking-tight leading-none mb-2">首页</h1>
         <p class="text-[12px] text-text-muted leading-relaxed font-mono">你的曲库与收听行为概览</p>
       </div>
 

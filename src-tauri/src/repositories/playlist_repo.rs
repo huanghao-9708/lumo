@@ -132,7 +132,12 @@ impl PlaylistRepo {
                     ft.track_id IS NOT NULL AS is_favorite,
                     al.cover_artwork_id,
                     m.file_size,
-                    (SELECT s.kind FROM sources s JOIN media_files mf ON mf.source_id = s.id WHERE mf.id = m.id) AS source_kind
+                    (SELECT s.kind FROM sources s JOIN media_files mf ON mf.source_id = s.id WHERE mf.id = m.id) AS source_kind,
+                    COALESCE(t.year, al.release_year),
+                    (SELECT GROUP_CONCAT(g.name, '; ') FROM track_genres tg JOIN genres g ON g.id = tg.genre_id WHERE tg.track_id = t.id),
+                    m.bitrate,
+                    m.sample_rate,
+                    m.bit_depth
                 FROM playlist_items pi
                 JOIN tracks t ON pi.track_id = t.id
                 LEFT JOIN albums al ON t.album_id = al.id
