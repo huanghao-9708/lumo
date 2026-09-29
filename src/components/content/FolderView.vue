@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
 import {
-  Folder, ChevronRight, ChevronDown, Loader2, Music, Plus, ListChecks
+  Folder, ChevronRight, ChevronDown, Loader2, Music, Plus
 } from 'lucide-vue-next';
 import { usePlayerStore } from '../../stores/player';
 import type { DirectoryNodeDTO } from '../../api/types';
@@ -126,7 +126,7 @@ function breadcrumbClick(parts: string[]) {
 
 /* ============ 统一列解析：文件夹视图钉住「大小」列（文件夹浏览的业务字段） ============ */
 const listContext = computed<TrackListContext>(() => ({ pinned: ['fileSize'] }));
-const { resolvedColumns, menuColumns } = useTrackColumns({
+const { resolvedColumns, menuColumns, trailingExtraWidth } = useTrackColumns({
   containerRef: tracksScrollEl,
   context: listContext,
 });
@@ -256,18 +256,13 @@ const currentBreadcrumb = computed(() => {
 
       <!-- 统一表头（右端含批量选择入口与显示列菜单） -->
       <div class="px-6 flex-shrink-0">
-        <TrackListHeader :columns="resolvedColumns" :menu-columns="menuColumns">
-          <template #trailing>
-            <button
-              class="ml-2 w-8 shrink-0 flex items-center justify-center text-text-muted hover:text-text-primary transition-colors-smooth"
-              :class="batch.isActive ? 'text-brand-orange' : ''"
-              :title="batch.isActive ? '退出多选' : '多选歌曲'"
-              @click="batch.isActive ? batch.exit() : batch.enter()"
-            >
-              <ListChecks class="w-[14px] h-[14px]" />
-            </button>
-          </template>
-        </TrackListHeader>
+        <TrackListHeader
+          :columns="resolvedColumns"
+          :menu-columns="menuColumns"
+          show-batch-entry
+          :batch-active="batch.isActive"
+          @toggle-batch="batch.isActive ? batch.exit() : batch.enter()"
+        />
       </div>
 
       <!-- Track rows -->
@@ -303,6 +298,7 @@ const currentBreadcrumb = computed(() => {
             :is-playing-now="playerStore.isPlaying"
             :batch-mode="batch.isActive"
             :selected="batch.isSelected(track.id)"
+            :trailing-width="trailingExtraWidth"
             :show-more="false"
             @play="playTrack(index)"
             @toggle-select="batch.toggle(track)"

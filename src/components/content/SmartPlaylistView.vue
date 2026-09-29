@@ -1,11 +1,10 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { Loader2, Zap, ListChecks } from 'lucide-vue-next';
+import { Loader2, Zap } from 'lucide-vue-next';
 import { usePlayerStore } from '../../stores/player';
 import { useBatchSelect } from '../../composables/useBatchSelect';
 import { useScrollRestore } from '../../composables/useScrollRestore';
 import BatchActionBar from '../shared/BatchActionBar.vue';
-import FooterStatus from '../shared/FooterStatus.vue';
 import TrackListHeader from '../shared/trackList/TrackListHeader.vue';
 import TrackRow from '../shared/trackList/TrackRow.vue';
 import { useTrackColumns } from '../shared/trackList/useTrackColumns';
@@ -37,8 +36,8 @@ const title = computed(() => {
 });
 
 /* ============ 统一列解析（容器宽度 + 用户列偏好） ============ */
-const listContext = computed<TrackListContext>(() => ({}));
-const { resolvedColumns, menuColumns } = useTrackColumns({
+const listContext = computed<TrackListContext>(() => ({ batchEntry: true }));
+const { resolvedColumns, menuColumns, trailingExtraWidth } = useTrackColumns({
   containerRef: scrollEl,
   context: listContext,
 });
@@ -68,18 +67,13 @@ function playSong(index: number) {
       </div>
 
       <!-- 统一表头（右端含批量选择入口与显示列菜单） -->
-      <TrackListHeader :columns="resolvedColumns" :menu-columns="menuColumns">
-        <template #trailing>
-          <button
-            class="ml-2 w-8 shrink-0 flex items-center justify-center text-text-muted hover:text-text-primary transition-colors-smooth"
-            :class="batch.isActive ? 'text-brand-orange' : ''"
-            :title="batch.isActive ? '退出多选' : '多选歌曲'"
-            @click="batch.isActive ? batch.exit() : batch.enter()"
-          >
-            <ListChecks class="w-[14px] h-[14px]" />
-          </button>
-        </template>
-      </TrackListHeader>
+      <TrackListHeader
+          :columns="resolvedColumns"
+          :menu-columns="menuColumns"
+          show-batch-entry
+          :batch-active="batch.isActive"
+          @toggle-batch="batch.isActive ? batch.exit() : batch.enter()"
+        />
 
       <!-- 加载态 -->
       <div v-if="playerStore.isLoadingSmartPlaylist && tracks.length === 0" class="flex items-center justify-center py-20 text-text-muted">
@@ -104,6 +98,7 @@ function playSong(index: number) {
           :is-playing-now="playerStore.isPlaying"
           :batch-mode="batch.isActive"
           :selected="batch.isSelected(track.id)"
+            :trailing-width="trailingExtraWidth"
           @play="playSong(index)"
           @toggle-select="batch.toggle(track)"
         />
@@ -119,7 +114,5 @@ function playSong(index: number) {
       />
     </div>
 
-    <!-- Footer Status（固定在底部） -->
-    <FooterStatus v-if="tracks.length > 0" :count="`${tracks.length.toLocaleString()} 首歌曲`" />
   </div>
 </template>

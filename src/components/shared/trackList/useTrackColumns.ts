@@ -1,6 +1,6 @@
 import { computed, onBeforeUnmount, ref, watch, type Ref } from 'vue';
 import type { TrackListContext } from './columns';
-import { resolveTrackColumns } from './columns';
+import { computeTrailingExtraWidth, resolveTrackColumns } from './columns';
 import { resolveTrackColumnsWithPrefs, useColumnPrefs } from './useColumnPrefs';
 
 /**
@@ -58,10 +58,19 @@ export function useTrackColumns(options: {
       .filter(c => c.optional),
   );
 
+  /**
+   * 表头尾部额外宽度：TrackRow 需要渲染等宽的行尾占位来对齐表头
+   * （批量入口 40 + 显示列菜单 36，见 computeTrailingExtraWidth）。
+   */
+  const trailingExtraWidth = computed(() =>
+    computeTrailingExtraWidth(context.value.batchEntry === true, menuColumns.value.length > 0),
+  );
+
   return {
     containerWidth,
     resolvedColumns,
     menuColumns,
+    trailingExtraWidth,
     ...prefsApi,
   };
 }

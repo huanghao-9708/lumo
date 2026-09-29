@@ -19,7 +19,7 @@
 - 应用使用 CSS px，不随系统 DPI 缩放变化（Tauri WebView 默认行为）
 - 默认 1200×720；启动时按显示器可用工作区限幅，工作区不足时保证整个窗口可见
 - 记住用户主动调整后的尺寸（最大化不记），显示器/缩放变化时重新约束
-- Sidebar 220 + Inspector 360 = 580px 已占用；Inspector 为浮层，默认收起，用户打开时不挤压内容区
+- Sidebar 220 + Inspector 320 = 540px 已占用；Inspector 为浮层，默认收起，用户打开时不挤压内容区
 - 1920px+：三栏完整显示
 - 2560px+：Content 宽敞，Album Grid 显示 6+ 列
 
@@ -304,15 +304,15 @@ LUMO 使用 Tauri 自定义窗口（`decorations: false`），窗口控制由前
 
 ### 9.2 各宽度下的 Content 实际宽度
 
-Inspector 为浮层（覆盖内容区右侧 360px），不改变 Content 布局宽度；下表为
+Inspector 为浮层（覆盖内容区右侧 320px），不改变 Content 布局宽度；下表为
 Content 几何宽度（窗口宽 − Sidebar 220 − Divider）。
 
 | 窗口宽度 | Content 几何宽 | Inspector 打开时可视宽 |
 |---|---|---|
-| 1024（最小） | 803px | 443px |
-| 1200（默认） | 979px | 619px |
-| 1920 | 1699px | 1339px |
-| 2560 | 2339px | 1979px |
+| 1024（最小） | 803px | 483px |
+| 1200（默认） | 979px | 659px |
+| 1920 | 1699px | 1379px |
+| 2560 | 2339px | 2019px |
 
 ### 9.3 最小窗口 1024×640 的约束
 

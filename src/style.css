@@ -59,7 +59,7 @@
      禁止再写死像素值，保证规范与实现单一来源。
      ============================================================ */
   --width-sidebar: 220px;        /* 左侧导航栏（原 240px） */
-  --width-inspector: 360px;      /* 右侧 Inspector 浮层宽度 */
+  --width-inspector: 320px;      /* 右侧 Inspector 浮层宽度 */
   --height-topbar: 60px;         /* 顶栏 */
   --height-playback-bar: 92px;   /* 底部播放栏（原 110px） */
   --height-track-row: 40px;      /* 歌曲行高（虚拟列表依赖固定行高） */

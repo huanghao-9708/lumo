@@ -40,9 +40,15 @@ const props = withDefaults(defineProps<{
   compact?: boolean;
   /** 隐藏 more 操作列内容（GlobalSearch 等轻列表） */
   showMore?: boolean;
+  /**
+   * 行尾占位宽度（px）：补齐表头尾部控件（批量入口 40 / 显示列菜单 36），
+   * 与表头传同一值（useTrackColumns 的 trailingExtraWidth），保证表头与行对齐。
+   */
+  trailingWidth?: number;
 }>(), {
   rowHeight: TRACK_ROW_HEIGHT,
   showMore: true,
+  trailingWidth: 0,
 });
 
 const emit = defineEmits<{
@@ -210,5 +216,8 @@ const playedAtText = computed(() => formatPlayedAt(props.track.playedAt));
         <slot :name="`cell-${col.id}`" :track="track" :index="index" />
       </div>
     </template>
+
+    <!-- 行尾占位：宽度与表头尾部控件（批量入口/显示列菜单）配对，保证列对齐 -->
+    <div v-if="trailingWidth > 0" class="shrink-0" :style="{ width: trailingWidth + 'px' }" />
   </div>
 </template>

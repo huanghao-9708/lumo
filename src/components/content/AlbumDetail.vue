@@ -55,7 +55,7 @@ const isLoadingTracks = computed(() => {
 
 /* ============ 统一列解析：专辑详情隐藏专辑列（本页即上下文） ============ */
 const listContext = computed<TrackListContext>(() => ({ hidden: ['album'] }));
-const { resolvedColumns, menuColumns } = useTrackColumns({
+const { resolvedColumns, menuColumns, trailingExtraWidth } = useTrackColumns({
   containerRef: listScrollEl,
   context: listContext,
 });
@@ -200,6 +200,7 @@ function shufflePlay() {
             :is-playing-now="playerStore.isPlaying"
             :batch-mode="batch.isActive"
             :selected="batch.isSelected(track.id)"
+            :trailing-width="trailingExtraWidth"
             @play="playTrack(index)"
             @toggle-select="batch.toggle(track)"
           />

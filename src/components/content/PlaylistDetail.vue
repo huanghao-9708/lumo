@@ -41,7 +41,7 @@ const coverSrc = computed(() => detail.value?.cover_thumb || artworkSrc.value ||
 
 /* ============ 统一列解析（容器宽度 + 用户列偏好） ============ */
 const listContext = computed<TrackListContext>(() => ({}));
-const { resolvedColumns, menuColumns } = useTrackColumns({
+const { resolvedColumns, menuColumns, trailingExtraWidth } = useTrackColumns({
   containerRef: listScrollEl,
   context: listContext,
 });
@@ -194,6 +194,7 @@ function playTrack(index: number) {
             :is-playing-now="playerStore.isPlaying"
             :batch-mode="batch.isActive"
             :selected="batch.isSelected(track.id)"
+            :trailing-width="trailingExtraWidth"
             @play="playTrack(index)"
             @toggle-select="batch.toggle(track)"
           />

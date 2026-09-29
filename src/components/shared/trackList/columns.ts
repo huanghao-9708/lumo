@@ -89,6 +89,17 @@ export interface TrackListContext {
   pinned?: TrackColumnId[];
   /** 详细视图：开启全部可选列 */
   detailedView?: boolean;
+  /** 表头尾部带批量选择入口（TrackListHeader 渲染，行尾需补等宽占位） */
+  batchEntry?: boolean;
+}
+
+/**
+ * 表头尾部额外宽度（批量入口 40px + 显示列菜单 36px）。
+ * 表头比行多出的这部分必须由 TrackRow 的行尾占位补齐，
+ * 否则 flex 列宽在表头与行之间分配不一致，造成表头/行错位。
+ */
+export function computeTrailingExtraWidth(batchEntry: boolean, hasMenu: boolean): number {
+  return (batchEntry ? 40 : 0) + (hasMenu ? 36 : 0);
 }
 
 /** 按 id 取列定义（含页面专属的防御式拷贝） */

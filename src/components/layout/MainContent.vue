@@ -232,7 +232,7 @@ const { totalHeight, offsetY, visibleItems } = useVirtualList({
 });
 
 /* ============ 统一列解析（容器宽度 + 用户列偏好） ============ */
-const { resolvedColumns, menuColumns } = useTrackColumns({
+const { resolvedColumns, menuColumns, trailingExtraWidth } = useTrackColumns({
   containerRef: scrollContainer,
   context: trackColumnsContext,
 });
@@ -474,6 +474,7 @@ onMounted(() => {
                 :grey-title="isOfflineRemote(song.id) ? '离线且未缓存' : '文件不可用'"
                 :batch-mode="batch.isActive"
                 :selected="batch.isSelected(song.id)"
+                :trailing-width="trailingExtraWidth"
                 @play="playSong(index)"
                 @toggle-select="batch.toggle(song)"
               />

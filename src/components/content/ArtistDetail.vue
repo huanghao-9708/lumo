@@ -113,7 +113,7 @@ function currentList(): Track[] {
 
 /* ============ 统一列解析：艺人详情隐藏艺术家列（本页即上下文） ============ */
 const listContext = computed<TrackListContext>(() => ({ hidden: ['artist'] }));
-const { resolvedColumns, menuColumns } = useTrackColumns({
+const { resolvedColumns, menuColumns, trailingExtraWidth } = useTrackColumns({
   containerRef: listScrollEl,
   context: listContext,
 });
@@ -276,6 +276,7 @@ function onScroll(e: Event) {
               :index="index"
               :playing="isPlayingTrack(track.id)"
               :is-playing-now="playerStore.isPlaying"
+              :trailing-width="trailingExtraWidth"
               @play="playTrack(index)"
             />
 

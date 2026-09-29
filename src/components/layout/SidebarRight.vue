@@ -110,8 +110,8 @@ async function switchVersion(fileId: number) {
 
       <template v-else>
         <div class="flex-1 overflow-y-auto px-6 pt-4 pb-4 flex flex-col min-h-0">
-          <!-- Album Cover -->
-          <div class="w-full aspect-square max-h-[40vh] bg-bg-hover rounded-[12px] mb-4 overflow-hidden flex-shrink-0 flex items-center justify-center shadow-lg ring-1 ring-black/5 dark:ring-white/10">
+          <!-- Album Cover：限高正方形并居中（占满整宽会把歌词挤出可视区） -->
+          <div class="h-[28vh] max-h-[220px] aspect-square mx-auto bg-bg-hover rounded-[12px] mb-4 overflow-hidden flex-shrink-0 flex items-center justify-center shadow-lg ring-1 ring-black/5 dark:ring-white/10">
             <img v-if="coverSrc" :src="coverSrc" class="w-full h-full object-cover" alt="cover" />
             <Disc3 v-else class="w-10 h-10 text-text-disabled" />
           </div>

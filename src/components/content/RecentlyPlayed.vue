@@ -1,11 +1,10 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { Loader2, Music, ListChecks } from 'lucide-vue-next';
+import { Loader2, Music } from 'lucide-vue-next';
 import { usePlayerStore } from '../../stores/player';
 import { useBatchSelect } from '../../composables/useBatchSelect';
 import { useScrollRestore } from '../../composables/useScrollRestore';
 import BatchActionBar from '../shared/BatchActionBar.vue';
-import FooterStatus from '../shared/FooterStatus.vue';
 import TrackListHeader from '../shared/trackList/TrackListHeader.vue';
 import TrackRow from '../shared/trackList/TrackRow.vue';
 import { useTrackColumns } from '../shared/trackList/useTrackColumns';
@@ -43,22 +42,10 @@ const visibleTracks = computed(() => {
 });
 
 /* ============ 统一列解析：最近播放保留播放时间（页面专属列，不被列设置移除） ============ */
-const listContext = computed<TrackListContext>(() => ({ extra: ['playedAt'] }));
-const { resolvedColumns, menuColumns } = useTrackColumns({
+const listContext = computed<TrackListContext>(() => ({ extra: ['playedAt'], batchEntry: true }));
+const { resolvedColumns, menuColumns, trailingExtraWidth } = useTrackColumns({
   containerRef: scrollEl,
   context: listContext,
-});
-
-const totalDurationText = computed(() => {
-  const totalSec = tracks.value.reduce((sum, t) => sum + (t.durationSec || 0), 0);
-  const days = Math.floor(totalSec / 86400);
-  const hours = Math.floor((totalSec % 86400) / 3600);
-  const mins = Math.floor((totalSec % 3600) / 60);
-  const parts: string[] = [];
-  if (days > 0) parts.push(`${days} 天`);
-  if (hours > 0) parts.push(`${hours} 小时`);
-  parts.push(`${mins} 分钟`);
-  return `总计 ${parts.join(' ')}`;
 });
 
 function isPlayingTrack(trackId: number): boolean {
@@ -76,18 +63,13 @@ function playSong(index: number) {
   <div class="flex-1 flex flex-col overflow-hidden">
     <div ref="scrollEl" class="flex-1 overflow-y-auto px-8">
       <!-- 统一表头（右端含批量选择入口与显示列菜单） -->
-      <TrackListHeader :columns="resolvedColumns" :menu-columns="menuColumns">
-        <template #trailing>
-          <button
-            class="ml-2 w-8 shrink-0 flex items-center justify-center text-text-muted hover:text-text-primary transition-colors-smooth"
-            :class="batch.isActive ? 'text-brand-orange' : ''"
-            :title="batch.isActive ? '退出多选' : '多选歌曲'"
-            @click="batch.isActive ? batch.exit() : batch.enter()"
-          >
-            <ListChecks class="w-[14px] h-[14px]" />
-          </button>
-        </template>
-      </TrackListHeader>
+      <TrackListHeader
+          :columns="resolvedColumns"
+          :menu-columns="menuColumns"
+          show-batch-entry
+          :batch-active="batch.isActive"
+          @toggle-batch="batch.isActive ? batch.exit() : batch.enter()"
+        />
 
       <!-- 加载态 -->
       <div v-if="playerStore.isLoadingTracks && tracks.length === 0" class="flex items-center justify-center py-20 text-text-muted">
@@ -117,6 +99,7 @@ function playSong(index: number) {
           :is-playing-now="playerStore.isPlaying"
           :batch-mode="batch.isActive"
           :selected="batch.isSelected(track.id)"
+            :trailing-width="trailingExtraWidth"
           @play="playSong(index)"
           @toggle-select="batch.toggle(track)"
         />
@@ -134,7 +117,5 @@ function playSong(index: number) {
       <!-- Footer -->
     </div>
 
-    <!-- Footer Status（固定在底部） -->
-    <FooterStatus v-if="tracks.length > 0" :count="`${tracks.length.toLocaleString()} 首歌曲`" :hint="filterQuery?.trim() ? `过滤后 ${visibleTracks.length} 首` : totalDurationText" />
   </div>
 </template>
