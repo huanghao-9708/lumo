@@ -76,6 +76,8 @@ const handleGlobalKeyDown = (e: KeyboardEvent) => {
 
 const handleOnline = () => uiStore.setOnline(true);
 const handleOffline = () => uiStore.setOnline(false);
+let disposeWindowPersistence: (() => void) | null = null;
+let appUnmounted = false;
 
 onMounted(async () => {
   window.addEventListener('keydown', handleGlobalKeyDown);
@@ -86,7 +88,10 @@ onMounted(async () => {
 
   // 桌面窗口尺寸：默认 1200×720、按工作区限幅、记住用户调整（仅 Tauri 桌面生效）
   if (!isMobile.value) {
-    setupWindowPersistence();
+    setupWindowPersistence().then((dispose) => {
+      if (appUnmounted) dispose();
+      else disposeWindowPersistence = dispose;
+    }).catch((e) => console.warn('[window] 窗口状态监听失败', e));
   }
 
   // 1. 启动数据包（遗留事项 2）：一次 IPC 拿回 counts/playlists/albums/artists/play_queue，
@@ -99,6 +104,8 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  appUnmounted = true;
+  disposeWindowPersistence?.();
   window.removeEventListener('keydown', handleGlobalKeyDown);
   window.removeEventListener('online', handleOnline);
   window.removeEventListener('offline', handleOffline);

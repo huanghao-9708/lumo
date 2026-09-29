@@ -722,6 +722,7 @@ impl TrackRepo {
 
     /// 排行榜第二步：按 ID 集合补齐 13 列标准 TrackDTO + play_count(13) + last_played_at(14)
     /// + 扩展列 year(15) genres(16) bitrate(17) sample_rate(18) bit_depth(19)。
+    ///
     /// `order_by` 由调用方以白名单字面量传入（非用户输入，无注入面），
     /// 可引用模板中的别名与 `ft`（favorite_tracks LEFT JOIN 在模板内）。
     fn ranked_details(

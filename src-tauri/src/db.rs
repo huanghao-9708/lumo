@@ -849,9 +849,8 @@ fn apply_migrations(conn: &Connection, app_dir: &std::path::Path) -> Result<()> 
     // 这里只补基础设施：流派关联索引 + 元数据解析版本标记表（增量补扫用）。
     //
     // 增量补扫机制：扫描 producer 对「未变化的文件」直接跳过重解析。引入
-    // app_meta['tag_parse_version']：小于 1 表示还有存量文件没按新字段解析过，
-    // 此时 producer 不跳过（重新提取 year/genre/bit_depth 等并补空写入）；
-    // 一轮完整扫描成功结束后置 1，之后的常规扫描恢复跳过优化。
+    // app_meta['tag_parse_version:source:<id>']：逐来源标记补扫状态，避免第一个
+    // 来源扫描完成后令其他来源的旧文件跳过重解析。一轮完整扫描成功后才置 1。
     if current < 13 {
         // 整个版本块在一个事务内完成：语句与 schema_migrations 版本号原子提交，
         // 中途失败（断电/进程被杀/唯一约束冲突）一律回滚，不留半迁移状态。

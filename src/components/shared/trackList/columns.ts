@@ -113,9 +113,6 @@ function columnWidthPx(col: TrackColumnDef): number {
   return col.kind === 'fixed' ? (col.width ?? 0) : (col.minWidth ?? 0);
 }
 
-/** 核心固定宽度：序号 + 收藏 + 更多 */
-const CORE_FIXED_WIDTH = 40 + 32 + 32;
-
 /**
  * 解析当前容器宽度下应渲染的列。
  *
@@ -128,6 +125,7 @@ const CORE_FIXED_WIDTH = 40 + 32 + 32;
 export function resolveTrackColumns(
   containerWidth: number,
   context: TrackListContext = {},
+  trailingWidth = 0,
 ): TrackColumnDef[] {
   const hidden = new Set(context.hidden ?? []);
   const pinned = new Set(context.pinned ?? []);
@@ -157,7 +155,9 @@ export function resolveTrackColumns(
 
   // 从最重要（collapseOrder 大）到次要依次装入可用空间
   auto.sort((a, b) => b.priority - a.priority);
-  let budget = containerWidth - CORE_FIXED_WIDTH - TITLE_MIN_WIDTH;
+  // 核心列、页面专属列和用户钉住的列均已在 wanted 中；表头尾部按钮也占宽。
+  // 先扣除这些实际占用，再决定哪些普通列能放下。
+  let budget = containerWidth - trailingWidth - wanted.reduce((sum, col) => sum + columnWidthPx(col), 0);
   for (const { col } of auto) {
     if (budget - columnWidthPx(col) >= 0) {
       wanted.push(col);

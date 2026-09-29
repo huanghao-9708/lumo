@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed } from 'vue';
-import { Play, Heart, MoreHorizontal, CheckSquare, CloudOff } from 'lucide-vue-next';
+import { computed, ref } from 'vue';
+import { Play, Heart, ListPlus, CheckSquare, CloudOff } from 'lucide-vue-next';
 import type { Track } from '../../../stores/player';
 import { usePlayerStore } from '../../../stores/player';
 import type { TrackColumnDef } from './columns';
@@ -8,13 +8,14 @@ import { TRACK_ROW_HEIGHT, columnCellStyle, columnAlignClass } from './columns';
 import { formatAudioInfo, formatFileSize, formatTrackGenres, formatTrackYear } from './format';
 import { formatPlayedAt } from '../../../utils/datetime';
 import EqualizerIndicator from '../../shared/EqualizerIndicator.vue';
+import PlaylistPickerModal from '../../shared/PlaylistPickerModal.vue';
 
 /**
  * 统一歌曲行（LDL v2 song-row）：与 TrackListHeader 由同一份列配置驱动。
  *
  * 行内通用行为（收藏、艺人/专辑跳转）直接走 playerStore；
  * 页面差异通过 props 传入状态（playing/selected/greyed）、事件上抛
- * （play / toggle-select / more），组件内部不做页面名称判断。
+ * （play / toggle-select），组件内部不做页面名称判断。
  */
 const props = withDefaults(defineProps<{
   track: Track;
@@ -54,10 +55,10 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   play: [];
   toggleSelect: [];
-  more: [];
 }>();
 
 const playerStore = usePlayerStore();
+const playlistPickerOpen = ref(false);
 
 const displayNo = computed(() => String((props.displayIndex ?? props.index + 1)).padStart(2, '0'));
 
@@ -197,18 +198,20 @@ const playedAtText = computed(() => formatPlayedAt(props.track.playedAt));
         {{ playedAtText }}
       </div>
 
-      <!-- more 操作 -->
+      <!-- 添加到歌单 / 不可播状态 -->
       <div v-else-if="col.id === 'more' && showMore" :style="columnCellStyle(col)" class="flex items-center justify-center shrink-0">
         <CloudOff
           v-if="greyed"
           class="w-3.5 h-3.5 text-text-disabled"
           :title="greyTitle"
         />
-        <MoreHorizontal
+        <button
           v-else
-          class="w-4 h-4 text-text-muted opacity-0 group-hover:opacity-100 transition-opacity"
-          @click.stop="emit('more')"
-        />
+          class="w-8 h-8 flex items-center justify-center rounded-[6px] text-text-muted opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:bg-bg-hover transition-opacity"
+          title="添加到歌单"
+          aria-label="添加到歌单"
+          @click.stop="playlistPickerOpen = true"
+        ><ListPlus class="w-4 h-4" /></button>
       </div>
 
       <!-- 页面自定义列插槽 -->
@@ -220,4 +223,10 @@ const playedAtText = computed(() => formatPlayedAt(props.track.playedAt));
     <!-- 行尾占位：宽度与表头尾部控件（批量入口/显示列菜单）配对，保证列对齐 -->
     <div v-if="trailingWidth > 0" class="shrink-0" :style="{ width: trailingWidth + 'px' }" />
   </div>
+  <PlaylistPickerModal
+    v-if="playlistPickerOpen"
+    :track-ids="[track.id]"
+    :track-title="track.title"
+    @close="playlistPickerOpen = false"
+  />
 </template>
