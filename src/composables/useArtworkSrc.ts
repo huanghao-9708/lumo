@@ -119,3 +119,31 @@ export function useArtworkSrc(artworkIdGetter: () => number | null | undefined):
 export function resetArtworkFrontCache() {
   clearArtworkCache();
 }
+
+/** 取图请求队列诊断（内存治理 A.2；仅开发模式采样器读取） */
+export function getArtworkFetchStats(): { activeFetches: number; queued: number; pendingIds: number } {
+  return { activeFetches, queued: fetchQueue.length, pendingIds: pendingPrefetchIds.size };
+}
+
+// 开发模式：注册封面链路内存采样（缓存字节/条数/命中 + 请求队列）
+if (import.meta.env.DEV) {
+  void import('../utils/memDiagnostics').then(({ registerMemSampler }) => {
+    void import('../utils/artworkCache').then((cache) => {
+      registerMemSampler('artwork', () => {
+        const s = cache.getArtworkCacheStats();
+        const f = getArtworkFetchStats();
+        return {
+          artwork_cache_entries: s.entries,
+          artwork_cache_mb: Math.round((s.bytes / 1048576) * 10) / 10,
+          artwork_cache_budget_mb: Math.round((s.budgetBytes / 1048576) * 10) / 10,
+          artwork_hits: s.hits,
+          artwork_misses: s.misses,
+          artwork_evictions: s.evictions,
+          artwork_oversize_rejected: s.rejectedOversize,
+          artwork_fetch_active: f.activeFetches,
+          artwork_fetch_queued: f.queued,
+        };
+      });
+    });
+  });
+}

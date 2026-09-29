@@ -66,7 +66,7 @@ cargo test --release --test perf_baseline -- --ignored --nocapture
 |---|---|---|
 | 冷启动 / 热启动到可交互 | 需要前端与 Tauri 启动打点（`ipc_trace` 只有 IPC 侧） | I4/US- 可诊断性 |
 | 首播延迟、切歌间隔、gapless 是否断音 | 需要真实音频设备与解码计时，CI 无声卡 | 人工冒烟矩阵 |
-| 内存占用（列表滚动 / 30k 库 / 后台缓存） | 无测量脚本 | I4 |
+| 内存占用（列表滚动 / 30k 库 / 后台缓存） | 采样工具与开发计数已就绪（见 §7），S0–S6 场景待真机执行 | I4 |
 | 安装包体积（Windows NSIS / Android APK） | CI 产物体积未回写文档 | I4 发布工程 |
 | 本地磁盘播放 I/O、WebDAV 局域网/弱网吞吐 | 需要固定网络工装（限流/丢包），当前无任何实测样本 | I3 退出清单第 3 项，人工 |
 | 扫描端到端耗时（1k/10k/30k，本地与 WebDAV） | 基准只测了写库导入与缓存加载；标签解析并发段未测 | I4 |
@@ -81,6 +81,39 @@ cargo test --release --test perf_baseline -- --ignored --nocapture
   运行方式已可脚本化：`cargo test --release --test perf_baseline -- --ignored --nocapture`
   的输出是固定行格式，可 grep 抽取。
 - 待办：`ci.yml` 目前只有 PR/主干与发布 preflight 两个 job，**尚未加夜间基准 job**。
+
+## 7. 应用内存（2026-09 治理，进行中）
+
+依据 [桌面端内存治理方案_2026-09-29.md](../桌面端内存治理方案_2026-09-29.md) 建立。本章节不声称已达成任何内存目标。
+
+### 7.1 已就绪的工具
+
+- **`scripts/measure-memory.ps1`**：按进程树归属 Lumo.exe + 全部 WebView2 子进程，每 2 秒采样 Private Working Set / Private Bytes / Working Set / CPU% / 句柄 / 线程到 CSV，停止时输出整组与分项 median/P95/peak。环境登记（git SHA、OS、WebView2 版本、缩放、内存容量、曲库规模）写入同名 `.env.txt`。采样数据目录 `scripts/mem-data/` 已 gitignore。
+  用法：`powershell -ExecutionPolicy Bypass -File scripts\measure-memory.ps1 -Scenario S3 -LibrarySize 30000 -DurationSec 1800`
+- **开发模式诊断计数**（`import.meta.env.DEV` 才启用，无用户内容）：控制台 `__LUMO_MEM__.sample()` / `sampleFull()`（含 Rust 侧连接池/页缓存/扫描计数）/ `startLogging(ms)` / `clearArtworkCache()`。Rust 侧命令 `library_debug_stats` 返回连接池占用、`PRAGMA cache_size`、扫描文件缓存条数、tracks/media_files 计数。
+- **`getArtworkCacheStats()`**：封面缓存条数/计量字节/预算/命中/未命中/驱逐/超大拒绝计数。
+
+### 7.2 数据库页缓存参数矩阵（实测，2026-09-29）
+
+同机（Windows、release、rustc 1.98.1）、同二进制，`LUMO_DB_CACHE_KIB` 单变量，30k 曲库（库体积 15.86 MB，VACUUM 后），中位数 ms：
+
+| cache_size | 首屏 200 | 深分页 N-200 | 关键词搜索 |
+|---|---|---|---|
+| -32768 KiB（≈旧配置 8000 页） | 131.0 | 149.8 | 58.5 |
+| **-8192 KiB（新默认）** | 129.2 | 158.3 | 73.3 |
+| -4096 KiB | 157.7 | 170.3 | 75.9 |
+| -2048 KiB | 149.3 | 169.5 | 78.0 |
+
+- 采用 **-8192 KiB**：分页持平（±5%），搜索中位 +22%（绝对值 73 ms）——**略超方案 20% 回退门**，S1/S3 场景复核后决定保留或回退 `-32768`。
+- 新默认下整组页缓存理论上限 = 12 连接 × 8 MiB = **96 MiB**（旧配置 24 × 31 MiB ≈ 768 MiB）。理论值非实测占用。
+- pool size（24→12）对本基准（单连接）无影响；并发连接等待须在 S5 验证。
+- 复测差异记录：改造前首跑 30k 首屏 556 ms 与同配置复测 131 ms 不一致，**未复现、原因未知**（首跑紧接 3.5 分钟全核编译，疑与机器状态相关），按方案不作归因结论；上表全部数据来自同二进制的稳定复测。
+
+### 7.3 待真机执行（不写未经测量的数字）
+
+- S0–S6 全场景 × 3 次独立启动（§2.2 场景表），产出整组 PWS 的 median/P95/peak 基线；
+- 封面缓存 16/32 MiB 两档 A/B（localStorage `lumo_artwork_cache_mb`）+ 扫描缓存 `LUMO_SCAN_CACHE_KIB` 8/16/32 MiB A/B；
+- 阶段 D 的 200/500 条数据窗口化，待功能回归通过后再启用。
 
 ## 6. 与其他治理文档的关系
 

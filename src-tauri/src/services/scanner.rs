@@ -20,6 +20,27 @@ fn is_supported_audio_ext(ext: &str) -> bool {
     matches!(ext, "mp3" | "flac" | "wav" | "m4a" | "aac")
 }
 
+// ===================== 扫描期内存参数与诊断计数（内存治理 A.2 / C.2） =====================
+
+/// 扫描写连接页缓存默认 16 MiB（旧 64 MiB）；LUMO_SCAN_CACHE_KIB 可覆盖（8/16/32 MiB A/B）
+pub const DEFAULT_SCAN_CACHE_KIB: i64 = -16384;
+
+fn scan_cache_kib() -> i64 {
+    std::env::var("LUMO_SCAN_CACHE_KIB")
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .filter(|v| *v <= -1024 && *v >= -262_144)
+        .unwrap_or(DEFAULT_SCAN_CACHE_KIB)
+}
+
+/// 诊断计数：当前来源的增量扫描文件缓存条数（仅开发模式 debug_stats 读取）
+static SCAN_FILE_CACHE_ENTRIES: AtomicUsize = AtomicUsize::new(0);
+
+/// 开发模式诊断：读取扫描文件缓存条数
+pub fn scan_file_cache_entries() -> usize {
+    SCAN_FILE_CACHE_ENTRIES.load(Ordering::Relaxed)
+}
+
 #[derive(Clone, Serialize)]
 pub struct ScanProgressPayload {
     pub source_id: i64,
@@ -185,8 +206,9 @@ fn db_writer_loop(
         return totals;
     };
 
-    // 扫描期写连接调优：加大页缓存（64MB）减少曲库增长后的索引页读盘，临时表走内存
-    let _ = conn.pragma_update(None, "cache_size", -65536i64);
+    // 扫描期写连接调优：页缓存减少曲库增长后的索引页读盘，临时表走内存。
+    // 内存治理 C.2：64 MiB -> 默认 16 MiB，LUMO_SCAN_CACHE_KIB 可覆盖做 8/16/32 MiB A/B。
+    let _ = conn.pragma_update(None, "cache_size", scan_cache_kib());
     let _ = conn.pragma_update(None, "temp_store", "MEMORY");
 
     let mut batch: Vec<PreparedFile> = Vec::with_capacity(50);
@@ -338,6 +360,7 @@ pub fn scan_local_directory(app: AppHandle, source_id: i64, path: &Path, app_dat
             }
         }
     }
+    SCAN_FILE_CACHE_ENTRIES.store(file_cache.len(), Ordering::Relaxed);
     info!(
         "Loaded {} existing files for incremental scan check.",
         file_cache.len()
@@ -578,7 +601,7 @@ pub fn scan_webdav_directory(
         );
         return;
     };
-    let _ = scan_conn.pragma_update(None, "cache_size", -65536i64);
+    let _ = scan_conn.pragma_update(None, "cache_size", scan_cache_kib());
     let _ = scan_conn.pragma_update(None, "temp_store", "MEMORY");
 
     let mut file_cache: HashMap<String, (i64, i64, String)> = HashMap::new();
@@ -595,6 +618,7 @@ pub fn scan_webdav_directory(
             }
         }
     }
+    SCAN_FILE_CACHE_ENTRIES.store(file_cache.len(), Ordering::Relaxed);
     info!(
         "Loaded {} existing files for WebDAV incremental scan check.",
         file_cache.len()

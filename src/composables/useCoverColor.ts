@@ -34,10 +34,13 @@ export function useCoverColor(srcGetter: () => string | null | undefined): Cover
   const primary = ref('');
   const secondary = ref('');
   const ready = ref(false);
+  // 过期结果防护：快速切歌时取色是异步的，慢的旧结果不得覆盖新封面
+  let latestSrc: string | null = null;
 
   watch(
     srcGetter,
     (src) => {
+      latestSrc = src ?? null;
       if (!src) {
         primary.value = '';
         secondary.value = '';
@@ -46,6 +49,7 @@ export function useCoverColor(srcGetter: () => string | null | undefined): Cover
       }
       extract(src).then(
         (res) => {
+          if (latestSrc !== src) return; // 已切到别的封面，丢弃过期取色
           if (!res) {
             primary.value = '';
             secondary.value = '';
@@ -57,6 +61,7 @@ export function useCoverColor(srcGetter: () => string | null | undefined): Cover
           ready.value = true;
         },
         () => {
+          if (latestSrc !== src) return;
           primary.value = '';
           secondary.value = '';
           ready.value = false;

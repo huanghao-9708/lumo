@@ -782,6 +782,21 @@ const albums = shallowRef<Album[]>([]);
   const tracks = ref<Track[]>([]);
   const tracksTotalCount = ref(0);
 
+  // 开发模式：注册列表规模内存采样（内存治理 A.2；release 构建为空操作）
+  if (import.meta.env.DEV) {
+    void import('../utils/memDiagnostics').then(({ registerMemSampler }) => {
+      registerMemSampler('lists', () => ({
+        list_tracks: tracks.value.length,
+        list_queue: queue.value.length,
+        list_albums: albums.value.length,
+        list_artists: artists.value.length,
+        list_playlists: playlists.value.length,
+        list_smart_playlist: smartPlaylistTracks.value.length,
+        list_playability_map: playability.value.size,
+      }));
+    });
+  }
+
   // 收藏数据计数（用于侧边栏徽标）
   const libraryCounts = reactive<import('../api/types').LibraryCountsDTO>({
     tracks: 0,

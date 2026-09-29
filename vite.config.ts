@@ -23,14 +23,16 @@ export default defineConfig(async () => ({
   clearScreen: false,
   // 2. tauri expects a fixed port, fail if that port is not available
   server: {
-    port: 1420,
+    // 1520/1521：避开本机 winnat/Hyper-V 动态保留的 1357-1456 端口段
+    // （1420/1421 会 EACCES，见 netsh interface ipv6 show excludedportrange protocol=tcp）
+    port: 1520,
     strictPort: true,
     host: host || false,
     hmr: host
       ? {
           protocol: "ws",
           host,
-          port: 1421,
+          port: 1521,
         }
       : undefined,
     watch: {

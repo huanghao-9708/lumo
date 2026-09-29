@@ -247,3 +247,21 @@ export function storageGetDbSize(): Promise<number> {
 export function libraryGetPlayability(trackIds: number[]): Promise<Record<number, PlayabilityState>> {
   return invoke('library_get_playability', { trackIds });
 }
+
+// ===================== 开发模式诊断（内存治理 A.2；release 前端不调用） =====================
+
+/** library_debug_stats 返回：连接池/页缓存/扫描计数，仅计数与配置，无用户内容 */
+export interface LibraryDebugStatsDTO {
+  pool_connections_in_use: number;
+  pool_connections_idle: number;
+  pool_max_size: number;
+  cache_size_pragma: number;
+  page_size: number;
+  scan_file_cache_entries: number;
+  tracks: number;
+  media_files: number;
+}
+
+export function libraryDebugStats(): Promise<LibraryDebugStatsDTO> {
+  return invoke('library_debug_stats');
+}

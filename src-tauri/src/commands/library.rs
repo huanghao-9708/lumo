@@ -1902,3 +1902,34 @@ mod tests {
         assert_eq!(verdicts[&102], Playability::Unavailable);
     }
 }
+
+/// 开发模式诊断（内存治理 A.2）：数据库连接池与页缓存状态 + 规模计数。
+/// 只返回计数与配置，不含任何用户内容；前端仅在 DEV 构建调用
+/// （memDiagnostics），release 运行时不会触发。
+#[tauri::command(async)]
+pub fn library_debug_stats(db_state: State<'_, DbState>) -> Result<serde_json::Value, AppError> {
+    let conn = db_state.db.get()?;
+    let state = db_state.db.state();
+    let cache_pragma: i64 = conn
+        .query_row("PRAGMA cache_size", [], |r| r.get(0))
+        .unwrap_or(0);
+    let page_size: i64 = conn
+        .query_row("PRAGMA page_size", [], |r| r.get(0))
+        .unwrap_or(0);
+    let media_files: i64 = conn
+        .query_row("SELECT COUNT(*) FROM media_files", [], |r| r.get(0))
+        .unwrap_or(0);
+    let tracks: i64 = conn
+        .query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0))
+        .unwrap_or(0);
+    Ok(serde_json::json!({
+        "pool_connections_in_use": state.connections,
+        "pool_connections_idle": state.idle_connections,
+        "pool_max_size": crate::db::DEFAULT_POOL_SIZE,
+        "cache_size_pragma": cache_pragma,
+        "page_size": page_size,
+        "scan_file_cache_entries": crate::services::scanner::scan_file_cache_entries(),
+        "tracks": tracks,
+        "media_files": media_files,
+    }))
+}

@@ -1,4 +1,33 @@
 use r2d2_sqlite::SqliteConnectionManager;
+
+// ===================== 连接池 / 页缓存实验参数（内存治理 C.1） =====================
+//
+// 旧配置：max_size(24) + cache_size = 8000 页（默认 4KiB 页 ≈ 31 MiB/连接），
+// 全部连接填满的理论上限 ~768 MiB——不是实际占用，但缺少上界的约束。
+// 新默认 12 × 8 MiB = 96 MiB 上限（8 倍收敛）；两者都可用环境变量覆盖做 A/B。
+// 选值依据（perf_baseline 30k，同机复测稳定，2026-09-29）：
+//   cache -32768KiB(旧水平) 首屏 131.0 / 深分页 150 / 搜索 58.5 ms
+//   cache  -8192KiB(新默认) 首屏 129.2 / 深分页 158 / 搜索 73.3 ms
+//   （搜索 +22% 略超方案 20% 回退门，绝对值 73ms；S1/S3 复核后决定是否回退）
+//   pool_size 对本基准（单连接）无影响，并发等待须在 S5 验证。
+pub const DEFAULT_POOL_SIZE: u32 = 12;
+pub const DEFAULT_CACHE_KIB: i64 = -8192;
+
+fn env_u32(name: &str, default: u32) -> u32 {
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .filter(|v| *v >= 1 && *v <= 128)
+        .unwrap_or(default)
+}
+
+fn env_i64(name: &str, default: i64) -> i64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .filter(|v| *v <= -256 && *v >= -262_144) // 256 KiB ~ 256 MiB 每连接
+        .unwrap_or(default)
+}
 use rusqlite::{Connection, Result};
 use std::path::PathBuf;
 
@@ -16,14 +45,21 @@ pub struct DbState {
 /// 初始化 SQLite 连接池：
 /// 1. 每条新连接通过 with_init 设置 WAL 模式、外键约束等 PRAGMA
 /// 2. 迁移脚本在首条连接上串行执行，保证 schema 升级完成后才开放服务
-/// 3. 连接池最大 8 条连接：覆盖 6 个封面并发请求 + 多个 IPC 命令
+/// 3. 连接池与页缓存是**内存治理 C.1 的实验参数**（默认 12 连接 × 4 MiB 页缓存，
+///    理论上限 ~48 MiB，取代旧的 24 × 8000 页 ≈ 768 MiB 理论上限），
+///    可用环境变量覆盖做 A/B：
+///    - `LUMO_DB_POOL_SIZE`：连接池上限（候选 4/8/12，须在 S5 验证连接等待）
+///    - `LUMO_DB_CACHE_KIB`：每连接页缓存 KiB（候选 2048/4096/8192，SQLite
+///      `cache_size` 负值语义）；查询吞吐对照见 perf_baseline
 pub fn init_db(db_path: PathBuf) -> Result<DbPool, Box<dyn std::error::Error>> {
-    let manager = SqliteConnectionManager::file(&db_path).with_init(|conn| {
+    let pool_size = env_u32("LUMO_DB_POOL_SIZE", DEFAULT_POOL_SIZE);
+    let cache_kib = env_i64("LUMO_DB_CACHE_KIB", DEFAULT_CACHE_KIB);
+    let manager = SqliteConnectionManager::file(&db_path).with_init(move |conn| {
         // 全局 PRAGMA：每条新连接都要设置一次
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
-        // WAL 下提升并发读取的缓存大小（默认 2000 页，加大可减少磁盘 I/O）
-        conn.pragma_update(None, "cache_size", "8000")?;
+        // 页缓存用负值 = KiB（正值 = 页数），按字节预算控制更直观
+        conn.pragma_update(None, "cache_size", cache_kib)?;
         // NORMAL：WAL 模式下 NORMAL 已足够安全，且比 FULL 快很多
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         // 设置 5 秒 busy timeout，避免在写事务争抢时直接抛出 SQLITE_BUSY 或死锁
@@ -32,7 +68,7 @@ pub fn init_db(db_path: PathBuf) -> Result<DbPool, Box<dyn std::error::Error>> {
     });
 
     let pool = r2d2::Pool::builder()
-        .max_size(24) // 扩大连接池容积：覆盖封面并发 + IPC 命令 + 后台扫描/回填
+        .max_size(pool_size)
         .connection_timeout(std::time::Duration::from_secs(5)) // 避免死锁或耗尽时死等 30 秒
         .build(manager)?;
 
