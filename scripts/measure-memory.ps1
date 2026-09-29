@@ -31,7 +31,8 @@ param(
   [int]$IntervalSec = 2,
   [int]$DurationSec = 0,       # 0 = 一直采样直到 Ctrl+C（finally 里写汇总）
   [switch]$Once,               # 单次采样后立即退出（工具冒烟用）
-  [string]$OutDir = ''
+  [string]$OutDir = '',
+  [string[]]$RootName = @('Lumo.exe', 'tauri-app.exe')  # 安装版=Lumo.exe；tauri dev=tauri-app.exe
 )
 
 $ErrorActionPreference = 'Stop'
@@ -70,6 +71,8 @@ notes         = $Notes
 Write-Host "环境登记 -> $EnvPath"; Get-Content $EnvPath | ForEach-Object { Write-Host "  $_" }
 
 # ---------------- 进程组归属 ----------------
+$rootNameSet = $RootName | ForEach-Object { $_.ToLower() }
+
 function Get-ProcessTree {
   Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,Name,CommandLine,HandleCount,ThreadCount,WorkingSetSize,KernelModeTime,UserModeTime
 }
@@ -79,17 +82,34 @@ function Get-LumoGroup {
   $all = Get-ProcessTree
   $byId = @{}
   foreach ($p in $all) { $byId[[uint32]$p.ProcessId] = $p }
-  $roots = @($byId.Values | Where-Object { $_.Name -ieq 'Lumo.exe' })
+  $roots = @($byId.Values | Where-Object { $rootNameSet -contains $_.Name })
   $group = @{}
   $queue = New-Object System.Collections.Queue
   foreach ($r in $roots) { $group[[uint32]$r.ProcessId] = $r; $queue.Enqueue($r.ProcessId) }
+  # 交叉归属（方案 §2.1）：WebView2 浏览器进程的父进程可能已退出导致 PPID 断链，
+  # 命令行里的 --webview-exe-name=<根进程名> 是第二重证据
+  foreach ($p in $byId.Values) {
+    if ($p.Name -ieq 'msedgewebview2.exe' -and $p.CommandLine) {
+      foreach ($rn in $rootNameSet) {
+        if ($p.CommandLine -match ('--webview-exe-name=' + [regex]::Escape($rn))) {
+          if (-not $group.ContainsKey([uint32]$p.ProcessId)) {
+            $group[[uint32]$p.ProcessId] = $p
+            $queue.Enqueue($p.ProcessId)
+          }
+          break
+        }
+      }
+    }
+  }
   while ($queue.Count -gt 0) {
     $parent = [uint32]$queue.Dequeue()
     foreach ($p in $byId.Values) {
+      $cpid = [uint32]$p.ProcessId
       $pp = [uint32]$p.ParentProcessId
-      if (-not $group.ContainsKey($pp) -and $pp -eq $parent) {
-        $group[$pp] = $p
-        $queue.Enqueue($pp)
+      # 注意判重的是「子进程自己的 PID」，而不是父 PID
+      if (-not $group.ContainsKey($cpid) -and $pp -eq $parent) {
+        $group[$cpid] = $p
+        $queue.Enqueue($cpid)
       }
     }
   }
@@ -97,7 +117,7 @@ function Get-LumoGroup {
 }
 
 function Get-Category($proc) {
-  if ($proc.Name -ieq 'Lumo.exe') { return 'main' }
+  if ($rootNameSet -contains $proc.Name.ToLower()) { return 'main' }
   $cl = [string]$proc.CommandLine
   if ($cl -match '--type=renderer') { return 'webview-renderer' }
   if ($cl -match '--type=gpu-process') { return 'webview-gpu' }
@@ -127,7 +147,7 @@ Write-Host "（停止时输出汇总；归属抽查：下方是当前进程组�
 function Show-TreeSnapshot {
   $g = Get-LumoGroup
   if ($g.RootCount -eq 0) {
-    Write-Host '  [未发现 Lumo.exe —— 请先启动应用再挂采样]' -ForegroundColor Yellow
+    Write-Host "  [未发现进程组（$($RootName -join ' / ')）—— 请先启动应用再挂采样]" -ForegroundColor Yellow
     return
   }
   foreach ($p in $g.ById.Values | Sort-Object ProcessId) {
@@ -175,8 +195,11 @@ try {
           }
         }
 
-        $writer.WriteLine('{0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10}' -f `
-          $ts, $Scenario, $pidKey, $p.Name, $cat, $pwsMiB, $wsMiB, $commitMiB, $cpuPct, $p.HandleCount, $p.ThreadCount)
+        # 注意：-f 的逗号数组不能直接写在 .NET 方法参数列表里（会被当作参数分隔符），
+        # 必须先赋值给变量再 WriteLine
+        $line = '{0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10}' -f `
+          $ts, $Scenario, $pidKey, $p.Name, $cat, $pwsMiB, $wsMiB, $commitMiB, $cpuPct, $p.HandleCount, $p.ThreadCount
+        $writer.WriteLine($line)
 
         $groupPws += $pwsMiB
         if (-not $catPws.ContainsKey($cat)) { $catPws[$cat] = New-Object System.Collections.Generic.List[double] }
