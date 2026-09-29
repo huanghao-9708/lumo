@@ -115,7 +115,7 @@ function playAll() {
       <div class="flex items-end justify-between mb-1">
         <div class="flex items-center gap-3">
           <Sparkles class="w-6 h-6 text-brand-orange" />
-          <h1 class="text-[32px] font-bold text-text-primary tracking-tight leading-none">AI 电台</h1>
+          <h1 class="text-(--text-page-title) font-bold text-text-primary tracking-tight leading-none">AI 电台</h1>
         </div>
         <button
           class="h-8 px-3 rounded-[8px] text-[12px] text-text-muted hover:text-text-primary hover:bg-list-hover transition-colors-smooth flex items-center gap-1.5"

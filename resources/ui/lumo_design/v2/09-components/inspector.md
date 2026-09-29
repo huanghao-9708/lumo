@@ -267,12 +267,14 @@ Queue 更紧凑，因为 Inspector 空间有限。
 ## 5. Inspector 折叠
 
 ```html
-<div v-if="uiStore.isRightSidebarVisible" class="hidden xl:flex w-[360px] ...">
+<div v-if="uiStore.isRightSidebarVisible" class="absolute right-0 top-0 h-full w-(--width-inspector) ...">
 ```
 
-- `v-if` 整体移除（包括 Divider C）
-- `hidden xl:flex`：< 1280px 默认隐藏
-- 用户可通过 TopBar 右栏按钮手动切换
+- **默认收起**（所有窗口尺寸）；用户通过 TopBar 右栏按钮手动打开
+- 打开时为**覆盖内容区的浮层**（360px，token `--width-inspector`），不挤压列表布局宽度，
+  但会遮住内容区右缘——必须有清楚的关闭入口，且不长期遮挡列表操作列
+- `v-if` 关闭时整体移除
+- 列显隐不受其影响：歌曲列表按**容器宽度**收纳列（见 02-spatial §6）
 
 ---
 

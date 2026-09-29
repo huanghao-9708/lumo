@@ -1,18 +1,23 @@
 # Playback Bar
 
 > 底部播放栏。LDL 最复杂的区域：进度条 / 确定性波形 / 物理音量旋钮 / Transport。
+>
+> **2026-09 调整**：高度 110px → **92px**（token `--height-playback-bar`），
+> 封面 56×56 → **48×48**（token `--size-play-cover`），主播放按钮 46px
+> （token `--size-play-button`）。优先保留播放/暂停、切歌、进度与当前曲目信息；
+> 窄窗口收纳次级控件，但不缩小关键按钮的点击区域。
 
 ---
 
 ## 1. Overview
 
-Playback Bar 是 110px 高的固定底部区域，分三栏：
+Playback Bar 是 92px 高的固定底部区域，分三栏：
 
 ```
 ┌──────────────────┬──────────────────────────────┬──────────────────────┐
 │  封面 + 曲名 +    │     Transport + 进度条        │   旋钮 + Output      │
-│  波形             │     (居中)                    │                      │
-│  280px            │     flex-1                    │   flex-shrink-0      │
+│  波形             │     (物理居中)                │   flex-shrink-0      │
+│  max 32vw         │     max 540px                 │                      │
 └──────────────────┴──────────────────────────────┴──────────────────────┘
 ```
 
@@ -25,22 +30,23 @@ Playback Bar 是 110px 高的固定底部区域，分三栏：
 ```
 ┌──────┐  曲名 13px Semibold
 │封面   │  艺术家 · 专辑  11px Muted
-│56×56 │  格式 9px Mono uppercase
+│48×48 │  格式 9px Mono uppercase
 └──────┘  ▁▂▃▅▇▅▃▂▁  确定性波形 16px 高
 ```
 
 ### 封面
 
 ```html
-<div class="w-[56px] h-[56px] bg-bg-hover rounded-[6px] overflow-hidden flex-shrink-0 mr-3 flex items-center justify-center">
+<div class="w-(--size-play-cover) h-(--size-play-cover) bg-bg-hover rounded-[8px] overflow-hidden flex-shrink-0 mr-3.5 flex items-center justify-center">
   <img v-if="coverSrc" :src="coverSrc" class="w-full h-full object-cover" alt="cover" />
   <Disc3 v-else class="w-5 h-5 text-text-disabled" aria-hidden="true" />
 </div>
 ```
 
-- 56×56，`rounded-[6px]`
+- 48×48（`--size-play-cover`），`rounded-[8px]`
 - `bg-bg-hover` 加载底色
 - 无封面 Disc3 占位
+- 曲名空间不足时截断，不压缩封面比例
 
 ### 曲目信息
 
@@ -157,7 +163,7 @@ const modes = ['normal', 'repeat', 'repeat-one', 'shuffle'];
 ### 进度条
 
 ```html
-<div class="w-full flex items-center gap-3 max-w-md">
+<div class="w-full flex items-center gap-3">
   <span class="text-[10px] font-mono text-text-muted w-9 text-right tabular-nums">{{ currentTimeText }}</span>
   <div
     ref="progressRef"
@@ -184,7 +190,7 @@ const modes = ['normal', 'repeat', 'repeat-one', 'shuffle'];
 | 拖拽点 | 10×10 圆形 Accent，Hover 显 |
 | 时间 | 10px mono `tabular-nums`，`w-9` 固定宽 |
 | 格式 | `MM:SS`（`String.padStart(2,'0')`） |
-| 宽度 | `max-w-md` (28rem) |
+| 宽度 | 居中栏 `w-[540px]`，`max-w-[min(540px,42vw)]`（左右栏各限 `32vw`） |
 
 ### 拖拽交互
 

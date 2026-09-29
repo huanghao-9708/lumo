@@ -13,6 +13,17 @@ export interface TrackDTO {
   last_played_at?: string | null;
   file_size: number | null;
   source_kind: string; // "local" | "webdav"
+  // ===== 丰富歌曲信息（LDL v2 song-row；均为可空，旧曲库补扫前无值） =====
+  /** 歌曲年份（优先歌曲标签，回退专辑发行年份） */
+  year?: number | null;
+  /** 流派聚合（多流派以 "; " 连接；无标签为 null） */
+  genres?: string | null;
+  /** 当前首选音源的比特率（bps） */
+  bitrate?: number | null;
+  /** 当前首选音源的采样率（Hz） */
+  sample_rate?: number | null;
+  /** 当前首选音源的位深 */
+  bit_depth?: number | null;
 }
 
 export interface AlbumDTO {

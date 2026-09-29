@@ -17,21 +17,22 @@ const smartPlaylists: { kind: string; label: string; icon: Component }[] = [
   { kind: 'never_played', label: '未曾播放', icon: CircleOff },
 ];
 
-/** Library 一级导航。activeLibraryTab 是 store 里维护的当前页标识。 */
+/** Library 一级导航。activeLibraryTab 是 store 里维护的当前页标识。
+ *  侧栏行只保留图标 + 名称 + 选中态；数量统计由各页面概览区承担（LDL v2 侧栏规范）。 */
 const libraryNav = computed(() => [
-  { key: '首页', label: '首页', icon: Home, count: null },
-  { key: '全部歌曲', label: '全部歌曲', icon: Activity, count: playerStore.tracksTotalCount },
-  { key: '专辑', label: '专辑', icon: Disc, count: playerStore.albumsTotalCount },
-  { key: '艺术家', label: '艺术家', icon: User, count: playerStore.artistsTotalCount },
-  { key: '文件夹', label: '文件夹', icon: Folder, count: playerStore.localSources.length },
-  { key: '最近播放', label: '最近播放', icon: Clock, count: playerStore.libraryCounts.recently_played },
-  { key: '播放列表', label: '播放列表', icon: ListMusic, count: playerStore.playlists.length },
+  { key: '首页', label: '首页', icon: Home },
+  { key: '全部歌曲', label: '全部歌曲', icon: Activity },
+  { key: '专辑', label: '专辑', icon: Disc },
+  { key: '艺术家', label: '艺术家', icon: User },
+  { key: '文件夹', label: '文件夹', icon: Folder },
+  { key: '最近播放', label: '最近播放', icon: Clock },
+  { key: '播放列表', label: '播放列表', icon: ListMusic },
 ]);
 
 const favoritesNav = computed(() => [
-  { key: '喜欢的音乐', label: '喜欢的音乐', icon: Heart, count: playerStore.libraryCounts.favorite_tracks },
-  { key: '收藏的专辑', label: '收藏的专辑', icon: Disc, count: playerStore.libraryCounts.favorite_albums },
-  { key: '收藏的歌手', label: '收藏的歌手', icon: Star, count: playerStore.libraryCounts.favorite_artists },
+  { key: '喜欢的音乐', label: '喜欢的音乐', icon: Heart },
+  { key: '收藏的专辑', label: '收藏的专辑', icon: Disc },
+  { key: '收藏的歌手', label: '收藏的歌手', icon: Star },
 ]);
 
 function isActive(key: string): boolean {
@@ -55,7 +56,7 @@ function selectSmartPlaylist(kind: string) {
 </script>
 
 <template>
-  <div class="w-[240px] h-full bg-bg-canvas flex flex-col flex-shrink-0 select-none">
+  <div class="w-(--width-sidebar) h-full bg-bg-canvas flex flex-col flex-shrink-0 select-none">
     <!-- Logo：外层作为窗口拖拽区，内部按钮点击回首页 -->
     <div class="px-8 pt-8 pb-6 flex items-center" data-tauri-drag-region>
       <button class="text-xl font-bold tracking-[0.15em] text-text-primary hover:opacity-80 transition-opacity" @click="playerStore.goHome()">LUMO</button>
@@ -83,12 +84,7 @@ function selectSmartPlaylist(kind: string) {
                 class="w-[16px] h-[16px] mr-3 flex-shrink-0"
                 :class="isActive(item.key) ? 'text-brand-orange' : 'text-text-muted'"
               />
-              <span class="text-[13px] flex-1" :class="isActive(item.key) ? 'font-medium' : ''">{{ item.label }}</span>
-              <span
-                v-if="item.count !== null && item.count > 0"
-                class="text-[11px] font-mono tabular-nums"
-                :class="isActive(item.key) ? 'text-text-secondary' : 'text-text-muted'"
-              >{{ item.count.toLocaleString() }}</span>
+              <span class="text-[13px] flex-1 truncate" :title="item.label" :class="isActive(item.key) ? 'font-medium' : ''">{{ item.label }}</span>
             </a>
           </li>
         </ul>
@@ -113,12 +109,7 @@ function selectSmartPlaylist(kind: string) {
                 class="w-[16px] h-[16px] mr-3 flex-shrink-0"
                 :class="isActive(item.key) ? 'text-brand-orange' : 'text-text-muted'"
               />
-              <span class="text-[13px] flex-1" :class="isActive(item.key) ? 'font-medium' : ''">{{ item.label }}</span>
-              <span
-                v-if="item.count !== null && item.count > 0"
-                class="text-[11px] font-mono tabular-nums"
-                :class="isActive(item.key) ? 'text-text-secondary' : 'text-text-muted'"
-              >{{ item.count.toLocaleString() }}</span>
+              <span class="text-[13px] flex-1 truncate" :title="item.label" :class="isActive(item.key) ? 'font-medium' : ''">{{ item.label }}</span>
             </a>
           </li>
         </ul>
@@ -152,8 +143,7 @@ function selectSmartPlaylist(kind: string) {
               @click.prevent="selectPlaylist(pl.id)"
             >
               <List class="w-[16px] h-[16px] mr-3 text-text-muted flex-shrink-0" />
-              <span class="text-[13px] flex-1 truncate">{{ pl.name }}</span>
-              <span class="text-[11px] font-mono text-text-muted tabular-nums">{{ pl.count }}</span>
+              <span class="text-[13px] flex-1 truncate" :title="pl.name">{{ pl.name }}</span>
             </a>
           </li>
         </ul>

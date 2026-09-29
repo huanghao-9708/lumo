@@ -11,12 +11,15 @@
 | 基准画布 | **2560 × 1600** | 设计稿基准，HiDPI 5K 档 |
 | 推荐分辨率 | **1920+** | 主力用户群 |
 | 最佳分辨率 | **2560** | 高保真预览档 |
-| 最小支持 | **1280 × 720** | 笔记本入门档，Inspector 应可折叠 |
+| 默认窗口 | **1200 × 720** | 新装/无历史窗口状态的打开尺寸（2026-09 桌面适配基线） |
+| 最小支持 | **1024 × 640** | 可调整下限；窗口尺寸不得超出显示器可用工作区 |
 
 **缩放策略**：
 
 - 应用使用 CSS px，不随系统 DPI 缩放变化（Tauri WebView 默认行为）
-- 1280px 宽度下：Sidebar 240 + Inspector 360 = 600px 已占用，Content 仅剩 680px，**必须支持 Inspector 折叠**
+- 默认 1200×720；启动时按显示器可用工作区限幅，工作区不足时保证整个窗口可见
+- 记住用户主动调整后的尺寸（最大化不记），显示器/缩放变化时重新约束
+- Sidebar 220 + Inspector 360 = 580px 已占用；Inspector 为浮层，默认收起，用户打开时不挤压内容区
 - 1920px+：三栏完整显示
 - 2560px+：Content 宽敞，Album Grid 显示 6+ 列
 
@@ -35,7 +38,7 @@
 │            │                Content Area                   │                      │
 │            │                (flex-1)                       │                      │
 ├────────────┴───────────────────────────────────────────────┴──────────────────────┤
-│                         Playback Bar  110px                                        │
+│                         Playback Bar  92px                                         │
 └────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -47,7 +50,7 @@
 | **TopBar** | full × 60 | — | 固定高度，仅覆盖 Content + Inspector |
 | **Content** | flex-1 × full | 72% | 自动伸缩 |
 | **Inspector** | 360 × full | 18% | 固定宽度，**可折叠** |
-| **Playback** | full × 110 | — | 固定高度 |
+| **Playback** | full × 92 | — | 固定高度（token `--height-playback-bar`） |
 
 > TopBar **不覆盖** Sidebar——Sidebar 是独立纵向区域，从顶到底贯通。
 
@@ -206,36 +209,35 @@ Queue 模式:
 
 **折叠**：< 1280px 或用户手动隐藏时，Inspector 整体 `v-if` 移除，Divider C 同步消失。
 
-### 5.5 Playback Bar（110px）
+### 5.5 Playback Bar（92px）
 
 ```
-[封面 56×56 + 曲名/波形]      [Transport + 进度条]      [旋钮 + Output]
-    280px                       flex-1 居中                flex-shrink-0
+[封面 48×48 + 曲名/波形]      [Transport + 进度条]      [旋钮 + Output]
+    自适应（max 32vw）           flex-1 物理居中            flex-shrink-0
 ```
+
+> 2026-09 从 110px 收紧到 92px：优先保留播放/暂停、切歌、进度与当前曲目信息；
+> 主播放按钮 46px、封面 48px（token `--size-play-cover` / `--size-play-button`）。
+> 详见 [09-components/playback-bar.md](09-components/playback-bar.md)。
 
 > 详见 [09-components/playback-bar.md](09-components/playback-bar.md)。
 
 ---
 
-## 6. 响应式断点
+## 6. 列显示与容器宽度（2026-09 重构）
 
-LUMO 是**桌面优先**应用，断点用于决定 Inspector 是否默认可见、Grid 列数。
+LUMO 是**桌面优先**应用。歌曲列表与网格的列显示由**实际容器宽度**决定（列表外壳用
+ResizeObserver 测量），不再使用浏览器视口的 `sm/md/lg` 断点——右侧 Inspector 打开时
+视口宽度不变而内容区变窄，视口断点无法感知。
 
-| 断点 | Tailwind | 宽度 | 行为 |
-|---|---|---|---|
-| xs | — | < 1280 | Inspector 默认隐藏；Album Grid 4 列 |
-| md | `md` | ≥ 768 | Song Row 显示艺术家列 |
-| lg | `lg` | ≥ 1024 | Song Row 显示专辑列 |
-| xl | `xl` | ≥ 1280 | Inspector 默认显示；Album Grid 5 列 |
-| 2xl | `2xl` | ≥ 1536 | Album Grid 6 列 |
+**歌曲列收纳次序**（容器变窄时依次隐藏，见 `trackList/columns.ts`）：
 
-**当前代码用法**（`MainContent.vue`）：
+流派 → 文件大小 → 年份 → 音频信息 → 专辑 → 艺术家 → 时长；标题、序号/播放入口、收藏、
+更多操作始终保留。用户在表头「显示列」菜单显式启用的列优先于宽度收纳。
 
-```html
-<div class="flex-[1.5] min-w-0 hidden md:block">艺术家</div>   <!-- ≥768 显示 -->
-<div class="flex-[1.5] min-w-0 hidden lg:block">专辑</div>     <!-- ≥1024 显示 -->
-<div class="w-[56px] hidden xl:block">时长</div>               <!-- ≥1280 显示 -->
-```
+- Inspector：默认收起；用户打开时为覆盖内容区的浮层（360px，token `--width-inspector`）
+- Album/Artist Grid：`repeat(auto-fill, minmax(180px, 1fr))`，列数随容器宽度自动决定
+- 旧视口断点规则（artist=md / album=lg / duration=xl）已废弃，勿再引入
 
 ---
 
@@ -285,10 +287,10 @@ LUMO 使用 Tauri 自定义窗口（`decorations: false`），窗口控制由前
   "app": {
     "windows": [{
       "title": "Lumo Player",
-      "width": 1600,
-      "height": 900,
-      "minWidth": 1280,
-      "minHeight": 720,
+      "width": 1200,
+      "height": 720,
+      "minWidth": 1024,
+      "minHeight": 640,
       "center": true,
       "resizable": true,
       "decorations": false
@@ -297,22 +299,28 @@ LUMO 使用 Tauri 自定义窗口（`decorations: false`），窗口控制由前
 }
 ```
 
+> 运行时行为（`useWindowPersistence.ts`）：读取本机记忆尺寸（无历史用默认值）→
+> 按当前显示器工作区限幅 → 应用并居中；resize 防抖记忆（最大化不记）；缩放/显示器变化重新限幅。
+
 ### 9.2 各宽度下的 Content 实际宽度
 
-| 窗口宽度 | Content 宽（Inspector 显示） | Content 宽（Inspector 隐藏） |
+Inspector 为浮层（覆盖内容区右侧 360px），不改变 Content 布局宽度；下表为
+Content 几何宽度（窗口宽 − Sidebar 220 − Divider）。
+
+| 窗口宽度 | Content 几何宽 | Inspector 打开时可视宽 |
 |---|---|---|
-| 1280（最小） | 680px | 1040px |
-| 1600（默认） | 1000px | 1360px |
-| 1920 | 1320px | 1680px |
-| 2560 | 1960px | 2320px |
+| 1024（最小） | 803px | 443px |
+| 1200（默认） | 979px | 619px |
+| 1920 | 1699px | 1339px |
+| 2560 | 2339px | 1979px |
 
-### 9.3 最小窗口 1280×720 的约束
+### 9.3 最小窗口 1024×640 的约束
 
-- 1280 时 Inspector 默认隐藏（`hidden xl:flex`）
-- Song Row 显示 # + 标题 + 艺术家（sm=640）
-- AlbumGrid 3 列（auto-fill minmax 180px）
-- Playback 进度条 `max-w-2xl` 在 680px 中栏中比例合理
-- 720 高度下：60(TopBar) + 60(Inspector Tab) + 110(Playback) = 230，Content 可用 490px
+- Inspector 任何尺寸默认收起；打开时为浮层并提供关闭入口
+- Song Row 在 1024×720 布局下至少保留 # + 标题 + 艺术家 + 时长；可选列按 §6 收纳次序隐藏
+- AlbumGrid 列数由 auto-fill minmax(180px) 决定
+- 640 高度下：60(TopBar) + 92(Playback) = 152，Content 可用约 487px
+- 标题列收缩下限 150px；任何主要操作按钮不得被遮挡或不可达
 
 ---
 

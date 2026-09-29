@@ -74,10 +74,10 @@ async function switchVersion(fileId: number) {
 </script>
 
 <template>
-  <div v-if="uiStore.isRightSidebarVisible" class="absolute right-0 top-0 h-full w-[360px] bg-bg-canvas/90 backdrop-blur-2xl flex-col z-20 flex border-l border-border-color/80 shadow-[-8px_0_24px_rgba(0,0,0,0.06)] dark:shadow-[-8px_0_24px_rgba(0,0,0,0.35)] transition-colors-smooth">
+  <div v-if="uiStore.isRightSidebarVisible" class="absolute right-0 top-0 h-full w-(--width-inspector) bg-bg-canvas/90 backdrop-blur-2xl flex-col z-20 flex border-l border-border-color/80 shadow-[-8px_0_24px_rgba(0,0,0,0.06)] dark:shadow-[-8px_0_24px_rgba(0,0,0,0.35)] transition-colors-smooth">
 
     <!-- Top Tabs -->
-    <div class="relative h-[60px] flex-shrink-0" data-tauri-drag-region>
+    <div class="relative h-(--height-topbar) flex-shrink-0" data-tauri-drag-region>
       <div class="absolute bottom-0 left-0 w-full h-px bg-border-color"></div>
       <div class="flex items-end justify-center gap-10 h-full">
         <button

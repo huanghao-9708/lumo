@@ -160,6 +160,12 @@ pub struct AudioMetadata {
     pub bit_rate: Option<i64>,
     pub sample_rate: Option<i64>,
     pub channels: Option<i64>,
+    /// 歌曲年份（标签 Year；异常值清洗后为 None）
+    pub year: Option<i64>,
+    /// 流派标签原值（多流派拆分与入库由 LibraryService 负责）
+    pub genre: Option<String>,
+    /// 位深（格式相关，如 FLAC 24bit；MP3 等无此属性为 None）
+    pub bit_depth: Option<i64>,
     pub picture_data: Option<Vec<u8>>,
     pub picture_mime: Option<String>,
     pub lyrics: Option<String>,
@@ -199,6 +205,8 @@ fn extract_metadata_inner(tagged_file: lofty::file::TaggedFile) -> Result<AudioM
     metadata.bit_rate = properties.audio_bitrate().map(|b| b as i64 * 1000);
     metadata.sample_rate = properties.sample_rate().map(|s| s as i64);
     metadata.channels = properties.channels().map(|c| c as i64);
+    // 位深只有部分格式（FLAC/ALAC/WAV 等）提供，MP3/AAC 恒为 None
+    metadata.bit_depth = properties.bit_depth().map(|b| b as i64);
 
     if let Some(tag) = tagged_file
         .primary_tag()
@@ -218,6 +226,15 @@ fn extract_metadata_inner(tagged_file: lofty::file::TaggedFile) -> Result<AudioM
             }
         }
         metadata.album = tag.album().map(|s| s.into_owned());
+
+        // 年份：清洗异常值（0 / 早期占位 / 明显未来的年份都视为缺失）
+        metadata.year = tag
+            .year()
+            .filter(|y| (1000..=3000).contains(y))
+            .map(|y| y as i64);
+
+        // 流派：取原值即可，多流派拆分/归一化由入库侧统一处理
+        metadata.genre = tag.genre().map(|s| s.into_owned()).filter(|s| !s.trim().is_empty());
 
         if let Some(pic) = tag.pictures().first() {
             metadata.picture_data = Some(pic.data().to_vec());
@@ -329,5 +346,96 @@ mod tests {
     #[test]
     fn normalize_collapses_whitespace() {
         assert_eq!(normalize_artist_name("  A   B "), "A B");
+    }
+
+    // ===================== year / genre / bit_depth 提取（LDL v2 丰富歌曲信息） =====================
+
+    /// 构造一个 24-bit PCM WAV（RIFF + fmt + data），用于标签写入与提取的端到端测试
+    fn build_wav_24bit() -> Vec<u8> {
+        let channels: u16 = 2;
+        let sample_rate: u32 = 44100;
+        let bits: u16 = 24;
+        let bytes_per_sample: u32 = 3; // 24-bit
+        let frames: u32 = 64;
+        let data_len = frames * channels as u32 * bytes_per_sample;
+        let fmt_len: u32 = 16;
+
+        let mut v = Vec::new();
+        v.extend_from_slice(b"RIFF");
+        v.extend_from_slice(&(4 + (8 + fmt_len) + (8 + data_len)).to_le_bytes());
+        v.extend_from_slice(b"WAVE");
+        // fmt chunk（PCM）
+        v.extend_from_slice(b"fmt ");
+        v.extend_from_slice(&fmt_len.to_le_bytes());
+        v.extend_from_slice(&1u16.to_le_bytes()); // format = PCM
+        v.extend_from_slice(&channels.to_le_bytes());
+        v.extend_from_slice(&sample_rate.to_le_bytes());
+        v.extend_from_slice(&(sample_rate * channels as u32 * bytes_per_sample).to_le_bytes());
+        v.extend_from_slice(&((channels * bits / 8) as u16).to_le_bytes());
+        v.extend_from_slice(&bits.to_le_bytes());
+        // data chunk（静音）
+        v.extend_from_slice(b"data");
+        v.extend_from_slice(&data_len.to_le_bytes());
+        v.resize(v.len() + data_len as usize, 0u8);
+        v
+    }
+
+    #[test]
+    fn extracts_year_genre_bit_depth() {
+        let dir = crate::db::test_util::TempDir::new("meta_rich");
+        let path = dir.path().join("rich.wav");
+        std::fs::write(&path, build_wav_24bit()).expect("写入 WAV 失败");
+
+        // 用 lofty 写入 Id3v2 标签（WAV 支持内嵌 ID3v2 chunk）
+        {
+            use lofty::config::WriteOptions;
+            use lofty::probe::Probe;
+            use lofty::tag::{Accessor, Tag, TagType};
+
+            let mut tagged = Probe::open(&path)
+                .expect("打开 WAV 失败")
+                .read()
+                .expect("读取 WAV 失败");
+            let mut tag = Tag::new(TagType::Id3v2);
+            tag.set_title("丰富的元数据".to_string());
+            tag.set_year(2020);
+            tag.set_genre("Pop; Rock".to_string());
+            tagged.insert_tag(tag);
+            tagged
+                .save_to_path(&path, WriteOptions::default())
+                .expect("写回标签失败");
+        }
+
+        let meta = extract_metadata(&path).expect("提取元数据失败");
+        assert_eq!(meta.title.as_deref(), Some("丰富的元数据"));
+        assert_eq!(meta.year, Some(2020));
+        assert_eq!(meta.genre.as_deref(), Some("Pop; Rock"));
+        // 24-bit WAV 的位深来自 fmt chunk，必须如实提取
+        assert_eq!(meta.bit_depth, Some(24));
+        assert_eq!(meta.sample_rate, Some(44100));
+    }
+
+    /// 异常年份（0 / 未来占位）不产生有效 year，避免列表显示无意义数值
+    #[test]
+    fn rejects_implausible_years() {
+        let dir = crate::db::test_util::TempDir::new("meta_year");
+        let path = dir.path().join("year.wav");
+        std::fs::write(&path, build_wav_24bit()).expect("写入 WAV 失败");
+
+        {
+            use lofty::config::WriteOptions;
+            use lofty::probe::Probe;
+            use lofty::tag::{Accessor, Tag, TagType};
+
+            let mut tagged = Probe::open(&path).unwrap().read().unwrap();
+            let mut tag = Tag::new(TagType::Id3v2);
+            tag.set_title("异常年份".to_string());
+            tag.set_year(3025);
+            tagged.insert_tag(tag);
+            tagged.save_to_path(&path, WriteOptions::default()).unwrap();
+        }
+
+        let meta = extract_metadata(&path).expect("提取元数据失败");
+        assert_eq!(meta.year, None);
     }
 }

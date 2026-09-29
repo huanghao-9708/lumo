@@ -1,6 +1,10 @@
 # Sidebar Item
 
-> 导航项 + 歌单项 + 计数徽章 + Accent 指示点。
+> 导航项 + 歌单项 + Accent 指示点。
+>
+> **2026-09 起移除侧栏计数**：一级导航、收藏分组与自建歌单行不再显示尾部数字——
+> 数字与文字争夺 220px 侧栏宽度、构成视觉噪声。数量统计由各页面的概览区承担
+> （页面标题下方的 meta 行、详情页统计）。不要为侧栏显示新增计数查询。
 
 ---
 
@@ -21,7 +25,7 @@ Sidebar Item 是左侧导航的主力元素。两种变体：
 
 ```
 ┌────────────────────────────────────────────┐
-│ [icon]  全部歌曲              643  •       │  左图标 + 文字 + 计数 + Accent 点
+│ [icon]  全部歌曲                      •    │  左图标 + 文字 + Accent 点
 └────────────────────────────────────────────┘
 ```
 
@@ -34,16 +38,19 @@ Sidebar Item 是左侧导航的主力元素。两种变体：
 ### 结构
 
 ```
-[icon 16px] --mr-3--> [label 13px flex-1] [count 11px mono] [• 6px Accent]
+[icon 16px] --mr-3--> [label 13px flex-1 truncate + title] [• 6px Accent]
 ```
+
+侧栏宽度 220px（token `--width-sidebar`）；长名称省略并以 `title` 提示完整名称，
+保证无数字后行尾对齐一致。
 
 ### States
 
-| 状态 | 背景 | 图标色 | 文字 | 计数 | Accent 点 |
-|---|---|---|---|---|---|
-| Default | 透明 | `text-text-muted` | `text-text-primary` Regular | `text-text-muted` | 无 |
-| Hover | `bg-list-hover` | `text-text-muted` | `text-text-primary` | `text-text-muted` | 无 |
-| Selected | `bg-list-selected` | `text-brand-orange` | `text-text-primary` Medium | `text-text-secondary` | 6px Accent 圆点 |
+| 状态 | 背景 | 图标色 | 文字 | Accent 点 |
+|---|---|---|---|---|
+| Default | 透明 | `text-text-muted` | `text-text-primary` Regular | 无 |
+| Hover | `bg-list-hover` | `text-text-muted` | `text-text-primary` | 无 |
+| Selected | `bg-list-selected` | `text-brand-orange` | `text-text-primary` Medium | 6px Accent 圆点 |
 
 ### 参考代码
 
@@ -64,14 +71,10 @@ Sidebar Item 是左侧导航的主力元素。两种变体：
     aria-hidden="true"
   />
   <span
-    class="text-[13px] flex-1"
+    class="text-[13px] flex-1 truncate"
+    :title="item.label"
     :class="isActive(item.key) ? 'font-medium' : ''"
   >{{ item.label }}</span>
-  <span
-    v-if="item.count !== null && item.count > 0"
-    class="text-[11px] font-mono tabular-nums"
-    :class="isActive(item.key) ? 'text-text-secondary' : 'text-text-muted'"
-  >{{ item.count.toLocaleString() }}</span>
   <div
     v-if="isActive(item.key)"
     class="w-[6px] h-[6px] rounded-full bg-brand-orange ml-2 flex-shrink-0"
@@ -88,12 +91,10 @@ Selected 态用**两处 Accent**，但不违反 One Accent Rule：
 
 这两处是同一语义（"当前选中"）的不同表达，视为一个焦点。
 
-### 计数徽章规则
+### 计数规则（已废除）
 
-- 仅当 `count > 0` 时显示
-- 11px mono + `tabular-nums` 等宽对齐
-- Default: `text-text-muted`
-- Selected: `text-text-secondary`（提亮一级）
+侧栏不显示计数。需要数量的场景在页面内：全部歌曲/收藏等页标题下方的
+`N 首歌曲` meta 行、专辑/艺人详情统计、播放列表页队列统计。页面统计入口保留，勿删。
 
 ---
 

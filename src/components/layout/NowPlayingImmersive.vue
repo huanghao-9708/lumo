@@ -205,7 +205,7 @@ onUnmounted(() => {
 
     <!-- ===== 顶部栏：左侧收起按钮 + 右侧窗口控制（可拖拽） ===== -->
     <div
-      class="relative z-10 h-[60px] flex-shrink-0 flex items-center justify-between px-4 select-none"
+      class="relative z-10 h-(--height-topbar) flex-shrink-0 flex items-center justify-between px-4 select-none"
       data-tauri-drag-region
     >
       <!-- 左：收起（退出沉浸式） -->

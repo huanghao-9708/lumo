@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
-import {
-  Play, Shuffle, User, Loader2, Heart, MoreHorizontal, Clock, Disc3, Star,
-} from 'lucide-vue-next';
+import { Play, Shuffle, User, Loader2, Disc3, Star } from 'lucide-vue-next';
 import { usePlayerStore, type Album, type Track } from '../../stores/player';
 import { getArtworkUrl } from '../../utils';
 import { useScrollRestore } from '../../composables/useScrollRestore';
-import EqualizerIndicator from '../shared/EqualizerIndicator.vue';
+import TrackListHeader from '../shared/trackList/TrackListHeader.vue';
+import TrackRow from '../shared/trackList/TrackRow.vue';
+import { useTrackColumns } from '../shared/trackList/useTrackColumns';
+import type { TrackListContext } from '../shared/trackList/columns';
 
 const props = defineProps<{
   artistId: number | null;
@@ -110,6 +111,13 @@ function currentList(): Track[] {
   return filterActive.value ? visibleTracks.value : (detail.value?.tracks ?? []);
 }
 
+/* ============ 统一列解析：艺人详情隐藏艺术家列（本页即上下文） ============ */
+const listContext = computed<TrackListContext>(() => ({ hidden: ['artist'] }));
+const { resolvedColumns, menuColumns } = useTrackColumns({
+  containerRef: listScrollEl,
+  context: listContext,
+});
+
 function playAll() {
   const list = currentList();
   if (list.length > 0) playerStore.playAll(list, 0);
@@ -131,12 +139,6 @@ function isPlayingTrack(trackId: number): boolean {
 function playTrack(index: number) {
   const list = currentList();
   playerStore.playAll(list, index);
-}
-
-function toggleFav(trackId: number, e: Event) {
-  e.stopPropagation();
-  const t = detail.value?.tracks?.find(x => x.id === trackId);
-  if (t) playerStore.toggleFavorite(trackId);
 }
 
 function selectAlbum(albumId: number) {
@@ -179,7 +181,7 @@ function onScroll(e: Event) {
       <div class="px-8 pt-8 pb-4 flex-shrink-0">
         <div class="flex items-start gap-8">
           <div
-            class="w-[180px] h-[180px] rounded-[10px] overflow-hidden flex-shrink-0 flex items-center justify-center relative"
+            class="w-[152px] h-[152px] rounded-[10px] overflow-hidden flex-shrink-0 flex items-center justify-center relative"
             :class="!detail.avatar_artwork_id ? `bg-gradient-to-br ${getColorClass(detail.avatarColor)}` : ''"
           >
             <img 
@@ -192,7 +194,7 @@ function onScroll(e: Event) {
 
           <div class="flex-1 min-w-0 pt-2">
             <div class="flex items-center gap-3 mb-1">
-              <h1 class="text-[28px] font-bold text-text-primary tracking-tight leading-tight">{{ detail.name }}</h1>
+              <h1 class="text-(--text-page-title) font-bold text-text-primary tracking-tight leading-tight">{{ detail.name }}</h1>
               <button
                 class="flex-shrink-0 transition-colors-smooth"
                 :class="isArtistFavorited ? 'text-brand-orange' : 'text-text-muted hover:text-text-primary'"
@@ -247,16 +249,8 @@ function onScroll(e: Event) {
       <div ref="listScrollEl" class="flex-1 overflow-y-auto px-8" @scroll="onScroll">
 
         <template v-if="activeSubTab === 'tracks'">
-          <div class="flex items-center text-[10px] text-text-muted uppercase tracking-wider py-2 border-b border-border-color sticky top-0 bg-bg-content z-10">
-            <div class="w-10 text-center shrink-0">#</div>
-            <div class="w-8 shrink-0"></div>
-            <div class="flex-[2] min-w-0 pl-1">标题</div>
-            <div class="flex-[1.5] min-w-0 hidden sm:block">专辑</div>
-            <div class="w-[56px] text-right shrink-0">
-              <Clock class="w-[12px] h-[12px] inline-block" />
-            </div>
-            <div class="w-8 shrink-0"></div>
-          </div>
+          <!-- 统一表头（右端含显示列菜单） -->
+          <TrackListHeader :columns="resolvedColumns" :menu-columns="menuColumns" />
 
           <div v-if="detail.isLoadingTracks && (!detail.tracks || detail.tracks.length === 0)" class="flex items-center justify-center py-16">
             <Loader2 class="w-4 h-4 animate-spin text-brand-orange" />
@@ -274,51 +268,16 @@ function onScroll(e: Event) {
           </template>
 
           <div v-else>
-            <div
+            <TrackRow
               v-for="(track, index) in visibleTracks"
               :key="track.id"
-              class="flex items-center hover:bg-list-hover transition-colors-smooth group cursor-pointer relative"
-              style="height: 40px;"
-              :class="{ 'playing-row bg-list-selected': isPlayingTrack(track.id) }"
-              @dblclick="playTrack(index)"
-            >
-              <div class="w-10 text-center shrink-0 text-[12px] font-mono">
-                <span v-if="isPlayingTrack(track.id)" class="inline-flex items-center justify-center">
-                  <EqualizerIndicator :playing="playerStore.isPlaying" />
-                </span>
-                <template v-else>
-                  <span class="text-text-muted group-hover:hidden tabular-nums">{{ String(index + 1).padStart(2, '0') }}</span>
-                  <Play class="w-[12px] h-[12px] fill-current mx-auto hidden group-hover:block text-text-secondary" />
-                </template>
-              </div>
-
-              <div class="w-8 shrink-0 flex items-center justify-center">
-                <Heart
-                  v-if="track.isFavorite"
-                  class="w-[14px] h-[14px] text-brand-orange fill-current cursor-pointer"
-                  @click="toggleFav(track.id, $event)"
-                />
-                <Heart
-                  v-else
-                  class="w-[14px] h-[14px] text-text-disabled opacity-0 group-hover:opacity-60 transition-opacity hover:!opacity-100 hover:!text-brand-orange cursor-pointer"
-                  @click="toggleFav(track.id, $event)"
-                />
-              </div>
-
-              <div class="flex-[2] min-w-0 pl-1">
-                <span class="text-[13px] truncate block" :class="isPlayingTrack(track.id) ? 'text-brand-orange font-semibold' : 'text-text-primary font-medium'">
-                  {{ track.title }}
-                </span>
-              </div>
-
-              <div class="flex-[1.5] min-w-0 hidden sm:block text-[13px] text-text-secondary truncate">{{ track.album }}</div>
-
-              <div class="w-[56px] text-right shrink-0 text-[12px] font-mono text-text-muted tabular-nums">{{ track.duration }}</div>
-
-              <div class="w-8 shrink-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                <MoreHorizontal class="w-4 h-4 text-text-muted" />
-              </div>
-            </div>
+              :track="track"
+              :columns="resolvedColumns"
+              :index="index"
+              :playing="isPlayingTrack(track.id)"
+              :is-playing-now="playerStore.isPlaying"
+              @play="playTrack(index)"
+            />
 
             <!-- 分页追加加载指示 -->
             <div v-if="detail.isLoadingTracks || isLoadingAllForFilter" class="flex items-center justify-center py-4 text-text-muted">

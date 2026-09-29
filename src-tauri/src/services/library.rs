@@ -183,11 +183,34 @@ impl LibraryService {
             (id, false)
         } else {
             conn.execute(
-                "INSERT INTO tracks (title, normalized_title, sort_title, album_id) VALUES (?1, ?2, ?2, ?3)",
-                params![track_title, normalized_track_title, album_id],
+                "INSERT INTO tracks (title, normalized_title, sort_title, album_id, year) VALUES (?1, ?2, ?2, ?3, ?4)",
+                params![track_title, normalized_track_title, album_id, metadata.year],
             )?;
             (conn.last_insert_rowid(), true)
         };
+
+        // 年份补扫：已有 track 只在无值时回填，不覆盖用户可能手工修正过的值。
+        // 旧曲库文件未被修改时扫描器会跳过重解析，需要增量补扫路径（见 scanner）。
+        if !track_is_new {
+            if metadata.year.is_some() {
+                conn.execute(
+                    "UPDATE tracks SET year = ?1 WHERE id = ?2 AND year IS NULL",
+                    params![metadata.year, track_id],
+                )?;
+            }
+            // 专辑发行年份同样只补空
+            if metadata.year.is_some() {
+                conn.execute(
+                    "UPDATE albums SET release_year = ?1 WHERE id = ?2 AND release_year IS NULL",
+                    params![metadata.year, album_id],
+                )?;
+            }
+        } else if metadata.year.is_some() {
+            conn.execute(
+                "UPDATE albums SET release_year = ?1 WHERE id = ?2 AND release_year IS NULL",
+                params![metadata.year, album_id],
+            )?;
+        }
 
         // 维护 albums.track_count 冗余字段：仅在新 track 真正插入时 +1。
         // 复用已有 track（如重新扫描同一文件）不会重复计数。
@@ -221,8 +244,8 @@ impl LibraryService {
         // 不要把 track_id 改回自身之外的其他值，保持引用稳定。
         conn.execute(
             "INSERT INTO media_files (
-                source_id, track_id, relative_path, normalized_path, file_name, file_ext, file_size, modified_at, duration_ms, bitrate, sample_rate, channels, last_seen_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, datetime('now'))
+                source_id, track_id, relative_path, normalized_path, file_name, file_ext, file_size, modified_at, duration_ms, bitrate, sample_rate, bit_depth, channels, last_seen_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, datetime('now'))
             ON CONFLICT(source_id, normalized_path) DO UPDATE SET
                 track_id=excluded.track_id,
                 file_size=excluded.file_size,
@@ -230,6 +253,7 @@ impl LibraryService {
                 duration_ms=excluded.duration_ms,
                 bitrate=excluded.bitrate,
                 sample_rate=excluded.sample_rate,
+                bit_depth=excluded.bit_depth,
                 channels=excluded.channels,
                 last_seen_at=datetime('now'),
                 availability='available',
@@ -246,9 +270,14 @@ impl LibraryService {
                 metadata.duration_ms,
                 metadata.bit_rate,
                 metadata.sample_rate,
+                metadata.bit_depth,
                 metadata.channels
             ],
         )?;
+
+        // 6.5 流派入库：标签有流派时整体替换该曲目的流派关联（扫描数据是权威来源，
+        // 目前没有手工编辑流派的入口）；无标签时保留旧关联（补扫不清空）。
+        Self::sync_track_genres(conn, track_id, metadata.genre.as_deref())?;
 
         // 回查出刚才被更新或插入的媒体文件 ID
         let media_file_id: i64 = conn.query_row(
@@ -338,6 +367,71 @@ impl LibraryService {
             params![normalized],
             |row| row.get(0),
         )
+    }
+
+    /// 流派标签分隔符（`&` 不算流派分隔符——"R&B" 是一个流派）
+    const GENRE_SEPARATORS: &[char] = &[';', '；', '、', '，', ',', '/', '／', '|', '｜'];
+    /// 单个曲目的流派数量上限（脏标签防御，避免爆炸式关联）
+    const MAX_GENRES_PER_TRACK: usize = 5;
+
+    /// 切分流派标签：支持 `;` `/` `,` `、` `|` 等分隔符，trim + 去重（大小写不敏感）。
+    /// "R&B"、"Drum & Bass" 等含 `&` 的复合流派不会被拆开。
+    fn split_genres(raw: &str) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut buf = String::new();
+        for ch in raw.chars() {
+            if Self::GENRE_SEPARATORS.contains(&ch) {
+                Self::flush_genre(&mut out, &mut seen, &mut buf);
+            } else {
+                buf.push(ch);
+            }
+        }
+        Self::flush_genre(&mut out, &mut seen, &mut buf);
+        out.truncate(Self::MAX_GENRES_PER_TRACK);
+        out
+    }
+
+    fn flush_genre(out: &mut Vec<String>, seen: &mut std::collections::HashSet<String>, buf: &mut String) {
+        let name = buf.trim();
+        if !name.is_empty() {
+            let key = name.to_lowercase();
+            if seen.insert(key) {
+                out.push(name.to_string());
+            }
+        }
+        buf.clear();
+    }
+
+    /// 把标签流派写入 genres / track_genres：有流派时整体替换该曲目的关联；
+    /// 标签为空时不动旧数据（增量补扫不应清空已有值）。
+    fn sync_track_genres(conn: &Connection, track_id: i64, raw_genre: Option<&str>) -> rusqlite::Result<()> {
+        let Some(raw) = raw_genre else {
+            return Ok(());
+        };
+        let genres = Self::split_genres(raw);
+        if genres.is_empty() {
+            return Ok(());
+        }
+
+        conn.execute("DELETE FROM track_genres WHERE track_id = ?1", params![track_id])?;
+        for name in genres {
+            let normalized = name.to_lowercase();
+            conn.execute(
+                "INSERT OR IGNORE INTO genres (name, normalized_name) VALUES (?1, ?2)",
+                params![name, normalized],
+            )?;
+            let genre_id: i64 = conn.query_row(
+                "SELECT id FROM genres WHERE normalized_name = ?1 LIMIT 1",
+                params![normalized],
+                |row| row.get(0),
+            )?;
+            conn.execute(
+                "INSERT OR IGNORE INTO track_genres (track_id, genre_id) VALUES (?1, ?2)",
+                params![track_id, genre_id],
+            )?;
+        }
+        Ok(())
     }
 
     /// 切分多位艺人字符串（支持 feat./&/;/、/| 等分隔符），逐个 upsert 并返回 ID 列表。
@@ -442,3 +536,222 @@ impl LibraryService {
         Some(buf)
     }
 }
+
+// ===================== 测试：丰富歌曲信息入库（year / genre / bit_depth） =====================
+
+#[cfg(test)]
+mod rich_metadata_tests {
+    use super::*;
+    use crate::db::test_util::TempDir;
+    use crate::repositories::track_repo::TrackRepo;
+    use crate::services::metadata::AudioMetadata;
+
+    /// 建一份带本地来源的测试库，返回 (临时目录守卫, 连接, source_id, 来源根路径)
+    fn db_with_source(label: &str) -> (TempDir, Connection, i64, std::path::PathBuf) {
+        let dir = TempDir::new(label);
+        crate::db::init_db(dir.db_path()).expect("构造测试库失败");
+        let conn = Connection::open(dir.db_path()).expect("打开测试库失败");
+        let root = dir.path().join("music");
+        std::fs::create_dir_all(&root).expect("创建来源根目录失败");
+        conn.execute(
+            "INSERT INTO sources (name, kind, root_uri) VALUES ('本地音乐', 'local', ?1)",
+            rusqlite::params![root.to_string_lossy().to_string()],
+        )
+        .expect("插入来源失败");
+        let id = conn.last_insert_rowid();
+        (dir, conn, id, root)
+    }
+
+    /// 构造一个可直接入库的 PreparedFile（不触碰文件系统：index_file 对路径仅做字符串处理）
+    fn prepared(root: &std::path::Path, rel: &str, meta: AudioMetadata) -> PreparedFile {
+        PreparedFile {
+            path: root.join(rel),
+            metadata: meta,
+            mtime: 1700000000,
+            size: 1024,
+            artwork: PreparedArtwork::default(),
+            lrc_content: None,
+        }
+    }
+
+    fn base_meta(title: &str) -> AudioMetadata {
+        AudioMetadata {
+            title: Some(title.to_string()),
+            artist: Some("测试艺人".to_string()),
+            album: Some("测试专辑".to_string()),
+            duration_ms: Some(180_000),
+            bit_rate: Some(320_000),
+            sample_rate: Some(44_100),
+            channels: Some(2),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn split_genres_parses_dedupes_and_caps() {
+        assert_eq!(
+            LibraryService::split_genres("Pop; Rock"),
+            vec!["Pop".to_string(), "Rock".to_string()]
+        );
+        // R&B 是一个流派，& 不拆
+        assert_eq!(
+            LibraryService::split_genres("R&B / Soul"),
+            vec!["R&B".to_string(), "Soul".to_string()]
+        );
+        // 大小写不敏感去重 + 首见拼写保留
+        assert_eq!(
+            LibraryService::split_genres("Pop; POP; pop"),
+            vec!["Pop".to_string()]
+        );
+        // 脏标签防御：最多保留 5 个流派
+        assert_eq!(LibraryService::split_genres("a;b;c;d;e;f;g").len(), 5);
+        // 纯分隔符 = 无流派
+        assert!(LibraryService::split_genres("; / ;").is_empty());
+    }
+
+    #[test]
+    fn index_file_persists_rich_metadata_and_list_query_returns_it() {
+        let (_dir, conn, source_id, root) = db_with_source("rich_index");
+
+        let mut meta = base_meta("丰富的歌");
+        meta.year = Some(2020);
+        meta.genre = Some("Pop; Rock".to_string());
+        meta.bit_depth = Some(24);
+
+        LibraryService::index_file(
+            &conn,
+            source_id,
+            &root,
+            &prepared(&root, "01 - rich.flac", meta),
+            &root,
+        )
+        .expect("入库失败");
+
+        // tracks.year / albums.release_year / media_files.bit_depth 落库
+        let year: i64 = conn
+            .query_row("SELECT year FROM tracks WHERE title = '丰富的歌'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(year, 2020);
+        let album_year: i64 = conn
+            .query_row(
+                "SELECT release_year FROM albums WHERE normalized_title = '测试专辑'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(album_year, 2020);
+        let bit_depth: i64 = conn
+            .query_row("SELECT bit_depth FROM media_files", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(bit_depth, 24);
+
+        // 流派多对多：一首歌关联两个流派
+        let genre_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM track_genres", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(genre_count, 2);
+
+        // 列表查询（SELECT 模板 + map_track_row 列序耦合）能带回全部扩展字段
+        let tracks = TrackRepo::get_tracks_paginated(&conn, 50, 0, None).unwrap();
+        assert_eq!(tracks.len(), 1);
+        let t = &tracks[0];
+        assert_eq!(t.year, Some(2020));
+        assert_eq!(t.genres.as_deref(), Some("Pop; Rock"));
+        assert_eq!(t.bitrate, Some(320_000));
+        assert_eq!(t.sample_rate, Some(44_100));
+        assert_eq!(t.bit_depth, Some(24));
+    }
+
+    #[test]
+    fn backfill_fills_missing_year_and_never_overwrites_existing() {
+        let (_dir, conn, source_id, root) = db_with_source("backfill");
+
+        // 第一次入库：标签无年份 → tracks.year 为 NULL
+        LibraryService::index_file(
+            &conn,
+            source_id,
+            &root,
+            &prepared(&root, "a.flac", base_meta("补扫之歌")),
+            &root,
+        )
+        .unwrap();
+
+        // 第二次入库（模拟补扫重解析到年份）：只补空，不覆盖
+        let mut meta = base_meta("补扫之歌");
+        meta.year = Some(2001);
+        LibraryService::index_file(&conn, source_id, &root, &prepared(&root, "a.flac", meta), &root)
+            .unwrap();
+        let year: i64 = conn
+            .query_row("SELECT year FROM tracks WHERE title = '补扫之歌'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(year, 2001);
+
+        // 第三次入库：文件改了标签说 1999 —— 已有有效值不被扫描覆盖
+        let mut meta = base_meta("补扫之歌");
+        meta.year = Some(1999);
+        LibraryService::index_file(&conn, source_id, &root, &prepared(&root, "a.flac", meta), &root)
+            .unwrap();
+        let year: i64 = conn
+            .query_row("SELECT year FROM tracks WHERE title = '补扫之歌'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(year, 2001, "已有年份不得被重新扫描覆盖");
+    }
+
+    /// 流派聚合读取的一致性辅助：与列表查询使用同一 GROUP_CONCAT 口径
+    fn genres_of(conn: &Connection, title: &str) -> String {
+        conn.query_row(
+            "SELECT (SELECT GROUP_CONCAT(g.name, '; ') FROM track_genres tg JOIN genres g ON g.id = tg.genre_id WHERE tg.track_id = t.id) FROM tracks t WHERE t.title = ?1",
+            rusqlite::params![title],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn rescan_replaces_genres_but_keeps_them_when_tag_missing() {
+        let (_dir, conn, source_id, root) = db_with_source("genres");
+
+        let mut meta = base_meta("流派之歌");
+        meta.genre = Some("Pop; Rock".to_string());
+        LibraryService::index_file(&conn, source_id, &root, &prepared(&root, "g.flac", meta), &root)
+            .unwrap();
+        assert_eq!(genres_of(&conn, "流派之歌"), "Pop; Rock");
+
+        // 重扫到不同流派：整体替换（扫描数据是权威来源）
+        let mut meta = base_meta("流派之歌");
+        meta.genre = Some("Jazz".to_string());
+        LibraryService::index_file(&conn, source_id, &root, &prepared(&root, "g.flac", meta), &root)
+            .unwrap();
+        assert_eq!(genres_of(&conn, "流派之歌"), "Jazz");
+
+        // 再扫时标签丢了流派：保留旧关联，不清空（增量补扫安全性）
+        LibraryService::index_file(
+            &conn,
+            source_id,
+            &root,
+            &prepared(&root, "g.flac", base_meta("流派之歌")),
+            &root,
+        )
+        .unwrap();
+        assert_eq!(genres_of(&conn, "流派之歌"), "Jazz");
+    }
+
+    /// V13 迁移：app_meta 表 + 流派索引就位，且 tag_parse_version 默认视为「待补扫」
+    #[test]
+    fn v13_provides_backfill_infrastructure() {
+        let (_dir, conn, _source_id, _root) = db_with_source("v13");
+        assert!(crate::services::scanner::needs_tag_backfill(&conn));
+        crate::services::scanner::mark_tag_backfill_done(&conn);
+        assert!(!crate::services::scanner::needs_tag_backfill(&conn));
+
+        let idx: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name IN ('idx_track_genres_track_id', 'idx_track_genres_genre_id')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(idx, 2);
+    }
+}
+

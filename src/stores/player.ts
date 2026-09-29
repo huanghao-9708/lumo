@@ -55,6 +55,17 @@ export interface Track {
   fileSize: number | null;
   /** 来源类型：'local' | 'webdav'，用于离线降级判断 */
   sourceKind: 'local' | 'webdav';
+  // ===== 丰富歌曲信息（可空；旧曲库补扫前无值，缺失时列表显示 —） =====
+  /** 歌曲年份（优先歌曲标签，回退专辑发行年份） */
+  year?: number | null;
+  /** 流派聚合（多流派 "; " 连接） */
+  genres?: string | null;
+  /** 当前首选音源比特率（bps） */
+  bitrate?: number | null;
+  /** 当前首选音源采样率（Hz） */
+  sampleRate?: number | null;
+  /** 当前首选音源位深 */
+  bitDepth?: number | null;
 }
 
 export interface Playlist {
@@ -208,64 +219,72 @@ function fromBackendPlayMode(mode: BackendPlayMode): 'normal' | 'repeat' | 'repe
 
 // ================= Store 实现 =================
 
+/** 纯函数：确定性封面渐变色（模块级，供 store 与独立映射场景共用） */
+function getDeterministicColor(str: string): string {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = str.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  const colors = [
+    'from-warm-500 to-warm-800',
+    'from-blue-500 to-blue-800',
+    'from-green-500 to-green-800',
+    'from-red-500 to-red-800',
+    'from-purple-500 to-purple-800',
+    'from-indigo-500 to-indigo-800',
+    'from-pink-500 to-pink-800',
+    'from-teal-500 to-teal-800',
+    'from-orange-500 to-orange-800'
+  ];
+  return colors[Math.abs(hash) % colors.length];
+}
+
+/** 把秒数格式化成 `mm:ss`，用于 UI 显示 */
+export function formatTime(seconds: number): string {
+  const min = Math.floor(seconds / 60);
+  const sec = Math.floor(seconds % 60);
+  return `${min.toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")}`;
+}
+
+/**
+ * 统一的 DTO → 前端 Track 映射器（模块级导出）。
+ * 之前这段逻辑在 7+ 处 fetch 函数里几乎一字不差地重复，难以维护，
+ * 现在抽到这里，所有 `TrackDTO[]` 来源（含 GlobalSearch/AI 歌单等直接调 API 的页面）
+ * 都走同一通道。
+ */
+export function mapTrackDTO(t: TrackDTO): Track {
+  const durationMs = t.duration_ms ?? 0;
+  return {
+    id: t.id,
+    title: t.title,
+    artistId: t.artist_id || null,
+    artist: t.artist_name || '未知艺人',
+    albumId: t.album_id || null,
+    album: t.album_title || '未知专辑',
+    duration: formatTime(durationMs / 1000),
+    durationSec: Math.floor(durationMs / 1000),
+    format: t.format ? t.format.toUpperCase() : 'UNKNOWN',
+    coverColor: getDeterministicColor(t.album_title || t.title || 'Unknown'),
+    cover_artwork_id: t.cover_artwork_id,
+    isFavorite: t.is_favorite || false,
+    primary_file_id: t.media_file_id,
+    playedAt: t.last_played_at ?? '',
+    fileSize: t.file_size ?? null,
+    sourceKind: (t.source_kind === 'webdav' ? 'webdav' : 'local') as 'local' | 'webdav',
+    year: t.year ?? null,
+    genres: t.genres ?? null,
+    bitrate: t.bitrate ?? null,
+    sampleRate: t.sample_rate ?? null,
+    bitDepth: t.bit_depth ?? null,
+  };
+}
+
+/** 把 `TrackDTO[]` 批量映射为前端 Track[] */
+export function mapTrackList(list: TrackDTO[]): Track[] {
+  return list.map(mapTrackDTO);
+}
+
 export const usePlayerStore = defineStore("player", () => {
-  function getDeterministicColor(str: string): string {
-    let hash = 0;
-    for (let i = 0; i < str.length; i++) {
-      hash = str.charCodeAt(i) + ((hash << 5) - hash);
-    }
-    const colors = [
-      'from-warm-500 to-warm-800',
-      'from-blue-500 to-blue-800',
-      'from-green-500 to-green-800',
-      'from-red-500 to-red-800',
-      'from-purple-500 to-purple-800',
-      'from-indigo-500 to-indigo-800',
-      'from-pink-500 to-pink-800',
-      'from-teal-500 to-teal-800',
-      'from-orange-500 to-orange-800'
-    ];
-    return colors[Math.abs(hash) % colors.length];
-  }
-
-  /** 把秒数格式化成 `mm:ss`，用于 UI 显示 */
-  function formatTime(seconds: number): string {
-    const min = Math.floor(seconds / 60);
-    const sec = Math.floor(seconds % 60);
-    return `${min.toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")}`;
-  }
-
-  /**
-   * 统一的 DTO → 前端 Track 映射器。
-   * 之前这段逻辑在 7+ 处 fetch 函数里几乎一字不差地重复，难以维护，
-   * 现在抽到这里，所有 `TrackDTO[]` 来源都走同一通道。
-   */
-  function mapTrackDTO(t: TrackDTO): Track {
-    const durationMs = t.duration_ms ?? 0;
-    return {
-      id: t.id,
-      title: t.title,
-      artistId: t.artist_id || null,
-      artist: t.artist_name || '未知艺人',
-      albumId: t.album_id || null,
-      album: t.album_title || '未知专辑',
-      duration: formatTime(durationMs / 1000),
-      durationSec: Math.floor(durationMs / 1000),
-      format: t.format ? t.format.toUpperCase() : 'UNKNOWN',
-      coverColor: getDeterministicColor(t.album_title || t.title || 'Unknown'),
-      cover_artwork_id: t.cover_artwork_id,
-      isFavorite: t.is_favorite || false,
-      primary_file_id: t.media_file_id,
-      playedAt: t.last_played_at ?? '',
-      fileSize: t.file_size ?? null,
-      sourceKind: (t.source_kind === 'webdav' ? 'webdav' : 'local') as 'local' | 'webdav',
-    };
-  }
-
-  /** 把 `TrackDTO[]` 批量映射为前端 Track[] */
-  function mapTrackList(list: TrackDTO[]): Track[] {
-    return list.map(mapTrackDTO);
-  }
 
   // 基础状态
   const isPlaying = ref(false);
