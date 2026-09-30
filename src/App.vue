@@ -17,9 +17,11 @@ import { usePlatform } from './composables/usePlatform';
 import { useAutoScrollbar } from './composables/useAutoScrollbar';
 import { setupWindowPersistence } from './composables/useWindowPersistence';
 import { maybeAutoRunProbe } from './dev/windowProbe';
+import { useDesktopModeStore } from './stores/desktopMode';
 
 const playerStore = usePlayerStore();
 const uiStore = useUiStore();
+const desktopModeStore = useDesktopModeStore();
 const { isMobile } = usePlatform();
 
 // 滚动条 auto-hide：单一全局 scroll 监听，滚动中的容器临时加 .scrolling（第四轮）
@@ -89,6 +91,9 @@ onMounted(async () => {
 
   // 桌面窗口尺寸：默认 1200×720、按工作区限幅、记住用户调整（仅 Tauri 桌面生效）
   if (!isMobile.value) {
+    // 桌面两维偏好（体验模式 × 窗口形态）：启动读取，失败留在默认 normal+full
+    void desktopModeStore.init();
+
     setupWindowPersistence().then((dispose) => {
       if (appUnmounted) dispose();
       else disposeWindowPersistence = dispose;

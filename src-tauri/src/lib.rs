@@ -609,6 +609,8 @@ pub fn run() {
             crate::commands::queue::playback_advance,
             crate::commands::queue::playback_set_mode,
             // MA1：应用信息与移动平台桥
+            crate::commands::desktop::desktop_get_preferences,
+            crate::commands::desktop::desktop_update_preferences,
             crate::commands::app::app_get_version,
             crate::commands::app::platform_check_audio_permission,
             crate::commands::app::platform_request_audio_permission,

@@ -2,6 +2,7 @@ pub mod ai;
 pub mod backoff;
 pub mod cache;
 pub mod cover;
+pub mod desktop_preferences;
 pub mod file_priority;
 pub mod library;
 pub mod metadata;

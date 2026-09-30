@@ -1,5 +1,6 @@
 pub mod ai;
 pub mod app;
+pub mod desktop;
 pub mod library;
 pub mod playback;
 pub mod queue;
