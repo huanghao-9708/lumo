@@ -12,7 +12,7 @@
 
 ## 验证
 
-- 前端生产构建、Rust `cargo check` 与 release 编译通过；Rust 格式检查和联网登记检查通过。
+- 前端生产构建、Rust `cargo check` 与 release 编译通过；Clippy、Rust 格式检查和联网登记检查通过。
 - Windows x64 MSI 与 NSIS 安装包已在本机成功构建；GitHub Actions 会在发布门禁通过后上传正式 Release 资产。
 - PR/主干质量门禁负责在发布前运行前端与 Rust 测试。
 - 尚无本次代码的内存 A/B 实测结果；本版本不承诺固定 MiB 上限。

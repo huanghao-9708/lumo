@@ -67,6 +67,13 @@ impl Drop for SemaphoreGuard<'_> {
 /// 4 这个值是经验值:既保证封面加载吞吐(4 路并行),又给 IPC invoke 留足通道。
 static ARTWORK_SEMAPHORE: CountingSemaphore = CountingSemaphore::new(4);
 
+struct ArtworkMetadata {
+    cache_path: String,
+    mime: Option<String>,
+    content_hash: Option<String>,
+    thumbnail: Option<Vec<u8>>,
+}
+
 /// 后台异步回填 artwork 缩略图。
 ///
 /// 在应用启动后 spawn 的独立线程里执行,不阻塞 UI。
@@ -379,7 +386,7 @@ pub fn run() {
 
                 // ---- 锁内：只做 SQLite 查询（毫秒级），查完立即释放锁 ----
                 // 关键：把 std::fs::read 移出锁范围，避免持锁读磁盘阻塞其他 IPC。
-                let meta: Option<(String, Option<String>, Option<String>, Option<Vec<u8>>)> = {
+                let meta: Option<ArtworkMetadata> = {
                     let db_state = app.try_state::<crate::db::DbState>();
                     let conn = db_state.as_ref().and_then(|s| s.db.get().ok());
                     conn.as_ref().and_then(|conn| {
@@ -393,7 +400,12 @@ pub fn run() {
                                 let m: Option<String> = row.get(1)?;
                                 let h: Option<String> = row.get(2)?;
                                 let thumb: Option<Vec<u8>> = row.get(3)?;
-                                Ok((p, m, h, thumb))
+                                Ok(ArtworkMetadata {
+                                    cache_path: p,
+                                    mime: m,
+                                    content_hash: h,
+                                    thumbnail: thumb,
+                                })
                             },
                         )
                         .ok()
@@ -401,7 +413,7 @@ pub fn run() {
                 };
                 // ← 锁在这里已经释放
 
-                let Some((cache_path, mime, content_hash, thumbnail)) = meta else {
+                let Some(meta) = meta else {
                     return tauri::http::Response::builder()
                         .status(404)
                         .header("Cache-Control", "no-store")
@@ -411,20 +423,24 @@ pub fn run() {
 
                 // 旧数据的原图回退只是临时响应，不能永久缓存到缩略图 URL。
                 // 否则后台补齐 thumbnail_blob 后，浏览器仍会长期复用原始大图。
-                let cache_control = if wants_thumbnail && thumbnail.is_none() {
+                let cache_control = if wants_thumbnail && meta.thumbnail.is_none() {
                     "no-store"
                 } else {
                     "public, max-age=31536000, immutable"
                 };
 
                 // ---- 锁外：ETag 判定 + 读磁盘 ----
-                let etag_value = content_hash.as_deref().filter(|h| !h.is_empty()).map(|h| {
-                    if wants_thumbnail && thumbnail.is_some() {
-                        format!("W/\"{}-thumb\"", h)
-                    } else {
-                        format!("W/\"{}\"", h)
-                    }
-                });
+                let etag_value = meta
+                    .content_hash
+                    .as_deref()
+                    .filter(|h| !h.is_empty())
+                    .map(|h| {
+                        if wants_thumbnail && meta.thumbnail.is_some() {
+                            format!("W/\"{}-thumb\"", h)
+                        } else {
+                            format!("W/\"{}\"", h)
+                        }
+                    });
 
                 // 命中缓存：ETag 一致，直接 304
                 if let (Some(req), Some(etag)) = (req_etag.as_deref(), etag_value.as_deref()) {
@@ -441,11 +457,11 @@ pub fn run() {
 
                 // 未命中：读磁盘返回完整 body（此时已不持锁，不阻塞其他 IPC）
                 let (data, mime_type, modified) = if wants_thumbnail {
-                    if let Some(data) = thumbnail {
+                    if let Some(data) = meta.thumbnail {
                         (data, "image/jpeg".to_string(), None)
                     } else {
-                        let file_meta = std::fs::metadata(&cache_path).ok();
-                        let data = std::fs::read(&cache_path).ok();
+                        let file_meta = std::fs::metadata(&meta.cache_path).ok();
+                        let data = std::fs::read(&meta.cache_path).ok();
                         let (Some(file_meta), Some(data)) = (file_meta, data) else {
                             return tauri::http::Response::builder()
                                 .status(404)
@@ -455,13 +471,13 @@ pub fn run() {
                         };
                         (
                             data,
-                            mime.unwrap_or_else(|| "image/jpeg".to_string()),
+                            meta.mime.unwrap_or_else(|| "image/jpeg".to_string()),
                             file_meta.modified().ok(),
                         )
                     }
                 } else {
-                    let file_meta = std::fs::metadata(&cache_path).ok();
-                    let data = std::fs::read(&cache_path).ok();
+                    let file_meta = std::fs::metadata(&meta.cache_path).ok();
+                    let data = std::fs::read(&meta.cache_path).ok();
                     let (Some(file_meta), Some(data)) = (file_meta, data) else {
                         return tauri::http::Response::builder()
                             .status(404)
@@ -471,7 +487,7 @@ pub fn run() {
                     };
                     (
                         data,
-                        mime.unwrap_or_else(|| "image/jpeg".to_string()),
+                        meta.mime.unwrap_or_else(|| "image/jpeg".to_string()),
                         file_meta.modified().ok(),
                     )
                 };
