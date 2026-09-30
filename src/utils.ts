@@ -33,10 +33,11 @@ export function getCurrentPlatform(): Platform {
   return detectPlatform();
 }
 
-export function getArtworkUrl(artworkId: number | string): string {
+export function getArtworkUrl(artworkId: number | string, size: 'thumb' | 'full' = 'thumb'): string {
+  const query = size === 'thumb' ? '?size=thumb' : '';
   // Windows 上的 WebView2 严格要求 http://lumo.localhost/ 形式
   if (detectPlatform() === 'windows') {
-    return `http://lumo.localhost/artwork/${artworkId}`;
+    return `http://lumo.localhost/artwork/${artworkId}${query}`;
   }
-  return `lumo://artwork/${artworkId}`;
+  return `lumo://artwork/${artworkId}${query}`;
 }

@@ -9,8 +9,7 @@
  *   不记录任何用户内容（无标题/路径/凭据）。
  *
  * 采集面（方案 §3 的优先调查对象）：
- * - 封面缓存：条数 / 计量字节 / 预算 / 命中与驱逐（artworkCache）
- * - 封面请求：活跃 fetch / 排队 / 去重等待（useArtworkSrc）
+ * - 封面通道：当前模式与 JS 预取队列（单一 URL 模式下为零，不代表协议请求数）
  * - 前端列表：tracks / queue / albums / artists / playlists 长度（player store 注册）
  * - 数据库：连接池占用 / 页缓存 / 扫描文件缓存（Rust library_debug_stats）
  */

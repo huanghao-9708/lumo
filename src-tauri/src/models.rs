@@ -474,16 +474,12 @@ pub struct CoverFetchedEvent {
     pub target_id: i64,
     /// 新写入的封面/头像 artwork id
     pub artwork_id: i64,
-    /// 200x200 缩略图的 data URL（v1.8.1）：随事件下发，前端网格即时更新
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cover_thumbnail_base64: Option<String>,
 }
 
 /// 单次封面拉取的内部结果（impl → 命令层，非序列化）
 #[derive(Debug)]
 pub struct FetchedCover {
     pub artwork_id: i64,
-    pub thumbnail_base64: Option<String>,
 }
 
 /// `library_get_startup_bundle` 的返回：App.vue 启动所需数据一次 IPC 打包。
@@ -494,11 +490,11 @@ pub struct StartupBundle {
     pub counts: LibraryCounts,
     /// 歌单列表
     pub playlists: Vec<PlaylistDTO>,
-    /// 专辑网格第一页（30 条，内联缩略图；与前端 albumsPageSize 一致）
+    /// 专辑网格第一页（30 条轻量元数据；封面按需从缩略图协议加载）
     pub albums: Vec<AlbumDTO>,
     /// 专辑总数
     pub album_total: i64,
-    /// 艺人第一页（50 条；与前端 artistsLimit 一致）
+    /// 艺人第一页（30 条；与前端 artistsLimit 一致）
     pub artists: Vec<ArtistDTO>,
     /// 艺人总数
     pub artist_total: i64,

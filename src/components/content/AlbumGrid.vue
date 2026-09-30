@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, onBeforeUnmount, ref } from 'vue';
+import { computed, onMounted, onBeforeUnmount, ref, nextTick, watch } from 'vue';
 import { Play, Loader2, Disc3, Sparkles, CheckCircle2, X } from 'lucide-vue-next';
 import { usePlayerStore, mapTrackDTO, type Album } from '../../stores/player';
 import { getArtworkUrl } from '../../utils';
 import { libraryGetAlbumTracks, libraryGetAlbumMatchTargets, libraryMatchSingleAlbumCover } from '../../api/library';
 import type { AlbumMatchTargetDTO } from '../../api/types';
 import { useScrollRestore } from '../../composables/useScrollRestore';
+import { useVirtualList } from '../../composables/useVirtualList';
 
 const playerStore = usePlayerStore();
 
@@ -13,9 +14,8 @@ const emit = defineEmits<{
   (e: 'select', album: Album): void;
 }>();
 
-/** 封面 src：优先使用 cover_thumb（后端内联 base64），否则走 artwork URL 协议 */
+/** 网格封面通过 200px 缩略图 URL 按需加载，不在专辑状态中长期保留 Base64。 */
 function getCoverSrc(album: Album): string {
-  if (album.cover_thumb) return album.cover_thumb;
   if (album.cover_artwork_id) return getArtworkUrl(album.cover_artwork_id);
   return '';
 }
@@ -51,21 +51,26 @@ const matchSuccessCount = ref(0);
 const currentMatchName = ref('');
 const missingTotalCount = ref<number | null>(null);
 let matchAborted = false;
+let matchDisposed = false;
+let completionTimer: ReturnType<typeof setTimeout> | null = null;
 
-const missingCount = computed(() => missingTotalCount.value !== null ? missingTotalCount.value : playerStore.albums.filter(a => !a.cover_artwork_id && !a.cover_thumb).length);
+const missingCount = computed(() => missingTotalCount.value !== null ? missingTotalCount.value : playerStore.albums.filter(a => !a.cover_artwork_id).length);
 const matchPercent = computed(() => (matchTotal.value ? Math.min(100, (matchProcessed.value / matchTotal.value) * 100) : 0));
 
 async function refreshMissingCount() {
   try {
     const missingTargets = await libraryGetAlbumMatchTargets(true);
-    missingTotalCount.value = missingTargets.length;
+    if (!matchDisposed) missingTotalCount.value = missingTargets.length;
   } catch (e) {
     console.error('获取全库待匹配专辑数失败:', e);
   }
 }
 
 async function startMatchingCovers() {
-  if (isMatching.value) return;
+  if (isMatching.value || matchDisposed) return;
+  isMatching.value = true;
+  matchAborted = false;
+  if (completionTimer !== null) clearTimeout(completionTimer);
 
   // 默认从后端数据库拉取所有未拥有封面的专辑；若全库均已拥有封面，则匹配全库全部专辑
   let targets: AlbumMatchTargetDTO[] = [];
@@ -76,10 +81,14 @@ async function startMatchingCovers() {
     }
   } catch (e) {
     console.error('获取全量匹配目标失败:', e);
+    isMatching.value = false;
     return;
   }
 
-  if (targets.length === 0) return;
+  if (targets.length === 0 || matchDisposed || matchAborted) {
+    isMatching.value = false;
+    return;
+  }
 
   isMatching.value = true;
   matchCompleted.value = false;
@@ -93,12 +102,13 @@ async function startMatchingCovers() {
   let idx = 0;
 
   async function worker() {
-    while (idx < targets.length && !matchAborted) {
+    while (idx < targets.length && !matchAborted && !matchDisposed) {
       const cur = targets[idx++];
       if (!cur) break;
       currentMatchName.value = cur.artistName ? `${cur.title} (${cur.artistName})` : cur.title;
       try {
         const res = await libraryMatchSingleAlbumCover(cur.id, true);
+        if (matchDisposed) return;
         if (res) {
           matchSuccessCount.value++;
           if (missingTotalCount.value !== null && missingTotalCount.value > 0) {
@@ -108,6 +118,7 @@ async function startMatchingCovers() {
       } catch (e) {
         console.error('匹配专辑封面失败:', cur.title, e);
       }
+      if (matchDisposed) return;
       matchProcessed.value++;
       await new Promise(r => setTimeout(r, 160));
     }
@@ -115,12 +126,13 @@ async function startMatchingCovers() {
 
   const workers = Array.from({ length: Math.min(CONCURRENCY, targets.length) }, () => worker());
   await Promise.all(workers);
+  if (matchDisposed) return;
 
   isMatching.value = false;
   if (!matchAborted) {
     matchCompleted.value = true;
     refreshMissingCount();
-    setTimeout(() => {
+    completionTimer = setTimeout(() => {
       matchCompleted.value = false;
     }, 4000);
   } else {
@@ -130,7 +142,6 @@ async function startMatchingCovers() {
 
 function abortMatching() {
   matchAborted = true;
-  isMatching.value = false;
 }
 
 /** IntersectionObserver: 滚动到底部自动加载下一批 */
@@ -138,19 +149,58 @@ function abortMatching() {
 const gridContainer = useScrollRestore(
   () => `album-grid:${playerStore.hideSmallAlbums ? 1 : 0}:${playerStore.searchQuery}`
 );
+const toolbarRef = ref<HTMLElement | null>(null);
+const virtualGridRef = ref<HTMLElement | null>(null);
+const gridColumns = ref(3);
+const gridRowHeight = ref(300);
+const virtualScrollOffset = ref(0);
+const albumItems = computed(() => playerStore.albums);
+const { totalHeight: virtualHeight, offsetY: virtualOffsetY, visibleItems: visibleAlbums } = useVirtualList({
+  containerRef: gridContainer,
+  items: albumItems,
+  itemHeight: gridRowHeight,
+  columns: gridColumns,
+  scrollOffset: virtualScrollOffset,
+  buffer: 1,
+});
 const sentinelRef = ref<HTMLElement | null>(null);
 let observer: IntersectionObserver | null = null;
+let gridResizeObserver: ResizeObserver | null = null;
+
+function updateGridMetrics() {
+  const container = gridContainer.value;
+  if (!container) return;
+  const contentWidth = Math.max(1, container.clientWidth - 64);
+  const columns = Math.max(1, Math.floor((contentWidth + 24) / 204));
+  const cardWidth = (contentWidth - 24 * (columns - 1)) / columns;
+  gridColumns.value = columns;
+  // 封面正方形 + 标题/艺人行 + 卡片间距；标题固定单行截断。
+  gridRowHeight.value = Math.ceil(cardWidth + 80);
+  const viewport = virtualGridRef.value;
+  if (viewport) {
+    virtualScrollOffset.value = Math.max(
+      0,
+      viewport.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop,
+    );
+  }
+}
 
 onMounted(() => {
   refreshMissingCount();
   if (!gridContainer.value) return;
+  if (typeof ResizeObserver !== 'undefined') {
+    gridResizeObserver = new ResizeObserver(() => updateGridMetrics());
+    gridResizeObserver.observe(gridContainer.value);
+    if (toolbarRef.value) gridResizeObserver.observe(toolbarRef.value);
+  }
+  nextTick(updateGridMetrics);
   observer = new IntersectionObserver(
     (entries) => {
       if (entries[0]?.isIntersecting && !isLoading.value && hasMoreAlbums.value) {
         playerStore.fetchAlbums(false);
       }
     },
-    { root: gridContainer.value, rootMargin: '400px' }
+    { root: gridContainer.value, rootMargin: '150px' }
   );
   if (sentinelRef.value) {
     observer.observe(sentinelRef.value);
@@ -158,7 +208,18 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  matchDisposed = true;
+  matchAborted = true;
+  if (completionTimer !== null) clearTimeout(completionTimer);
   observer?.disconnect();
+  gridResizeObserver?.disconnect();
+});
+
+watch([isMatching, matchCompleted], () => {
+  void nextTick(updateGridMetrics);
+});
+watch(() => playerStore.albums.length, () => {
+  void nextTick(updateGridMetrics);
 });
 </script>
 
@@ -169,7 +230,7 @@ onBeforeUnmount(() => {
     <div ref="gridContainer" class="flex-1 overflow-y-auto px-8">
 
       <!-- 顶部操作条与匹配控制 -->
-      <div class="mb-5 flex items-center justify-between gap-4 flex-wrap select-none pt-1">
+      <div ref="toolbarRef" class="mb-5 flex items-center justify-between gap-4 flex-wrap select-none pt-1">
         <div class="flex items-center gap-2">
           <span class="text-[13px] font-medium text-text-primary">全部专辑</span>
           <span class="text-[11px] font-mono text-text-muted">({{ totalCount.toLocaleString() }} 张)</span>
@@ -251,52 +312,62 @@ onBeforeUnmount(() => {
         <span class="text-[12px]">没有找到专辑</span>
       </div>
 
-      <!-- 5 列网格 -->
+      <!-- 有界虚拟网格：只创建视口附近的专辑卡片 -->
       <div
         v-else
-        class="grid gap-6 pb-6"
-        style="grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));"
+        ref="virtualGridRef"
+        class="relative"
+        :style="{ height: `${virtualHeight}px` }"
       >
         <div
-          v-for="album in playerStore.albums"
-          :key="album.id"
-          class="group cursor-pointer min-w-0"
-          @dblclick="playAlbum(album)"
+          class="absolute inset-x-0 top-0 grid gap-6"
+          :style="{
+            transform: `translateY(${virtualOffsetY}px)`,
+            gridTemplateColumns: `repeat(${gridColumns}, minmax(0, 1fr))`,
+            gridAutoRows: `${gridRowHeight - 24}px`,
+          }"
         >
-          <!-- 封面 -->
           <div
-            class="relative w-full aspect-square rounded-[12px] overflow-hidden bg-bg-hover mb-3 ring-1 ring-black/5 dark:ring-white/10 shadow-sm group-hover:shadow-[0_12px_24px_-6px_rgba(0,0,0,0.18)] dark:group-hover:shadow-[0_12px_24px_-6px_rgba(0,0,0,0.5)] group-hover:-translate-y-1 transition-all duration-200"
-            @click="selectAlbum(album)"
+            v-for="{ data: album } in visibleAlbums"
+            :key="album.id"
+            class="group cursor-pointer min-w-0"
+            @dblclick="playAlbum(album)"
           >
-            <img
-              v-if="getCoverSrc(album)"
-              :src="getCoverSrc(album)"
-              :alt="album.title"
-              class="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300 ease-out"
-              loading="lazy"
-            />
-            <div v-else class="w-full h-full flex items-center justify-center bg-bg-hover">
-              <Disc3 class="w-10 h-10 text-text-disabled" aria-hidden="true" />
-            </div>
-
-            <!-- 悬浮播放按钮 -->
+            <!-- 封面 -->
             <div
-              class="absolute inset-0 bg-black/0 group-hover:bg-black/25 dark:group-hover:bg-black/45 transition-colors-smooth flex items-center justify-center opacity-0 group-hover:opacity-100"
-              @click.stop="playAlbum(album)"
+              class="relative w-full aspect-square rounded-[12px] overflow-hidden bg-bg-hover mb-3 ring-1 ring-black/5 dark:ring-white/10 shadow-sm group-hover:shadow-[0_12px_24px_-6px_rgba(0,0,0,0.18)] dark:group-hover:shadow-[0_12px_24px_-6px_rgba(0,0,0,0.5)] group-hover:-translate-y-1 transition-all duration-200"
+              @click="selectAlbum(album)"
             >
-              <div class="w-11 h-11 rounded-full bg-brand-orange text-white flex items-center justify-center shadow-lg transform scale-90 group-hover:scale-100 transition-transform duration-200 hover:scale-105 active:scale-95">
-                <Play class="w-5 h-5 fill-current ml-0.5" />
+              <img
+                v-if="getCoverSrc(album)"
+                :src="getCoverSrc(album)"
+                :alt="album.title"
+                class="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300 ease-out"
+                loading="lazy"
+              />
+              <div v-else class="w-full h-full flex items-center justify-center bg-bg-hover">
+                <Disc3 class="w-10 h-10 text-text-disabled" aria-hidden="true" />
+              </div>
+
+              <!-- 悬浮播放按钮 -->
+              <div
+                class="absolute inset-0 bg-black/0 group-hover:bg-black/25 dark:group-hover:bg-black/45 transition-colors-smooth flex items-center justify-center opacity-0 group-hover:opacity-100"
+                @click.stop="playAlbum(album)"
+              >
+                <div class="w-11 h-11 rounded-full bg-brand-orange text-white flex items-center justify-center shadow-lg transform scale-90 group-hover:scale-100 transition-transform duration-200 hover:scale-105 active:scale-95">
+                  <Play class="w-5 h-5 fill-current ml-0.5" />
+                </div>
               </div>
             </div>
-          </div>
 
-          <!-- 标题 + 艺术家 -->
-          <p
-            class="text-[15px] font-medium text-text-primary truncate mb-0.5"
-            :class="playerStore.activeAlbumId === album.id ? 'text-brand-orange' : ''"
-            @click="selectAlbum(album)"
-          >{{ album.title }}</p>
-          <p class="text-[13px] text-text-muted truncate">{{ album.artist }}<span v-if="album.year"> · {{ album.year }}</span></p>
+            <!-- 标题 + 艺术家 -->
+            <p
+              class="text-[15px] font-medium text-text-primary truncate mb-0.5"
+              :class="playerStore.activeAlbumId === album.id ? 'text-brand-orange' : ''"
+              @click="selectAlbum(album)"
+            >{{ album.title }}</p>
+            <p class="text-[13px] text-text-muted truncate">{{ album.artist }}<span v-if="album.year"> · {{ album.year }}</span></p>
+          </div>
         </div>
       </div>
 

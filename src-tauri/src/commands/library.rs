@@ -932,7 +932,7 @@ pub fn library_get_startup_bundle(
     let album_total = AlbumRepo::get_album_count(&conn, None, album_min_track_count)
         .map_err(|e| AppError::Internal(e.to_string()))?;
     let ArtistListResult { artists, total } =
-        ArtistRepo::get_artists_paginated(&conn, 50, 0, None, artist_min_track_count)
+        ArtistRepo::get_artists_paginated(&conn, 30, 0, None, artist_min_track_count)
             .map_err(|e| AppError::Internal(e.to_string()))?;
 
     Ok(crate::models::StartupBundle {
@@ -1019,14 +1019,6 @@ async fn fetch_album_cover_impl(
     }
 
     let thumbnail_blob = crate::services::library::LibraryService::generate_thumbnail(&bytes);
-    // 缩略图随事件下发（data URL），前端立即更新专辑网格，无需等下次全量拉取
-    let thumbnail_base64 = thumbnail_blob.as_ref().map(|b| {
-        use base64::{engine::general_purpose, Engine as _};
-        format!(
-            "data:image/jpeg;base64,{}",
-            general_purpose::STANDARD.encode(b)
-        )
-    });
 
     let conn = pool.get()?;
     use rusqlite::OptionalExtension;
@@ -1054,10 +1046,7 @@ async fn fetch_album_cover_impl(
         params![artwork_id, album_id],
     )?;
 
-    Ok(Some(crate::models::FetchedCover {
-        artwork_id,
-        thumbnail_base64,
-    }))
+    Ok(Some(crate::models::FetchedCover { artwork_id }))
 }
 
 /// 触发专辑封面在线拉取（第七轮：后台化）。
@@ -1089,7 +1078,6 @@ pub async fn library_fetch_missing_album_cover(
                     crate::models::CoverFetchedEvent {
                         target_id: album_id,
                         artwork_id: cover.artwork_id,
-                        cover_thumbnail_base64: cover.thumbnail_base64,
                     },
                 );
             }
@@ -1164,7 +1152,6 @@ pub async fn library_match_single_album_cover(
                 crate::models::CoverFetchedEvent {
                     target_id: album_id,
                     artwork_id: cover.artwork_id,
-                    cover_thumbnail_base64: cover.thumbnail_base64,
                 },
             );
             Ok(Some(cover.artwork_id))
@@ -1237,13 +1224,6 @@ async fn fetch_artist_cover_impl(
     }
 
     let thumbnail_blob = crate::services::library::LibraryService::generate_thumbnail(&bytes);
-    let thumbnail_base64 = thumbnail_blob.as_ref().map(|b| {
-        use base64::{engine::general_purpose, Engine as _};
-        format!(
-            "data:image/jpeg;base64,{}",
-            general_purpose::STANDARD.encode(b)
-        )
-    });
 
     let conn = pool.get()?;
     use rusqlite::OptionalExtension;
@@ -1272,10 +1252,7 @@ async fn fetch_artist_cover_impl(
         params![artwork_id, artist_id],
     )?;
 
-    Ok(Some(crate::models::FetchedCover {
-        artwork_id,
-        thumbnail_base64,
-    }))
+    Ok(Some(crate::models::FetchedCover { artwork_id }))
 }
 
 /// 触发艺人头像在线拉取（第七轮：后台化，机制同 library_fetch_missing_album_cover）。
@@ -1308,7 +1285,6 @@ pub async fn library_fetch_missing_artist_cover(
                     crate::models::CoverFetchedEvent {
                         target_id: artist_id,
                         artwork_id: cover.artwork_id,
-                        cover_thumbnail_base64: cover.thumbnail_base64,
                     },
                 );
             }
@@ -1381,7 +1357,6 @@ pub async fn library_match_single_artist_cover(
                 crate::models::CoverFetchedEvent {
                     target_id: artist_id,
                     artwork_id: cover.artwork_id,
-                    cover_thumbnail_base64: cover.thumbnail_base64,
                 },
             );
             Ok(Some(cover.artwork_id))

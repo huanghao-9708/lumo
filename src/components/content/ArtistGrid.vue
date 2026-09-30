@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, onBeforeUnmount, ref } from 'vue';
+import { computed, onMounted, onBeforeUnmount, ref, nextTick, watch } from 'vue';
 import { User, Loader2, Sparkles, CheckCircle2, X } from 'lucide-vue-next';
 import { usePlayerStore } from '../../stores/player';
 import { getArtworkUrl } from '../../utils';
 import { libraryGetArtistMatchTargets, libraryMatchSingleArtistCover } from '../../api/library';
 import type { ArtistMatchTargetDTO } from '../../api/types';
 import { useScrollRestore } from '../../composables/useScrollRestore';
+import { useVirtualList } from '../../composables/useVirtualList';
 
 const playerStore = usePlayerStore();
 
@@ -31,6 +32,8 @@ const matchSuccessCount = ref(0);
 const currentMatchName = ref('');
 const missingTotalCount = ref<number | null>(null);
 let matchAborted = false;
+let matchDisposed = false;
+let completionTimer: ReturnType<typeof setTimeout> | null = null;
 
 const missingCount = computed(() => missingTotalCount.value !== null ? missingTotalCount.value : artists.value.filter(a => !a.avatar_artwork_id).length);
 const matchPercent = computed(() => (matchTotal.value ? Math.min(100, (matchProcessed.value / matchTotal.value) * 100) : 0));
@@ -38,14 +41,17 @@ const matchPercent = computed(() => (matchTotal.value ? Math.min(100, (matchProc
 async function refreshMissingCount() {
   try {
     const missingTargets = await libraryGetArtistMatchTargets(true);
-    missingTotalCount.value = missingTargets.length;
+    if (!matchDisposed) missingTotalCount.value = missingTargets.length;
   } catch (e) {
     console.error('获取全库待匹配艺人数失败:', e);
   }
 }
 
 async function startMatchingCovers() {
-  if (isMatching.value) return;
+  if (isMatching.value || matchDisposed) return;
+  isMatching.value = true;
+  matchAborted = false;
+  if (completionTimer !== null) clearTimeout(completionTimer);
 
   // 默认从后端数据库拉取所有未拥有头像的艺人；若全库均已拥有头像，则匹配全库全部艺人
   let targets: ArtistMatchTargetDTO[] = [];
@@ -56,10 +62,14 @@ async function startMatchingCovers() {
     }
   } catch (e) {
     console.error('获取全量艺人匹配目标失败:', e);
+    isMatching.value = false;
     return;
   }
 
-  if (targets.length === 0) return;
+  if (targets.length === 0 || matchDisposed || matchAborted) {
+    isMatching.value = false;
+    return;
+  }
 
   isMatching.value = true;
   matchCompleted.value = false;
@@ -73,12 +83,13 @@ async function startMatchingCovers() {
   let idx = 0;
 
   async function worker() {
-    while (idx < targets.length && !matchAborted) {
+    while (idx < targets.length && !matchAborted && !matchDisposed) {
       const cur = targets[idx++];
       if (!cur) break;
       currentMatchName.value = cur.name;
       try {
         const res = await libraryMatchSingleArtistCover(cur.id, true);
+        if (matchDisposed) return;
         if (res) {
           matchSuccessCount.value++;
           if (missingTotalCount.value !== null && missingTotalCount.value > 0) {
@@ -88,6 +99,7 @@ async function startMatchingCovers() {
       } catch (e) {
         console.error('匹配艺人图片失败:', cur.name, e);
       }
+      if (matchDisposed) return;
       matchProcessed.value++;
       await new Promise(r => setTimeout(r, 160));
     }
@@ -95,12 +107,13 @@ async function startMatchingCovers() {
 
   const workers = Array.from({ length: Math.min(CONCURRENCY, targets.length) }, () => worker());
   await Promise.all(workers);
+  if (matchDisposed) return;
 
   isMatching.value = false;
   if (!matchAborted) {
     matchCompleted.value = true;
     refreshMissingCount();
-    setTimeout(() => {
+    completionTimer = setTimeout(() => {
       matchCompleted.value = false;
     }, 4000);
   } else {
@@ -110,7 +123,6 @@ async function startMatchingCovers() {
 
 function abortMatching() {
   matchAborted = true;
-  isMatching.value = false;
 }
 
 /** IntersectionObserver: 滚动到底部自动加载下一批 */
@@ -118,19 +130,52 @@ function abortMatching() {
 const scrollContainer = useScrollRestore(
   () => `artist-grid:${playerStore.hideMinorArtists ? 1 : 0}:${playerStore.searchQuery}`
 );
+const toolbarRef = ref<HTMLElement | null>(null);
+const virtualGridRef = ref<HTMLElement | null>(null);
+const gridColumns = ref(3);
+const gridRowHeight = ref(300);
+const virtualScrollOffset = ref(0);
+const { totalHeight: virtualHeight, offsetY: virtualOffsetY, visibleItems: visibleArtists } = useVirtualList({
+  containerRef: scrollContainer,
+  items: artists,
+  itemHeight: gridRowHeight,
+  columns: gridColumns,
+  scrollOffset: virtualScrollOffset,
+  buffer: 1,
+});
 const sentinelRef = ref<HTMLElement | null>(null);
 let observer: IntersectionObserver | null = null;
+let gridResizeObserver: ResizeObserver | null = null;
+
+function updateGridMetrics() {
+  const container = scrollContainer.value;
+  if (!container) return;
+  const width = Math.max(1, container.clientWidth - 64);
+  const columns = Math.max(1, Math.floor((width + 24) / 204));
+  gridColumns.value = columns;
+  gridRowHeight.value = Math.ceil((width - 24 * (columns - 1)) / columns + 76);
+  if (virtualGridRef.value) {
+    virtualScrollOffset.value = Math.max(0,
+      virtualGridRef.value.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop);
+  }
+}
 
 onMounted(() => {
   refreshMissingCount();
   if (!scrollContainer.value) return;
+  if (typeof ResizeObserver !== 'undefined') {
+    gridResizeObserver = new ResizeObserver(updateGridMetrics);
+    gridResizeObserver.observe(scrollContainer.value);
+    if (toolbarRef.value) gridResizeObserver.observe(toolbarRef.value);
+  }
+  void nextTick(updateGridMetrics);
   observer = new IntersectionObserver(
     (entries) => {
       if (entries[0]?.isIntersecting && !isLoading.value && hasMore.value) {
         playerStore.fetchArtists(false);
       }
     },
-    { root: scrollContainer.value, rootMargin: '400px' }
+    { root: scrollContainer.value, rootMargin: '150px' }
   );
   if (sentinelRef.value) {
     observer.observe(sentinelRef.value);
@@ -138,7 +183,14 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  matchDisposed = true;
+  matchAborted = true;
+  if (completionTimer !== null) clearTimeout(completionTimer);
   observer?.disconnect();
+  gridResizeObserver?.disconnect();
+});
+watch([isMatching, matchCompleted, () => artists.value.length], () => {
+  void nextTick(updateGridMetrics);
 });
 </script>
 
@@ -146,7 +198,7 @@ onBeforeUnmount(() => {
   <div ref="scrollContainer" class="flex-1 overflow-y-auto px-8">
     
     <!-- 顶部操作条与匹配控制 -->
-    <div class="mb-5 flex items-center justify-between gap-4 flex-wrap select-none pt-1">
+    <div ref="toolbarRef" class="mb-5 flex items-center justify-between gap-4 flex-wrap select-none pt-1">
       <div class="flex items-center gap-2">
         <span class="text-[13px] font-medium text-text-primary">全部艺术家</span>
         <span class="text-[11px] font-mono text-text-muted">({{ playerStore.artistsTotalCount.toLocaleString() }} 位)</span>
@@ -212,12 +264,14 @@ onBeforeUnmount(() => {
     </Transition>
 
     <!-- 艺人网格：统一圆形头像与精美居中排版 -->
-    <div
-      class="grid gap-6 pb-4"
-      style="grid-template-columns: repeat(auto-fill, minmax(180px, 1fr))"
-    >
+    <div ref="virtualGridRef" class="relative" :style="{ height: `${virtualHeight}px` }">
+      <div class="absolute inset-x-0 top-0 grid gap-6" :style="{
+        transform: `translateY(${virtualOffsetY}px)`,
+        gridTemplateColumns: `repeat(${gridColumns}, minmax(0, 1fr))`,
+        gridAutoRows: `${gridRowHeight - 24}px`,
+      }">
       <div
-        v-for="artist in artists"
+        v-for="{ data: artist } in visibleArtists"
         :key="artist.id"
         class="group cursor-pointer flex flex-col items-center text-center"
         @click="selectArtist(artist.id)"
@@ -241,6 +295,7 @@ onBeforeUnmount(() => {
 
         <p class="text-[14px] text-text-primary font-medium truncate w-full leading-tight mb-1 group-hover:text-brand-orange transition-colors-smooth">{{ artist.name }}</p>
         <p class="text-[12px] text-text-secondary truncate w-full">{{ artist.trackCount }} 首歌曲</p>
+      </div>
       </div>
     </div>
 

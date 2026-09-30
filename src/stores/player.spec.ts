@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import type { SourceDTO } from "../api/types";
+import { nextTick, watch } from 'vue';
 
 /**
  * player store 的来源（source）状态测试 —— 对应 I3/G-08。
@@ -57,6 +58,79 @@ const EMPTY_BY_COMMAND: Record<string, unknown> = {
   // 后端把艺人列表包了一层（{ artists, total }），fetchArtists 会解构它
   library_get_artists: { artists: [], total: 0 },
 };
+
+describe('网格分页：合并刷新并丢弃过期请求', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    localStorage.clear();
+    invokeMock.mockReset();
+    eventHandlers.clear();
+  });
+
+  it('专辑加载过程中多次筛选只执行最后一次重置，旧结果不会改变列表或分页位置', async () => {
+    let resolveOld!: (value: unknown) => void;
+    const oldPage = new Promise(resolve => { resolveOld = resolve; });
+    const queries: unknown[] = [];
+    invokeMock.mockImplementation((cmd: string, args: Record<string, unknown>) => {
+      if (cmd === 'library_get_album_count') return Promise.resolve(1);
+      if (cmd === 'library_get_albums') {
+        queries.push(args.searchKeyword);
+        return queries.length === 1 ? oldPage : Promise.resolve([
+          { id: 99, title: '最新专辑', track_count: 10, cover_artwork_id: 7 },
+        ]);
+      }
+      return Promise.resolve(EMPTY_BY_COMMAND[cmd] ?? []);
+    });
+    const { usePlayerStore } = await import('./player');
+    const store = usePlayerStore();
+    const first = store.fetchAlbums(true);
+    store.searchQuery = '中间';
+    const second = store.fetchAlbums(true);
+    store.searchQuery = '最新';
+    const last = store.fetchAlbums(true);
+    expect(queries).toHaveLength(1);
+    resolveOld([{ id: 1, title: '过期专辑', track_count: 10 }]);
+    await Promise.all([first, second, last]);
+    expect(queries).toEqual([undefined, '最新']);
+    expect(store.albums.map(a => a.id)).toEqual([99]);
+    expect(store.hasMoreAlbums).toBe(false);
+    expect(store.isLoadingAlbums).toBe(false);
+  });
+
+  it('艺人过期请求失败仍加载最后一次筛选，缩小页大小并保持封面事件响应', async () => {
+    let rejectOld!: (reason: Error) => void;
+    const oldPage = new Promise((_resolve, reject) => { rejectOld = reject; });
+    let listCalls = 0;
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === 'library_get_artists') {
+        return ++listCalls === 1 ? oldPage : Promise.resolve({
+          artists: [{ id: 9, name: '最新艺人', track_count: 15 }], total: 1,
+        });
+      }
+      return Promise.resolve(EMPTY_BY_COMMAND[cmd] ?? []);
+    });
+    const { usePlayerStore } = await import('./player');
+    const store = usePlayerStore();
+    const first = store.fetchArtists(true);
+    store.searchQuery = '最新';
+    const last = store.fetchArtists(true);
+    rejectOld(new Error('过期请求失败'));
+    await Promise.all([first, last]);
+    expect(listCalls).toBe(2);
+    expect(store.artists.map(a => a.id)).toEqual([9]);
+    expect(store.isErrorArtists).toBe(false);
+    expect(store.hasMoreArtists).toBe(false);
+    expect(invokeMock.mock.calls.filter(([cmd]) => cmd === 'library_get_artists')[0][1].limit).toBe(30);
+    await vi.waitFor(() => expect(eventHandlers.has('artist-cover-fetched')).toBe(true));
+    const updated = vi.fn();
+    const stop = watch(() => store.artists, updated);
+    eventHandlers.get('artist-cover-fetched')!({ payload: { target_id: 9, artwork_id: 88 } });
+    await nextTick();
+    expect(store.artists[0].avatar_artwork_id).toBe(88);
+    expect(updated).toHaveBeenCalledTimes(1);
+    stop();
+  });
+});
 
 function stubSourceList(sources: SourceDTO[], options: { failSourceList?: () => boolean } = {}) {
   invokeMock.mockImplementation(async (cmd: string) => {

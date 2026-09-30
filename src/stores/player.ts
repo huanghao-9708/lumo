@@ -771,7 +771,7 @@ export const usePlayerStore = defineStore("player", () => {
 const albums = shallowRef<Album[]>([]);
 
   // 艺人数据
-  const artists = ref<Artist[]>([]);
+  const artists = shallowRef<Artist[]>([]);
   const artistsTotalCount = ref(0);
 
   // 收藏的专辑和艺术家
@@ -1118,7 +1118,7 @@ const albums = shallowRef<Album[]>([]);
         year: 0,
         coverColor: getDeterministicColor(a.title || 'Unknown'),
         cover_artwork_id: a.cover_artwork_id,
-        cover_thumb: a.cover_thumbnail_base64,
+        cover_thumb: null,
         track_count: a.track_count,
       }));
     } catch(e) {
@@ -1206,92 +1206,114 @@ const albums = shallowRef<Album[]>([]);
     fetchArtists(true);
   }
 
-  async function fetchAlbums(reset: boolean = false) {
+  let albumRevision = 0;
+  let albumResetPending = false;
+  let albumRequest: Promise<void> | null = null;
+
+  function fetchAlbums(reset: boolean = false): Promise<void> {
     if (reset) {
+      albumRevision++;
+      albumResetPending = true;
+      albums.value = [];
       albumsOffset = 0;
       hasMoreAlbums.value = true;
     }
-    if (!hasMoreAlbums.value || isLoadingAlbums.value) return;
+    if (albumRequest) return albumRequest;
+    if (!hasMoreAlbums.value) return Promise.resolve();
     isLoadingAlbums.value = true;
-    try {
-      isErrorAlbums.value = false;
-      const needCount = reset || albumsTotalCount.value === 0;
-      const minTrackCount = albumMinTrackCount();
-
-      const fetchList = libraryGetAlbums(albumsPageSize, albumsOffset, searchQuery.value || undefined, minTrackCount);
-      const fetchCount = needCount ? libraryGetAlbumCount(searchQuery.value || undefined, minTrackCount) : Promise.resolve(albumsTotalCount.value);
-
-      const [result, count] = await Promise.all([fetchList, fetchCount]);
-      albumsTotalCount.value = count;
-
-      const newAlbums: Album[] = result.map((a) => ({
-        id: a.id,
-        title: a.title,
-        artist: a.artist_name || '未知艺人',
-        year: a.release_year || 0,
-        coverColor: getDeterministicColor(a.title || 'Unknown'),
-        cover_artwork_id: a.cover_artwork_id,
-        cover_thumb: a.cover_thumbnail_base64,
-        artist_name: a.artist_name,
-        track_count: a.track_count
-      }));
-
-      if (reset) {
-        albums.value = newAlbums;
-      } else {
-        albums.value = [...albums.value, ...newAlbums];
-      }
-      albumsOffset += result.length;
-      hasMoreAlbums.value = result.length >= albumsPageSize;
-    } catch (e) {
-      console.error(e);
-      isErrorAlbums.value = true;
-    } finally {
+    albumRequest = (async () => {
+      do {
+        const isReset = albumResetPending;
+        albumResetPending = false;
+        const revision = albumRevision;
+        const offset = albumsOffset;
+        const keyword = searchQuery.value || undefined;
+        const minCount = albumMinTrackCount();
+        isErrorAlbums.value = false;
+        try {
+          const [result, count] = await Promise.all([
+            libraryGetAlbums(albumsPageSize, offset, keyword, minCount),
+            isReset || albumsTotalCount.value === 0
+              ? libraryGetAlbumCount(keyword, minCount) : Promise.resolve(albumsTotalCount.value),
+          ]);
+          // 快速刷新只保留最新条件。旧请求结果不映射，也不改变分页位置。
+          if (revision !== albumRevision) continue;
+          albumsTotalCount.value = count;
+          const page: Album[] = result.map((a) => ({
+            id: a.id, title: a.title, artist: a.artist_name || '未知艺人',
+            year: a.release_year || 0, coverColor: getDeterministicColor(a.title || 'Unknown'),
+            cover_artwork_id: a.cover_artwork_id, cover_thumb: null,
+            artist_name: a.artist_name, track_count: a.track_count,
+          }));
+          albums.value = isReset ? page : [...albums.value, ...page];
+          albumsOffset = offset + result.length;
+          hasMoreAlbums.value = result.length >= albumsPageSize && albumsOffset < count;
+        } catch (e) {
+          if (revision === albumRevision) {
+            console.error(e);
+            isErrorAlbums.value = true;
+          }
+        }
+      } while (albumResetPending);
+    })().finally(() => {
+      albumRequest = null;
       isLoadingAlbums.value = false;
-    }
+    });
+    return albumRequest;
   }
 
-  const artistsLimit = 50;
+  const artistsLimit = 30;
   let artistsOffset = 0;
   const hasMoreArtists = ref(true);
   const isLoadingArtists = ref(false);
 
-  async function fetchArtists(reset: boolean = false) {
+  let artistRevision = 0;
+  let artistResetPending = false;
+  let artistRequest: Promise<void> | null = null;
+  function fetchArtists(reset: boolean = false): Promise<void> {
     if (reset) {
+      artistRevision++;
+      artistResetPending = true;
       artists.value = [];
       artistsOffset = 0;
       hasMoreArtists.value = true;
     }
-    if (!hasMoreArtists.value || isLoadingArtists.value) return;
+    if (artistRequest) return artistRequest;
+    if (!hasMoreArtists.value) return Promise.resolve();
     isLoadingArtists.value = true;
-    try {
-      isErrorArtists.value = false;
-      const { artists: result, total } = await libraryGetArtists(
-          artistsLimit,
-          artistsOffset,
-          searchQuery.value || undefined,
-          artistMinTrackCount()
-      );
-      artistsTotalCount.value = total;
-      if (result.length < artistsLimit) {
-        hasMoreArtists.value = false;
-      }
-      const newArtists: Artist[] = result.map((a) => ({
-        id: a.id,
-        name: a.name,
-        trackCount: a.track_count,
-        avatarColor: getDeterministicColor(a.name || 'Unknown'),
-        track_count: a.track_count,
-        avatar_artwork_id: a.avatar_artwork_id
-      }));
-      artists.value.push(...newArtists);
-      artistsOffset += result.length;
-    } catch (e) {
-      console.error(e);
-      isErrorArtists.value = true;
-    } finally {
+    artistRequest = (async () => {
+      do {
+        const isReset = artistResetPending;
+        artistResetPending = false;
+        const revision = artistRevision;
+        const offset = artistsOffset;
+        isErrorArtists.value = false;
+        try {
+          const { artists: result, total } = await libraryGetArtists(
+            artistsLimit, offset, searchQuery.value || undefined, artistMinTrackCount(),
+          );
+          if (revision !== artistRevision) continue;
+          artistsTotalCount.value = total;
+          const page: Artist[] = result.map((a) => ({
+            id: a.id, name: a.name, trackCount: a.track_count,
+            avatarColor: getDeterministicColor(a.name || 'Unknown'),
+            track_count: a.track_count, avatar_artwork_id: a.avatar_artwork_id,
+          }));
+          artists.value = isReset ? page : [...artists.value, ...page];
+          artistsOffset = offset + result.length;
+          hasMoreArtists.value = result.length >= artistsLimit && artistsOffset < total;
+        } catch (e) {
+          if (revision === artistRevision) {
+            console.error(e);
+            isErrorArtists.value = true;
+          }
+        }
+      } while (artistResetPending);
+    })().finally(() => {
+      artistRequest = null;
       isLoadingArtists.value = false;
-    }
+    });
+    return artistRequest;
   }
 
   const currentTrack = computed(() => {
@@ -1831,7 +1853,7 @@ const albums = shallowRef<Album[]>([]);
         year: a.release_year || 0,
         coverColor: getDeterministicColor(a.title || 'Unknown'),
         cover_artwork_id: a.cover_artwork_id,
-        cover_thumb: a.cover_thumbnail_base64,
+        cover_thumb: null,
         artist_name: a.artist_name,
         track_count: a.track_count
       }));
@@ -2429,13 +2451,12 @@ const albums = shallowRef<Album[]>([]);
     });
 
     // 第七轮：封面后台拉取完成事件 —— 命令已改为立即返回，UI 更新由这里接管。
-    // v1.8.1：事件携带 200x200 缩略图 data URL，网格即时显示（数据已同时入库持久化）
-    unlistenAlbumCoverFetched = await listen<{ target_id: number; artwork_id: number; cover_thumbnail_base64?: string }>('album-cover-fetched', (event) => {
-      const { target_id, artwork_id, cover_thumbnail_base64 } = event.payload;
+    // 事件只带 artwork ID；图片已持久化，网格通过缩略图协议按需加载。
+    unlistenAlbumCoverFetched = await listen<{ target_id: number; artwork_id: number }>('album-cover-fetched', (event) => {
+      const { target_id, artwork_id } = event.payload;
       const foundAlbum = albums.value.find(a => a.id === target_id);
       if (foundAlbum) {
         foundAlbum.cover_artwork_id = artwork_id;
-        if (cover_thumbnail_base64) foundAlbum.cover_thumb = cover_thumbnail_base64;
         // albums 是 shallowRef，浅拷贝整体替换触发网格重渲染
         albums.value = [...albums.value];
       }
@@ -2447,7 +2468,9 @@ const albums = shallowRef<Album[]>([]);
     unlistenArtistCoverFetched = await listen<{ target_id: number; artwork_id: number }>('artist-cover-fetched', (event) => {
       const { target_id, artwork_id } = event.payload;
       const foundArtist = artists.value.find(a => a.id === target_id);
-      if (foundArtist) foundArtist.avatar_artwork_id = artwork_id;
+      if (foundArtist) {
+        artists.value = artists.value.map(a => a.id === target_id ? { ...a, avatar_artwork_id: artwork_id } : a);
+      }
       if (currentArtistDetailsData.value?.id === target_id) {
         currentArtistDetailsData.value.avatar_artwork_id = artwork_id;
       }
@@ -2474,7 +2497,7 @@ const albums = shallowRef<Album[]>([]);
     if (track.cover_artwork_id) {
       artwork.push({
         src: getArtworkUrl(track.cover_artwork_id),
-        sizes: '512x512',
+        sizes: '200x200',
         type: 'image/jpeg',
       });
     }

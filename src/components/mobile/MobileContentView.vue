@@ -16,6 +16,8 @@ import MobileAiRadio from './MobileAiRadio.vue';
 import MobileTrackVersions from './MobileTrackVersions.vue';
 import ActionSheet, { type ActionItem } from './ActionSheet.vue';
 import { useScrollRestore } from '../../composables/useScrollRestore';
+import { useVirtualList } from '../../composables/useVirtualList';
+import { getArtworkUrl } from '../../utils';
 
 /**
  * 移动端内容区。
@@ -142,6 +144,8 @@ onMounted(() => {
   if (playerStore.tracks.length === 0 && playerStore.albums.length === 0) {
     loadForCurrentTab();
   }
+  if (isAlbumGridView.value) activateAlbumGrid();
+  if (isArtistGridView.value) activateArtistGrid();
 });
 
 /* ============ 歌曲列表 ============ */
@@ -224,7 +228,27 @@ function onSheetClose() {
 
 const albumScrollContainer = useScrollRestore(() => 'm-album-grid');
 const albumSentinel = ref<HTMLElement | null>(null);
+const albumItems = computed(() => playerStore.albums);
+const albumGridRowHeight = ref(260);
+const { totalHeight: albumGridHeight, offsetY: albumGridOffsetY, visibleItems: visibleAlbums } = useVirtualList({
+  containerRef: albumScrollContainer,
+  items: albumItems,
+  itemHeight: albumGridRowHeight,
+  columns: 2,
+  scrollOffset: 12,
+  buffer: 1,
+});
 let albumObserver: IntersectionObserver | null = null;
+let albumGridResizeObserver: ResizeObserver | null = null;
+
+function updateAlbumGridMetrics() {
+  const el = albumScrollContainer.value;
+  if (!el) return;
+  const contentWidth = Math.max(1, el.clientWidth - 32);
+  const cardWidth = (contentWidth - 16) / 2;
+  // 封面正方形、两行文字和网格间距。
+  albumGridRowHeight.value = Math.ceil(cardWidth + 62);
+}
 
 function ensureAlbumObserver() {
   if (albumObserver) return albumObserver;
@@ -240,28 +264,39 @@ function ensureAlbumObserver() {
         playerStore.fetchAlbums(false);
       }
     },
-    { root: el, rootMargin: '400px' }
+    { root: el, rootMargin: '150px' }
   );
   return albumObserver;
 }
 
+function activateAlbumGrid() {
+  nextTick(() => {
+    if (albumScrollContainer.value) {
+      if (typeof ResizeObserver !== 'undefined') {
+        albumGridResizeObserver ??= new ResizeObserver(updateAlbumGridMetrics);
+        albumGridResizeObserver.observe(albumScrollContainer.value);
+      }
+      updateAlbumGridMetrics();
+    }
+    const obs = ensureAlbumObserver();
+    if (obs && albumSentinel.value) obs.observe(albumSentinel.value);
+  });
+}
+
 watch(isAlbumGridView, (visible) => {
   if (visible) {
-    nextTick(() => {
-      const obs = ensureAlbumObserver();
-      if (obs && albumSentinel.value) {
-        obs.observe(albumSentinel.value);
-      }
-    });
+    activateAlbumGrid();
   } else {
-    if (albumSentinel.value && albumObserver) {
-      albumObserver.unobserve(albumSentinel.value);
-    }
+    albumGridResizeObserver?.disconnect();
+    albumGridResizeObserver = null;
+    albumObserver?.disconnect();
+    albumObserver = null;
   }
 });
 
 onBeforeUnmount(() => {
   albumObserver?.disconnect();
+  albumGridResizeObserver?.disconnect();
 });
 
 function onAlbumSelect(album: Album) {
@@ -269,6 +304,56 @@ function onAlbumSelect(album: Album) {
 }
 
 /* ============ 艺术家网格 ============ */
+
+const artistSentinel = ref<HTMLElement | null>(null);
+const artistItems = computed(() => playerStore.artists);
+const artistGridRowHeight = ref(260);
+const { totalHeight: artistGridHeight, offsetY: artistGridOffsetY, visibleItems: visibleArtists } = useVirtualList({
+  containerRef: artistGridScrollEl,
+  items: artistItems,
+  itemHeight: artistGridRowHeight,
+  columns: 2,
+  scrollOffset: 12,
+  buffer: 1,
+});
+let artistObserver: IntersectionObserver | null = null;
+let artistResizeObserver: ResizeObserver | null = null;
+
+function updateArtistGridMetrics() {
+  const el = artistGridScrollEl.value;
+  if (el) artistGridRowHeight.value = Math.ceil((Math.max(1, el.clientWidth - 32) - 16) / 2 + 62);
+}
+
+function activateArtistGrid() {
+  void nextTick(() => {
+    const el = artistGridScrollEl.value;
+    if (!el) return;
+    updateArtistGridMetrics();
+    if (typeof ResizeObserver !== 'undefined') {
+      artistResizeObserver ??= new ResizeObserver(updateArtistGridMetrics);
+      artistResizeObserver.observe(el);
+    }
+    artistObserver ??= new IntersectionObserver((entries) => {
+      if (entries[0]?.isIntersecting && !playerStore.isLoadingArtists && playerStore.hasMoreArtists) {
+        void playerStore.fetchArtists(false);
+      }
+    }, { root: el, rootMargin: '150px' });
+    if (artistSentinel.value) artistObserver.observe(artistSentinel.value);
+  });
+}
+
+watch(isArtistGridView, (visible) => {
+  if (visible) activateArtistGrid();
+  else {
+    artistObserver?.disconnect();
+    artistResizeObserver?.disconnect();
+    artistObserver = artistResizeObserver = null;
+  }
+});
+onBeforeUnmount(() => {
+  artistObserver?.disconnect();
+  artistResizeObserver?.disconnect();
+});
 
 function selectArtist(artistId: number) {
   playerStore.navigateToArtist(artistId);
@@ -306,13 +391,18 @@ function selectPlaylist(id: number) {
         <Disc3 class="w-8 h-8 text-text-disabled" aria-hidden="true" />
         <span class="text-[13px]">没有找到专辑</span>
       </div>
-      <div v-else class="grid gap-4 pb-6" style="grid-template-columns: repeat(2, 1fr);">
-        <MobileAlbumCard
-          v-for="album in playerStore.albums"
-          :key="album.id"
-          :album="album"
-          @select="onAlbumSelect"
-        />
+      <div v-else class="relative" :style="{ height: `${albumGridHeight}px` }">
+        <div
+          class="absolute inset-x-0 top-0 grid grid-cols-2 gap-4"
+          :style="{ transform: `translateY(${albumGridOffsetY}px)`, gridAutoRows: `${albumGridRowHeight - 16}px` }"
+        >
+          <MobileAlbumCard
+            v-for="{ data: album } in visibleAlbums"
+            :key="album.id"
+            :album="album"
+            @select="onAlbumSelect"
+          />
+        </div>
       </div>
       <div ref="albumSentinel" class="h-px" />
       <div v-if="playerStore.isLoadingAlbums && playerStore.albums.length > 0" class="flex items-center justify-center py-4 text-text-muted">
@@ -367,19 +457,28 @@ function selectPlaylist(id: number) {
 
     <!-- ===== 艺术家网格 ===== -->
     <div v-else-if="isArtistGridView" ref="artistGridScrollEl" class="flex-1 overflow-y-auto px-4 pt-3">
-      <div v-if="playerStore.artists.length > 0" class="grid gap-4 pb-4" style="grid-template-columns: repeat(2, 1fr);">
-        <div v-for="artist in playerStore.artists" :key="artist.id" class="cursor-pointer min-w-0" @click="selectArtist(artist.id)">
+      <div v-if="playerStore.artists.length > 0" class="relative" :style="{ height: `${artistGridHeight}px` }">
+        <div class="absolute inset-x-0 top-0 grid grid-cols-2 gap-4" :style="{
+          transform: `translateY(${artistGridOffsetY}px)`, gridAutoRows: `${artistGridRowHeight - 16}px`,
+        }">
+        <div v-for="{ data: artist } in visibleArtists" :key="artist.id" class="cursor-pointer min-w-0" @click="selectArtist(artist.id)">
           <div class="w-full aspect-square rounded-[10px] overflow-hidden bg-bg-hover mb-2 flex items-center justify-center">
-            <div class="w-full h-full bg-gradient-to-br from-warm-400 to-warm-600 flex items-center justify-center">
+            <img v-if="artist.avatar_artwork_id" :src="getArtworkUrl(artist.avatar_artwork_id)" :alt="artist.name" loading="lazy" class="w-full h-full object-cover" />
+            <div v-else class="w-full h-full bg-gradient-to-br from-warm-400 to-warm-600 flex items-center justify-center">
               <span class="text-white/70 text-[28px] font-bold">{{ artist.name.charAt(0) }}</span>
             </div>
           </div>
           <p class="text-[15px] font-medium text-text-primary truncate leading-tight">{{ artist.name }}</p>
           <p class="text-[13px] text-text-muted truncate">{{ artist.trackCount }} 首歌曲</p>
         </div>
+        </div>
       </div>
       <div v-else class="flex flex-col items-center justify-center py-20 gap-3 text-text-muted">
         <span class="text-[13px]">还没有扫描到艺术家</span>
+      </div>
+      <div ref="artistSentinel" class="h-px" />
+      <div v-if="playerStore.isLoadingArtists" class="flex items-center justify-center py-4 text-text-muted">
+        <Loader2 class="w-3.5 h-3.5 animate-spin" aria-label="加载更多艺人" />
       </div>
     </div>
 

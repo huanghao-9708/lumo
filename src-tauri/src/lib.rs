@@ -349,6 +349,12 @@ pub fn run() {
         .register_uri_scheme_protocol("lumo", |ctx, request| {
             let app = ctx.app_handle();
             let uri = request.uri().to_string();
+            let wants_thumbnail = request
+                .uri()
+                .query()
+                .unwrap_or_default()
+                .split('&')
+                .any(|part| part == "size=thumb");
             // 兼容 Windows WebView2 (`http://lumo.localhost/artwork/1`) 和 标准 (`lumo://artwork/1`)
             let uri_without_query = uri.split('?').next().unwrap_or(&uri);
             let artwork_id = uri_without_query
@@ -373,18 +379,21 @@ pub fn run() {
 
                 // ---- 锁内：只做 SQLite 查询（毫秒级），查完立即释放锁 ----
                 // 关键：把 std::fs::read 移出锁范围，避免持锁读磁盘阻塞其他 IPC。
-                let meta: Option<(String, Option<String>, Option<String>)> = {
+                let meta: Option<(String, Option<String>, Option<String>, Option<Vec<u8>>)> = {
                     let db_state = app.try_state::<crate::db::DbState>();
                     let conn = db_state.as_ref().and_then(|s| s.db.get().ok());
                     conn.as_ref().and_then(|conn| {
                         conn.query_row(
-                            "SELECT cache_path, mime_type, content_hash FROM artwork WHERE id = ?1",
-                            rusqlite::params![artwork_id],
+                            "SELECT cache_path, mime_type, content_hash,
+                                    CASE WHEN ?2 THEN thumbnail_blob ELSE NULL END
+                             FROM artwork WHERE id = ?1",
+                            rusqlite::params![artwork_id, wants_thumbnail],
                             |row| {
                                 let p: String = row.get(0)?;
                                 let m: Option<String> = row.get(1)?;
                                 let h: Option<String> = row.get(2)?;
-                                Ok((p, m, h))
+                                let thumb: Option<Vec<u8>> = row.get(3)?;
+                                Ok((p, m, h, thumb))
                             },
                         )
                         .ok()
@@ -392,7 +401,7 @@ pub fn run() {
                 };
                 // ← 锁在这里已经释放
 
-                let Some((cache_path, mime, content_hash)) = meta else {
+                let Some((cache_path, mime, content_hash, thumbnail)) = meta else {
                     return tauri::http::Response::builder()
                         .status(404)
                         .header("Cache-Control", "no-store")
@@ -400,11 +409,22 @@ pub fn run() {
                         .unwrap();
                 };
 
+                // 旧数据的原图回退只是临时响应，不能永久缓存到缩略图 URL。
+                // 否则后台补齐 thumbnail_blob 后，浏览器仍会长期复用原始大图。
+                let cache_control = if wants_thumbnail && thumbnail.is_none() {
+                    "no-store"
+                } else {
+                    "public, max-age=31536000, immutable"
+                };
+
                 // ---- 锁外：ETag 判定 + 读磁盘 ----
-                let etag_value = content_hash
-                    .as_deref()
-                    .filter(|h| !h.is_empty())
-                    .map(|h| format!("W/\"{}\"", h));
+                let etag_value = content_hash.as_deref().filter(|h| !h.is_empty()).map(|h| {
+                    if wants_thumbnail && thumbnail.is_some() {
+                        format!("W/\"{}-thumb\"", h)
+                    } else {
+                        format!("W/\"{}\"", h)
+                    }
+                });
 
                 // 命中缓存：ETag 一致，直接 304
                 if let (Some(req), Some(etag)) = (req_etag.as_deref(), etag_value.as_deref()) {
@@ -412,33 +432,58 @@ pub fn run() {
                         return tauri::http::Response::builder()
                             .status(304)
                             .header("ETag", etag)
-                            .header("Cache-Control", "public, max-age=86400")
+                            .header("Access-Control-Allow-Origin", "*")
+                            .header("Cache-Control", cache_control)
                             .body(Vec::new())
                             .unwrap();
                     }
                 }
 
                 // 未命中：读磁盘返回完整 body（此时已不持锁，不阻塞其他 IPC）
-                let file_meta = std::fs::metadata(&cache_path).ok();
-                let data = std::fs::read(&cache_path).ok();
-                let (Some(file_meta), Some(data)) = (file_meta, data) else {
-                    return tauri::http::Response::builder()
-                        .status(404)
-                        .header("Cache-Control", "no-store")
-                        .body(Vec::new())
-                        .unwrap();
+                let (data, mime_type, modified) = if wants_thumbnail {
+                    if let Some(data) = thumbnail {
+                        (data, "image/jpeg".to_string(), None)
+                    } else {
+                        let file_meta = std::fs::metadata(&cache_path).ok();
+                        let data = std::fs::read(&cache_path).ok();
+                        let (Some(file_meta), Some(data)) = (file_meta, data) else {
+                            return tauri::http::Response::builder()
+                                .status(404)
+                                .header("Cache-Control", "no-store")
+                                .body(Vec::new())
+                                .unwrap();
+                        };
+                        (
+                            data,
+                            mime.unwrap_or_else(|| "image/jpeg".to_string()),
+                            file_meta.modified().ok(),
+                        )
+                    }
+                } else {
+                    let file_meta = std::fs::metadata(&cache_path).ok();
+                    let data = std::fs::read(&cache_path).ok();
+                    let (Some(file_meta), Some(data)) = (file_meta, data) else {
+                        return tauri::http::Response::builder()
+                            .status(404)
+                            .header("Cache-Control", "no-store")
+                            .body(Vec::new())
+                            .unwrap();
+                    };
+                    (
+                        data,
+                        mime.unwrap_or_else(|| "image/jpeg".to_string()),
+                        file_meta.modified().ok(),
+                    )
                 };
-
-                let mime_type = mime.unwrap_or_else(|| "image/jpeg".to_string());
                 let mut resp = tauri::http::Response::builder()
                     .header("Content-Type", mime_type)
                     .header("Access-Control-Allow-Origin", "*")
-                    .header("Cache-Control", "public, max-age=31536000, immutable");
+                    .header("Cache-Control", cache_control);
 
                 if let Some(etag) = &etag_value {
                     resp = resp.header("ETag", etag);
                 }
-                if let Ok(mtime) = file_meta.modified() {
+                if let Some(mtime) = modified {
                     if let Ok(secs) = mtime.duration_since(std::time::UNIX_EPOCH) {
                         if let Some(date_str) = format_http_date(secs.as_secs()) {
                             resp = resp.header("Last-Modified", date_str);

@@ -25,11 +25,12 @@ const toggleMaximize = () => appWindow.toggleMaximize();
 const close = () => appWindow.close();
 
 /* ============ 封面 + 主色提取 ============ */
-const coverSrc = useArtworkSrc(() => playerStore.currentTrack?.cover_artwork_id ?? null);
-const { primary, secondary, ready } = useCoverColor(() => coverSrc.value || null);
+const coverSrc = useArtworkSrc(() => playerStore.currentTrack?.cover_artwork_id ?? null, 'full');
+const colorSrc = useArtworkSrc(() => playerStore.currentTrack?.cover_artwork_id ?? null);
+const { primary, secondary, ready } = useCoverColor(() => colorSrc.value || null);
 
 /**
- * 取色失败（canvas 被自定义协议 URL 污染）或封面未加载完时，
+ * 取色失败或封面未加载完时，
  * 回落到兜底色，保证背景不空白。
  */
 const FALLBACK_BG = '#2A2722';

@@ -1,4 +1,4 @@
-import { ref, computed, type Ref, watchEffect, watch } from 'vue';
+import { ref, computed, type Ref, watch } from 'vue';
 
 /**
  * 轻量级虚拟列表 composable（零依赖）。
@@ -25,13 +25,15 @@ export interface UseVirtualListOptions {
   /** 完整数据数组（响应式） */
   items: Ref<readonly any[]>;
   /** 单行高度（像素）。对于多列网格，传"行高"，并把 `columns` 设为对应列数 */
-  itemHeight: number;
+  itemHeight: number | Ref<number>;
   /** 上下额外渲染的缓冲行数，避免滚动时边缘闪现 */
   buffer?: number;
   /** 网格列数。列表传 1（默认）。专辑网格传 2/3/4 等。
    *  此时 `items` 仍是扁平数组，内部按列数切片为行。
    *  支持传 Ref<number> 以响应容器宽度变化（动态列数）。 */
   columns?: number | Ref<number>;
+  /** 列表在滚动容器内容区中的起始位置；用于列表上方有工具栏的页面 */
+  scrollOffset?: number | Ref<number>;
 }
 
 export interface VirtualListItem<T = any> {
@@ -56,14 +58,19 @@ export function useVirtualList<T = any>(options: UseVirtualListOptions): UseVirt
   const columnsRef = typeof options.columns === 'object' && options.columns !== null && 'value' in options.columns
     ? computed(() => (options.columns as Ref<number>).value || 1)
     : computed(() => (options.columns as number | undefined) ?? 1);
-  const safeItemHeight = Math.max(1, itemHeight);
+  const itemHeightRef = typeof itemHeight === 'object' && 'value' in itemHeight
+    ? computed(() => Math.max(1, itemHeight.value))
+    : computed(() => Math.max(1, itemHeight as number));
+  const scrollOffsetRef = typeof options.scrollOffset === 'object' && options.scrollOffset !== null && 'value' in options.scrollOffset
+    ? computed(() => Math.max(0, (options.scrollOffset as Ref<number>).value))
+    : computed(() => Math.max(0, (options.scrollOffset as number | undefined) ?? 0));
 
   const startIndex = ref(0);
   const endIndex = ref(0);
 
-  // 真试行数 = ceil(项数 / 列数)
+  // 实际行数 = ceil(项数 / 列数)
   const rowCount = computed(() => Math.ceil(items.value.length / Math.max(1, columnsRef.value)));
-  const totalHeight = computed(() => rowCount.value * safeItemHeight);
+  const totalHeight = computed(() => rowCount.value * itemHeightRef.value);
 
   // 计算可视项。注意 startIndex/endIndex 是"行"的下标，转成项下标时要乘列数。
   const visibleItems = computed<VirtualListItem<T>[]>(() => {
@@ -80,58 +87,58 @@ export function useVirtualList<T = any>(options: UseVirtualListOptions): UseVirt
   });
 
   // 可视项容器的 translateY：把渲染出的项整体下推到正确位置
-  const offsetY = computed(() => Math.max(0, startIndex.value) * safeItemHeight);
+  const offsetY = computed(() => Math.max(0, startIndex.value) * itemHeightRef.value);
 
   // 根据当前 scrollTop 重新计算窗口范围
   function recalc() {
     const el = containerRef.value;
     if (!el) return;
-    const scrollTop = el.scrollTop;
+    const scrollTop = Math.max(0, el.scrollTop - scrollOffsetRef.value);
     const viewH = el.clientHeight;
-
-    const startRow = Math.max(0, Math.floor(scrollTop / safeItemHeight) - buffer);
-    const visibleRows = Math.ceil(viewH / safeItemHeight) + buffer * 2;
-    const endRow = startRow + visibleRows;
+    const count = rowCount.value;
+    const height = itemHeightRef.value;
+    // 从实际视口上下边界计算，包含底部仅露出一部分的行；重置数据后钳制旧滚动位置。
+    const firstVisible = Math.min(Math.max(0, count - 1), Math.floor(scrollTop / height));
+    const lastVisible = Math.max(firstVisible + 1, Math.ceil((scrollTop + viewH) / height));
+    const startRow = Math.max(0, firstVisible - buffer);
+    const endRow = Math.min(count, lastVisible + buffer);
 
     startIndex.value = startRow;
     endIndex.value = endRow;
   }
 
   // 节流：滚动事件触发非常频繁，用 rAF 合并到下一帧统一计算
-  let ticking = false;
+  let scrollFrame: number | null = null;
   function onScroll() {
-    if (ticking) return;
-    ticking = true;
-    requestAnimationFrame(() => {
+    if (scrollFrame !== null) return;
+    scrollFrame = requestAnimationFrame(() => {
+      scrollFrame = null;
       recalc();
-      ticking = false;
     });
   }
 
-  // 用 watchEffect 管理容器元素的生命周期（支持 v-if 切换导致 DOM 重新创建）
-  let resizeObserver: ResizeObserver | null = null;
-  watchEffect((onCleanup) => {
-    const el = containerRef.value;
-    if (!el) return;
+  // 只在容器变化时重建监听；数据变化不能反复重建观察器。
+  watch(containerRef, (el, _old, onCleanup) => {
+    if (!el) {
+      startIndex.value = endIndex.value = 0;
+      return;
+    }
 
     el.addEventListener('scroll', onScroll, { passive: true });
 
-    if (typeof ResizeObserver !== 'undefined') {
-      if (!resizeObserver) {
-        resizeObserver = new ResizeObserver(() => recalc());
-      }
-      resizeObserver.observe(el);
-    }
+    const resizeObserver = typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(() => recalc()) : null;
+    resizeObserver?.observe(el);
 
     recalc();
 
     onCleanup(() => {
       el.removeEventListener('scroll', onScroll);
-      if (resizeObserver) {
-        resizeObserver.unobserve(el);
-      }
+      resizeObserver?.disconnect();
+      if (scrollFrame !== null) cancelAnimationFrame(scrollFrame);
+      scrollFrame = null;
     });
-  });
+  }, { immediate: true, flush: 'post' });
 
   // 数据变化时重算窗口（例如加载更多、切换 tab）
   watch(() => items.value.length, () => {
@@ -139,7 +146,7 @@ export function useVirtualList<T = any>(options: UseVirtualListOptions): UseVirt
   });
 
   // 列数变化时（容器宽度改变导致重算列数）也要重算窗口
-  watch(columnsRef, () => {
+  watch([columnsRef, itemHeightRef, scrollOffsetRef], () => {
     recalc();
   });
 

@@ -11,10 +11,9 @@ import { ref, watch, type Ref } from 'vue';
  * 3. 仅在 src 变化时跑一次，零持续开销。
  *
  * CORS 注意：
- *   useArtworkSrc 可能返回 data URL（内存缓存命中，无污染），
- *   也可能返回 lumo:// 或 http://lumo.localhost 自定义协议 URL。
- *   后者会让 canvas 被「污染」（tainted），getImageData 抛 SecurityError。
- *   因此整个流程包在 try/catch 里，失败时 ready 保持 false、颜色返回空串，
+ *   调用方传入缩略图协议 URL，响应通过 CORS 头允许读取 canvas。
+ *   切换来源或卸载时取消旧任务；取色完成后释放图片与 canvas。
+ *   若解码或像素读取失败，ready 保持 false、颜色返回空串，
  *   调用方据此回落到 Track.coverColor 渐变桩（见 NowPlayingImmersive）。
  *
  * 返回：
@@ -39,17 +38,20 @@ export function useCoverColor(srcGetter: () => string | null | undefined): Cover
 
   watch(
     srcGetter,
-    (src) => {
+    (src, _previous, onCleanup) => {
       latestSrc = src ?? null;
+      const controller = new AbortController();
+      onCleanup(() => controller.abort());
+      ready.value = false;
       if (!src) {
         primary.value = '';
         secondary.value = '';
         ready.value = false;
         return;
       }
-      extract(src).then(
+      extract(src, controller.signal).then(
         (res) => {
-          if (latestSrc !== src) return; // 已切到别的封面，丢弃过期取色
+          if (controller.signal.aborted || latestSrc !== src) return;
           if (!res) {
             primary.value = '';
             secondary.value = '';
@@ -61,7 +63,7 @@ export function useCoverColor(srcGetter: () => string | null | undefined): Cover
           ready.value = true;
         },
         () => {
-          if (latestSrc !== src) return;
+          if (controller.signal.aborted || latestSrc !== src) return;
           primary.value = '';
           secondary.value = '';
           ready.value = false;
@@ -79,36 +81,48 @@ interface Extracted {
   secondary: string;
 }
 
-async function extract(src: string): Promise<Extracted | null> {
+async function extract(src: string, signal: AbortSignal): Promise<Extracted | null> {
   // SSR / 测试环境兜底
   if (typeof document === 'undefined') return null;
 
-  const img = await loadImage(src);
+  const img = await loadImage(src, signal);
   if (!img) return null;
 
   const canvas = document.createElement('canvas');
   canvas.width = SIZE;
   canvas.height = SIZE;
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  if (!ctx) return null;
-
   try {
+    if (!ctx || signal.aborted) return null;
     ctx.drawImage(img, 0, 0, SIZE, SIZE);
-    // data URL 不污染；自定义协议 URL 会在此抛 SecurityError
+    // 缺少 CORS 授权的图片会在此抛 SecurityError。
     const { data } = ctx.getImageData(0, 0, SIZE, SIZE);
     return pickColors(data);
   } catch {
     // canvas 被污染：取色不可用，回落到调用方的兜底色
     return null;
+  } finally {
+    img.src = '';
+    canvas.width = canvas.height = 0;
   }
 }
 
-function loadImage(src: string): Promise<HTMLImageElement | null> {
+function loadImage(src: string, signal: AbortSignal): Promise<HTMLImageElement | null> {
   return new Promise((resolve) => {
     const img = new Image();
-    // data URL 直接可用；自定义协议同样走 <img> 加载（crossOrigin 关闭以避免改变行为）
-    img.onload = () => resolve(img);
-    img.onerror = () => resolve(null);
+    const finish = (result: HTMLImageElement | null) => {
+      img.onload = img.onerror = null;
+      signal.removeEventListener('abort', cancel);
+      if (!result) img.src = '';
+      resolve(result);
+    };
+    const cancel = () => finish(null);
+    if (signal.aborted) return finish(null);
+    signal.addEventListener('abort', cancel, { once: true });
+    // 协议响应提供 CORS 头，使 canvas 可读取缩略图像素。
+    img.crossOrigin = 'anonymous';
+    img.onload = () => finish(img);
+    img.onerror = () => finish(null);
     img.src = src;
   });
 }

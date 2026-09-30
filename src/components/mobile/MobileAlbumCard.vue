@@ -26,7 +26,6 @@ const emit = defineEmits<{
 const playerStore = usePlayerStore();
 
 function getCoverSrc(album: Album): string {
-  if (album.cover_thumb) return album.cover_thumb;
   if (album.cover_artwork_id) return getArtworkUrl(album.cover_artwork_id);
   return '';
 }

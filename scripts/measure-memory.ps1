@@ -28,7 +28,7 @@ param(
   [string]$Scenario = 'S0',
   [string]$Notes = '',
   [string]$LibrarySize = 'unspecified',
-  [int]$IntervalSec = 2,
+  [ValidateRange(1, 3600)][int]$IntervalSec = 2,
   [int]$DurationSec = 0,       # 0 = 一直采样直到 Ctrl+C（finally 里写汇总）
   [switch]$Once,               # 单次采样后立即退出（工具冒烟用）
   [string]$OutDir = '',
@@ -46,7 +46,29 @@ $SumPath = Join-Path $OutDir "${Stamp}_${Scenario}.summary.txt"
 
 # ---------------- 环境登记 ----------------
 $gitSha = 'unknown'
-try { $gitSha = (git -C $RepoRoot rev-parse HEAD).Trim() } catch {}
+$gitDirty = 'unknown'
+try {
+  $gitSha = (git -C $RepoRoot rev-parse HEAD).Trim()
+  $gitDirty = (@(git -C $RepoRoot status --porcelain).Count -gt 0)
+} catch {}
+# HEAD 不包含未提交的修复；同时登记正在运行的二进制，避免误判测试版本。
+$runningBinaries = @()
+foreach ($rootFile in $RootName) {
+  $rootProcesses = Get-Process -Name ([System.IO.Path]::GetFileNameWithoutExtension($rootFile)) -ErrorAction SilentlyContinue
+  foreach ($rootProcess in $rootProcesses) {
+    try {
+      $binaryPath = $rootProcess.Path
+      if ($binaryPath) {
+        $binaryHash = (Get-FileHash -LiteralPath $binaryPath -Algorithm SHA256).Hash
+        $binaryTime = (Get-Item -LiteralPath $binaryPath).LastWriteTimeUtc.ToString('o')
+        $runningBinaries += "pid=$($rootProcess.Id) path=$binaryPath sha256=$binaryHash modified_utc=$binaryTime"
+      }
+    } catch {
+      $runningBinaries += "pid=$($rootProcess.Id) fingerprint=unavailable"
+    }
+  }
+}
+if ($runningBinaries.Count -eq 0) { $runningBinaries = @('not-running-at-start') }
 $os = Get-CimInstance Win32_OperatingSystem
 $ramMiB = [math]::Round($os.TotalVisibleMemorySize / 1024)
 $dpi = (Get-ItemProperty 'HKCU:\Control Panel\Desktop\WindowMetrics' -ErrorAction SilentlyContinue).AppliedDPI
@@ -60,6 +82,8 @@ if ($wvProc) {
 scenario      = $Scenario
 started_at    = $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz')
 git_sha       = $gitSha
+git_dirty     = $gitDirty
+root_binaries = $($runningBinaries -join ' | ')
 os            = $($os.Caption) build $($os.BuildNumber)
 ram_visible   = $ramMiB MiB
 scale_applied = $scalePct %
@@ -221,7 +245,9 @@ try {
 
     if ($Once) { break }
     if ($DurationSec -gt 0 -and $sw.Elapsed.TotalSeconds -ge $DurationSec) { break }
-    Start-Sleep -Seconds $IntervalSec
+    # 扣除查询开销；若 CIM 本身超过间隔，实际间隔仍以 CSV 时间戳为准。
+    $remainingMs = [math]::Floor($IntervalSec * 1000 - ((Get-Date) - $tickStart).TotalMilliseconds)
+    if ($remainingMs -gt 0) { Start-Sleep -Milliseconds $remainingMs }
   }
 }
 finally {
@@ -240,13 +266,24 @@ function Stats-Of([System.Collections.Generic.List[double]]$v) {
 $lines = @()
 $lines += "scenario=$Scenario samples=$($samples.Count) csv=$CsvPath"
 if ($samples.Count -gt 0) {
+  if ($samples.Count -gt 1) {
+    $effectiveInterval = ($samples[-1].T - $samples[0].T).TotalSeconds / ($samples.Count - 1)
+    $lines += ('有效平均采样间隔：{0:N2} 秒（设置 {1} 秒）' -f $effectiveInterval, $IntervalSec)
+  }
   $g = Stats-Of ([System.Collections.Generic.List[double]]::new([double[]]($samples | ForEach-Object { $_.GroupPws })))
   $lines += ("整组 Private Working Set  MiB：median={0}  p95={1}  peak={2}" -f $g.Median, $g.P95, $g.Peak)
 
   $cats = $samples | ForEach-Object { $_.ByCat.Keys } | Sort-Object -Unique
   foreach ($cat in $cats) {
     $vals = [System.Collections.Generic.List[double]]::new()
-    foreach ($s in $samples) { if ($s.ByCat.ContainsKey($cat)) { $vals.AddRange($s.ByCat[$cat]) } }
+    # 每个时间点先汇总同类进程，不能把多个 Utility 当作独立时间样本。
+    foreach ($s in $samples) {
+      $categoryTotal = 0.0
+      if ($s.ByCat.ContainsKey($cat)) {
+        foreach ($value in $s.ByCat[$cat]) { $categoryTotal += $value }
+      }
+      $vals.Add($categoryTotal)
+    }
     $st = Stats-Of $vals
     $lines += ("  {0,-18} median={1,8}  p95={2,8}  peak={3,8}" -f $cat, $st.Median, $st.P95, $st.Peak)
   }

@@ -39,7 +39,7 @@ interface CacheEntry {
 }
 
 /** Map 按插入序 = LRU 序：命中时 delete+set 移到尾部，淘汰从头部取 */
-const cache = new Map<number, CacheEntry>();
+const cache = new Map<number | string, CacheEntry>();
 let totalBytes = 0;
 let budgetBytes = loadBudget();
 
@@ -65,7 +65,7 @@ const stats = { hits: 0, misses: 0, evictions: 0, rejectedOversize: 0 };
 let enabled = true;
 
 /** 命中缓存时返回 dataURL，否则返回 null。访问即"使用"，会更新 LRU 顺序。 */
-export function getCachedArtwork(artworkId: number | null | undefined): string | null {
+export function getCachedArtwork(artworkId: number | string | null | undefined): string | null {
   if (!enabled || artworkId == null) return null;
   const entry = cache.get(artworkId);
   if (!entry) {
@@ -83,7 +83,7 @@ export function getCachedArtwork(artworkId: number | null | undefined): string |
  * 把一个 artwork 对应的原始 blob 数据写入缓存。
  * 内部会转成 dataURL 存储。
  */
-export async function cacheArtworkBlob(artworkId: number, blob: Blob): Promise<string> {
+export async function cacheArtworkBlob(artworkId: number | string, blob: Blob): Promise<string> {
   const dataUrl = await blobToDataURL(blob);
   if (enabled) {
     insert(artworkId, dataUrl);
@@ -92,13 +92,13 @@ export async function cacheArtworkBlob(artworkId: number, blob: Blob): Promise<s
 }
 
 /** 直接以 dataURL 形式写入缓存（已知 dataURL 时用，省一次转换） */
-export function cacheArtworkDataUrl(artworkId: number, dataUrl: string): void {
+export function cacheArtworkDataUrl(artworkId: number | string, dataUrl: string): void {
   if (!enabled) return;
   insert(artworkId, dataUrl);
 }
 
 /** 写入 + 按字节预算淘汰；返回是否真正进入缓存 */
-function insert(artworkId: number, dataUrl: string): boolean {
+function insert(artworkId: number | string, dataUrl: string): boolean {
   const bytes = dataUrl.length * 2;
   // 单张超过总预算：不缓存（异常大图走 URL 兜底），也不驱逐其他条目
   if (bytes > budgetBytes) {

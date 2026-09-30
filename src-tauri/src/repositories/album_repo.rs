@@ -47,8 +47,8 @@ impl AlbumRepo {
     ) -> rusqlite::Result<Vec<AlbumDTO>> {
         // 性能说明：本查询只取 30 行且命中 idx_albums_normalized_title_covering，
         // 实测 <1ms；之前内联的 [PERF] 诊断日志在确认无慢查询后移除。
-        // LEFT JOIN artwork 读取 thumbnail_blob，内联返回 base64 缩略图。
-        // 这样前端网格视图不再需要逐个发 lumo://artwork 请求，消灭 N+1。
+        // 网格仅返回轻量元数据和 artwork id；封面通过缩略图协议按需加载。
+        // 避免每页把 base64 图片经 IPC 复制到前端，并被无限滚动状态长期保留。
         // 艺人名改用 album_artists GROUP_CONCAT 以支持多艺人。
         let mut sql = "
                 SELECT
@@ -56,10 +56,8 @@ impl AlbumRepo {
                     al.title,
                     (SELECT GROUP_CONCAT(aa2.name, ', ') FROM album_artists aa1 JOIN artists aa2 ON aa1.artist_id = aa2.id WHERE aa1.album_id = al.id ORDER BY aa1.position) AS artist_name,
                     al.cover_artwork_id,
-                    al.track_count,
-                    aw.thumbnail_blob
+                    al.track_count
                 FROM albums al
-                LEFT JOIN artwork aw ON al.cover_artwork_id = aw.id
                 WHERE 1=1
             ".to_string();
 
@@ -90,26 +88,15 @@ impl AlbumRepo {
 
         let mut result = Vec::new();
 
-        // 把 thumbnail_blob (BLOB) 转为 base64 data URL 的闭包
-        let blob_to_data_url = |blob: Option<Vec<u8>>| -> Option<String> {
-            blob.map(|b| {
-                format!(
-                    "data:image/jpeg;base64,{}",
-                    general_purpose::STANDARD.encode(&b)
-                )
-            })
-        };
-
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(rusqlite::params_from_iter(args.iter()), |row| {
-            let thumb: Option<Vec<u8>> = row.get(5)?;
             Ok(AlbumDTO {
                 id: row.get(0)?,
                 title: row.get(1)?,
                 artist_name: row.get(2)?,
                 cover_artwork_id: row.get(3)?,
                 track_count: row.get(4)?,
-                cover_thumbnail_base64: blob_to_data_url(thumb),
+                cover_thumbnail_base64: None,
             })
         })?;
         for r in rows {
@@ -124,29 +111,21 @@ impl AlbumRepo {
             "
                 SELECT
                     al.id, al.title, ar.name AS artist_name,
-                    al.cover_artwork_id, al.track_count, aw.thumbnail_blob
+                    al.cover_artwork_id, al.track_count
                 FROM favorite_albums fa
                 JOIN albums al ON fa.album_id = al.id
                 LEFT JOIN artists ar ON al.album_artist_id = ar.id
-                LEFT JOIN artwork aw ON al.cover_artwork_id = aw.id
                 ORDER BY fa.favorited_at DESC
             ",
         )?;
         let rows = stmt.query_map([], |row| {
-            let thumb: Option<Vec<u8>> = row.get(5)?;
-            let cover_thumbnail_base64 = thumb.map(|b| {
-                format!(
-                    "data:image/jpeg;base64,{}",
-                    general_purpose::STANDARD.encode(&b)
-                )
-            });
             Ok(AlbumDTO {
                 id: row.get(0)?,
                 title: row.get(1)?,
                 artist_name: row.get(2)?,
                 cover_artwork_id: row.get(3)?,
                 track_count: row.get(4)?,
-                cover_thumbnail_base64,
+                cover_thumbnail_base64: None,
             })
         })?;
         let mut result = Vec::new();
