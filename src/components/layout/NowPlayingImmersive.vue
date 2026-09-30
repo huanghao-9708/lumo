@@ -11,6 +11,7 @@ import { usePlayerStore } from '../../stores/player';
 import { useUiStore } from '../../stores/ui';
 import { useArtworkSrc } from '../../composables/useArtworkSrc';
 import { useCoverColor } from '../../composables/useCoverColor';
+import { toggleWindowMaximize } from '../../composables/useWindowPersistence';
 import LyricsView from '../shared/LyricsView.vue';
 import PlaylistPickerModal from '../shared/PlaylistPickerModal.vue';
 import PlaybackRateButton from '../shared/PlaybackRateButton.vue';
@@ -21,7 +22,7 @@ const uiStore = useUiStore();
 /* ============ 窗口控制（复用 TopBar 的方式） ============ */
 const appWindow = getCurrentWindow();
 const minimize = () => appWindow.minimize();
-const toggleMaximize = () => appWindow.toggleMaximize();
+const toggleMaximize = () => toggleWindowMaximize();
 const close = () => appWindow.close();
 
 /* ============ 封面 + 主色提取 ============ */

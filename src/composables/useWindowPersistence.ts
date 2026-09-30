@@ -8,6 +8,9 @@ import { currentMonitor, getCurrentWindow, LogicalSize } from '@tauri-apps/api/w
  * 2. 记住用户主动调整后的尺寸（最大化状态不记），下次启动恢复。
  * 3. 尺寸不得超过当前显示器可用工作区；工作区小于目标时按工作区收敛，
  *    优先保证整个窗口完整可见（含任务栏留白）。
+ * 4. 最大化按钮的还原目标（“原状”）由本模块跟踪：始终等于最近一次
+ *    非最大化状态的尺寸；限幅在最大化/最小化期间一律跳过（tao 的
+ *    setSize/center 会顺带还原最大化状态，破坏系统记录的还原边界）。
  *
  * 仅在 Tauri WebView 环境执行；浏览器 dev（无 __TAURI_INTERNALS__）直接跳过。
  */
@@ -48,6 +51,46 @@ function saveSize(w: number, h: number) {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ w: Math.round(w), h: Math.round(h) }));
   } catch {
     // localStorage 不可用时静默放弃（不影响窗口功能）
+  }
+}
+
+/** 最近一次非最大化状态的尺寸（最大化按钮的还原目标），与 localStorage 读写同步更新 */
+let lastNormalSize: SavedWindowSize | null = null;
+
+/**
+ * 最大化按钮：非最大化时记录当前尺寸再最大化；还原后以记录的尺寸为准校正，
+ * 使“原状”始终是用户最近一次的窗口尺寸（不受无边框窗口还原边界不准的影响）。
+ */
+export async function toggleWindowMaximize(): Promise<void> {
+  if (typeof window === 'undefined' || !(window as any).__TAURI_INTERNALS__) {
+    return;
+  }
+  const win = getCurrentWindow();
+  try {
+    if (await win.isMaximized()) {
+      await win.unmaximize();
+      const target = lastNormalSize ?? loadSavedSize();
+      if (target) {
+        const scaleFactor = await win.scaleFactor();
+        const inner = await win.innerSize();
+        if (
+          Math.abs(inner.width / scaleFactor - target.w) > 1 ||
+          Math.abs(inner.height / scaleFactor - target.h) > 1
+        ) {
+          await win.setSize(new LogicalSize(target.w, target.h));
+        }
+      }
+    } else {
+      const scaleFactor = await win.scaleFactor();
+      const inner = await win.innerSize();
+      lastNormalSize = {
+        w: Math.round(inner.width / scaleFactor),
+        h: Math.round(inner.height / scaleFactor),
+      };
+      await win.maximize();
+    }
+  } catch (e) {
+    console.warn('[window] 切换最大化失败', e);
   }
 }
 
@@ -108,6 +151,7 @@ export async function setupWindowPersistence(): Promise<() => void> {
       await win.setSize(new LogicalSize(target.w, target.h));
       await win.center();
     }
+    lastNormalSize = target;
   } catch (e) {
     console.warn('[window] 启动限幅失败，使用 tauri.conf.json 静态配置', e);
   }
@@ -123,7 +167,10 @@ export async function setupWindowPersistence(): Promise<() => void> {
         const size = await win.innerSize();
         const w = Math.round(size.width / scaleFactor);
         const h = Math.round(size.height / scaleFactor);
-        if (w > 0 && h > 0) saveSize(w, h);
+        if (w > 0 && h > 0) {
+          lastNormalSize = { w, h };
+          saveSize(w, h);
+        }
       } catch {
         // 窗口正在关闭等场景下读取失败，忽略
       }
@@ -133,6 +180,10 @@ export async function setupWindowPersistence(): Promise<() => void> {
   // 3. 换屏或 DPI 变化时重新约束；同缩放比例的两台显示器之间移动只触发 moved。
   async function clampCurrentWindow() {
     try {
+      // 最大化/最小化时绝不能 setSize/center：tao 的这两个调用会先还原窗口，
+      // 既打断最大化状态，又会破坏系统记录的还原边界（最大化时窗口本来就
+      // 铺满工作区，限幅无事可做）
+      if ((await win.isMaximized()) || (await win.isMinimized())) return;
       const workArea = await getWorkArea();
       await applyWorkAreaConstraints(workArea);
       const scaleFactor = await win.scaleFactor();
@@ -147,6 +198,7 @@ export async function setupWindowPersistence(): Promise<() => void> {
       ) {
         await win.setSize(new LogicalSize(clamped.w, clamped.h));
         await win.center();
+        lastNormalSize = clamped;
       }
     } catch {
       // 忽略瞬时错误

@@ -3,13 +3,14 @@ import { ChevronLeft, ChevronRight, Home, Search, Sun, Moon, PanelRight, Setting
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useUiStore } from '../../stores/ui';
 import { usePlayerStore } from '../../stores/player';
+import { toggleWindowMaximize } from '../../composables/useWindowPersistence';
 
 const appWindow = getCurrentWindow();
 const uiStore = useUiStore();
 const playerStore = usePlayerStore();
 
 const minimize = () => appWindow.minimize();
-const toggleMaximize = () => appWindow.toggleMaximize();
+const toggleMaximize = () => toggleWindowMaximize();
 const close = () => appWindow.close();
 </script>
 
