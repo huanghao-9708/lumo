@@ -38,3 +38,4 @@ target/*
 .zcode/
 .omo/
 scripts/mem-data/
+.zcodeignore
