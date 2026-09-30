@@ -99,6 +99,20 @@ export const useDesktopModeStore = defineStore("desktopMode", () => {
     () => experienceMode.value === 'normal' && windowForm.value === 'full',
   );
 
+  /**
+   * 策略版本（DM-03 验收 2）：每次有效转换/偏好应用自增。
+   * 异步消费者（图片、歌词、取色）在发出请求时记录版本，写回前比对，
+   * 版本不一致即丢弃——保证「有效策略先于异步响应」。
+   */
+  const strategyVersion = ref(1);
+
+  /** 把视觉策略下发给后端（回填批次门禁）。advisory：失败只影响可选任务时序 */
+  function pushVisualPolicy() {
+    invoke('desktop_set_visual_policy', { allowed: visualAllowed.value }).catch((e) => {
+      console.warn('[desktopMode] 视觉策略下发失败（本次运行可选任务时序可能退化为默认）', e);
+    });
+  }
+
   function snapshot(): DesktopPreferences {
     return {
       schemaVersion: PREFS_SCHEMA_VERSION,
@@ -157,7 +171,10 @@ export const useDesktopModeStore = defineStore("desktopMode", () => {
     } catch (e) {
       console.warn('[desktopMode] 偏好读取失败，使用默认 normal+full', e);
     } finally {
+      strategyVersion.value++;
       loaded.value = true;
+      // 视觉策略确认：回填等可选任务此后按 visualAllowed 运行
+      pushVisualPolicy();
     }
   }
 
@@ -174,6 +191,8 @@ export const useDesktopModeStore = defineStore("desktopMode", () => {
     phase.value = next;
     try {
       apply();
+      // 策略版本先于任何异步消费者写回自增（DM-03 验收 2）
+      strategyVersion.value++;
       await invoke('desktop_update_preferences', { preferences: snapshot() });
       if (myId !== transitionSeq) return true; // 已被更新的事务取代，结果丢弃
       prefsDirty.value = false;
@@ -185,7 +204,11 @@ export const useDesktopModeStore = defineStore("desktopMode", () => {
       uiStore.showToast('桌面偏好写入失败：本次有效，未保存', 'error');
       return true;
     } finally {
-      if (myId === transitionSeq) phase.value = 'idle';
+      if (myId === transitionSeq) {
+        phase.value = 'idle';
+        // 内存策略已生效：无论持久化成败，按当前 visualAllowed 下发（极简仅暂停需求）
+        pushVisualPolicy();
+      }
     }
   }
 
@@ -257,6 +280,7 @@ export const useDesktopModeStore = defineStore("desktopMode", () => {
     phase,
     prefsDirty,
     visualAllowed,
+    strategyVersion,
     init,
     setExperienceMode,
     enterMini,

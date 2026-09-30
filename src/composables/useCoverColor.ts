@@ -1,4 +1,5 @@
 import { ref, watch, type Ref } from 'vue';
+import { useDesktopModeStore } from '../stores/desktopMode';
 
 /**
  * useCoverColor —— 从封面图实时提取主色 / 辅色（用于沉浸式播放页背景渲染）。
@@ -35,15 +36,19 @@ export function useCoverColor(srcGetter: () => string | null | undefined): Cover
   const ready = ref(false);
   // 过期结果防护：快速切歌时取色是异步的，慢的旧结果不得覆盖新封面
   let latestSrc: string | null = null;
+  // DM-03 门禁：极简/迷你（visualAllowed=false）不发起取色任务。
+  // Android / 未初始化时 store 保持默认 normal+full，行为与既往一致。
+  const desktopMode = useDesktopModeStore();
 
   watch(
-    srcGetter,
-    (src, _previous, onCleanup) => {
+    [srcGetter, () => desktopMode.visualAllowed],
+    ([src, allowed], _previous, onCleanup) => {
       latestSrc = src ?? null;
       const controller = new AbortController();
       onCleanup(() => controller.abort());
       ready.value = false;
-      if (!src) {
+      // 策略切换为不允许时同样立即清空：生效策略先于在途异步结果（DM-03 验收 2）
+      if (!src || !allowed) {
         primary.value = '';
         secondary.value = '';
         ready.value = false;

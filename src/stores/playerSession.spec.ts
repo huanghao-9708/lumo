@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
+import { nextTick } from "vue";
 
 /**
  * DM-02 常驻会话验收测试（desktop-modes 02 §4 DM-02）。
@@ -152,5 +153,43 @@ describe("DM-02 常驻会话", () => {
     expect(store.lastSessionSummary?.queueLength).toBe(30000);
     expect(store.currentIndex).toBe(-1); // 镜像为空时不强行写入越界 index
     expect(store.playMode).toBe("normal");
+  });
+
+  it("DM-03：极简体验下切歌不加载歌词，正常体验恢复自动加载", async () => {
+    localStorage.setItem("lumo_fetch_lyrics", "1"); // 联网歌词授权开启（偏好不变性由 DM-01 验收覆盖）
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "library_get_lyrics") return Promise.resolve(null);
+      if (cmd === "library_get_track_file_info") return Promise.resolve(null);
+      return Promise.resolve([]);
+    });
+
+    // 体验切到极简：visualAllowed=false
+    const { useDesktopModeStore } = await import("./desktopMode");
+    const desktopMode = useDesktopModeStore();
+    await desktopMode.init();
+    await desktopMode.setExperienceMode("minimal");
+    expect(desktopMode.visualAllowed).toBe(false);
+
+    const store = usePlayerStore();
+    store.queue = [{
+      id: 1, title: "曲目一", artistId: null, artist: "歌手", albumId: null,
+      album: "专辑", duration: "3:00", durationSec: 180, format: "MP3",
+      coverColor: "", cover_artwork_id: null, isFavorite: false,
+      primary_file_id: 101, fileSize: null, sourceKind: "local",
+    }] as never;
+    store.currentIndex = 0;
+    // 歌词加载有 100ms 防抖
+    await new Promise((r) => setTimeout(r, 250));
+
+    const lyricCalls = invokeMock.mock.calls.filter(([cmd]) => cmd === "library_get_lyrics");
+    expect(lyricCalls).toHaveLength(0);
+
+    // 切回正常：同一首歌重新触发自动加载
+    await desktopMode.setExperienceMode("normal");
+    store.currentIndex = -1;
+    await nextTick(); // 先让 computed 冲刷到 undefined，再切回触发 watch
+    store.currentIndex = 0;
+    await new Promise((r) => setTimeout(r, 250));
+    expect(invokeMock.mock.calls.filter(([cmd]) => cmd === "library_get_lyrics").length).toBeGreaterThan(0);
   });
 });

@@ -30,6 +30,7 @@ import {
 } from '../api/queue';
 import { libraryGetPlayability, type PlayabilityState } from '../api/library';
 import { useUiStore } from './ui';
+import { useDesktopModeStore } from './desktopMode';
 import { getArtworkUrl } from '../utils';
 
 
@@ -314,6 +315,9 @@ export const usePlayerStore = defineStore("player", () => {
   const activeRightTab = ref<"歌词" | "播放队列" | "文件信息">("歌词");
   const isRightPanelOpen = ref(true);
   const uiStore = useUiStore();
+  // 视觉资源策略（DM-03）：visualAllowed = 正常 × 完整。Android 端该 store
+  // 不初始化、保持默认 normal+full → 所有门禁恒开，行为与既往一致。
+  const desktopMode = useDesktopModeStore();
 
   // ===== 可播性状态（迭代一：离线降级） =====
   // 每首 track 主文件的播放形态：local 本地 / cached 已缓存 / remote 纯云端未缓存 / unavailable 本地文件丢失。
@@ -1392,8 +1396,10 @@ const albums = shallowRef<Album[]>([]);
             }
           });
 
-        // 2. 独立异步加载歌词（网络请求与本地查询独立，不拖垮主 UI）
-        const lyricsPromise = uiStore.fetchLyricsOnline
+        // 2. 独立异步加载歌词（网络请求与本地查询独立，不拖垮主 UI）。
+        // DM-03 门禁：极简/迷你（visualAllowed=false）不自动加载歌词，
+        // 显式打开歌词入口时才按既有授权加载（M2 接入口）；偏好不变。
+        const lyricsPromise = desktopMode.visualAllowed && uiStore.fetchLyricsOnline
           ? libraryGetLyrics(trackId, true)
           : Promise.resolve(null);
 
@@ -1535,8 +1541,9 @@ const albums = shallowRef<Album[]>([]);
       if (album) {
         try {
           // 不要 await 阻塞 tracks 的加载，改为后台触发（第七轮：命令立即返回不占 IPC
-          // 并发，完成后由 album-cover-fetched 事件回调统一更新 UI）
-          if (album.cover_artwork_id == null && uiStore.fetchCoversOnline) {
+          // 并发，完成后由 album-cover-fetched 事件回调统一更新 UI）。
+          // DM-03：极简/迷你暂停自动补图需求（仅暂停，不更改联网偏好——验收 5）
+          if (album.cover_artwork_id == null && uiStore.fetchCoversOnline && desktopMode.visualAllowed) {
             libraryFetchMissingAlbumCover(newId, true).catch(console.error);
           }
           const result: TrackDTO[] = await libraryGetAlbumTracks(newId);
@@ -1731,8 +1738,9 @@ const albums = shallowRef<Album[]>([]);
       resetArtistSubTabOnLoad = false;
 
       try {
-        if (artist.avatar_artwork_id == null && uiStore.fetchCoversOnline) {
-          // 不阻塞，后台触发（第七轮：完成后由 artist-cover-fetched 事件回调统一更新 UI）
+        if (artist.avatar_artwork_id == null && uiStore.fetchCoversOnline && desktopMode.visualAllowed) {
+          // 不阻塞，后台触发（第七轮：完成后由 artist-cover-fetched 事件回调统一更新 UI）。
+          // DM-03：极简/迷你暂停自动补图需求（仅暂停，不更改联网偏好——验收 5）
           libraryFetchMissingArtistCover(newId, true).catch(console.error);
         }
         
@@ -2554,7 +2562,8 @@ const albums = shallowRef<Album[]>([]);
   function updateMediaSessionMetadata(track: Track) {
     if (!('mediaSession' in navigator)) return;
     const artwork: MediaImage[] = [];
-    if (track.cover_artwork_id) {
+    // DM-03 门禁（R07）：极简/迷你下系统通知不携带图片，也不残留旧 URL
+    if (desktopMode.visualAllowed && track.cover_artwork_id) {
       artwork.push({
         src: getArtworkUrl(track.cover_artwork_id),
         sizes: '200x200',

@@ -201,6 +201,23 @@ describe("DM-01 两维控制器", () => {
     expect(s2.fullGeometry).toBeNull();
   });
 
+  it("DM-03：strategyVersion 随有效转换自增，先于异步消费者", async () => {
+    const s = useDesktopModeStore();
+    await s.init();
+    const v0 = s.strategyVersion;
+
+    expect(await s.setExperienceMode("minimal")).toBe(true);
+    expect(s.strategyVersion).toBeGreaterThan(v0);
+    const v1 = s.strategyVersion;
+    expect(await s.enterMini()).toBe(true);
+    expect(s.strategyVersion).toBeGreaterThan(v1);
+    // visualAllowed 随两维正确派生
+    expect(s.visualAllowed).toBe(false);
+    expect(await s.exitMini()).toBe(true);
+    expect(await s.setExperienceMode("normal")).toBe(true);
+    expect(s.visualAllowed).toBe(true);
+  });
+
   it("几何更新：转换期间拒绝提交，避免几何互相覆盖", async () => {
     // 第一个 update 挂起模拟转换进行中；放行后其余 update 立即成功
     let releaseFirstUpdate!: (v: unknown) => void;

@@ -83,7 +83,14 @@ struct ArtworkMetadata {
 ///
 /// 优化:每 50 条一批开启独立事务提交,避免 600+ 条逐条事务的写放大开销。
 /// 每批完成后暂停 50ms,避免吃满 CPU 导致前端卡顿。
-fn backfill_artwork_thumbnails(app: tauri::AppHandle, pool: &DbPool) {
+///
+/// DM-03:每批开始前检查视觉策略——暂停时「最多允许当前安全批次完成」,
+/// 之后挂起等待恢复(500ms 轮询),不中断任何数据库事务;恢复后自动继续。
+fn backfill_artwork_thumbnails(
+    app: tauri::AppHandle,
+    pool: &DbPool,
+    policy: &crate::commands::desktop::ResourcePolicyState,
+) {
     use rusqlite::params;
     use tauri::Emitter;
 
@@ -129,8 +136,25 @@ fn backfill_artwork_thumbnails(app: tauri::AppHandle, pool: &DbPool) {
     let batch_size = 50;
     let mut done = 0usize;
     let mut failed = 0usize;
+    let mut paused_waited = false;
 
     for chunk in rows.chunks(batch_size) {
+        // 视觉策略门禁（DM-03 验收 3）：暂停时挂起在批次边界——
+        // 当前安全批次已完成（含事务提交），不启动下一批；恢复后自动继续。
+        if policy.visual_paused() {
+            if !paused_waited {
+                tracing::info!(
+                    "[回填] 视觉任务暂停：已完成 {}，剩余 {} 条等待恢复",
+                    done + failed,
+                    total - done - failed
+                );
+                paused_waited = true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            continue;
+        }
+        paused_waited = false;
+
         // 第一阶段（事务外）：读磁盘与图片解码缩放，不持数据库连接与写锁
         let mut prepared = Vec::with_capacity(chunk.len());
         for (id, cache_path) in chunk {
@@ -297,17 +321,28 @@ pub fn run() {
 
             let pool = init_db(db_path).expect("Failed to initialize database");
 
+            // 桌面视觉资源策略（DM-03）：桌面端「配置确认前不启动」可选视觉任务，
+            // 前端读偏好后按 visualAllowed 下发；Android 保持既有行为（不暂停）。
+            app.manage(crate::commands::desktop::ResourcePolicyState::new(cfg!(
+                not(target_os = "android")
+            )));
+
             // 后台异步回填 artwork 缩略图（V4 迁移只标记版本号，实际回填在这里执行）。
             // 674 张图片用 Triangle 滤镜约需 15-40s，放后台线程不阻塞应用启动。
             // 期间前端用 lumo:// 协议加载封面（有 semaphore 限流保护），
             // 回填完成后 emit artwork-backfill-complete 事件，前端收到后重新拉取专辑列表。
+            // DM-03：批次间检查视觉策略，暂停时当前安全批次完成即挂起，不中断事务。
             {
                 let pool_clone = pool.clone();
                 let app_handle = app.handle().clone();
+                let policy = app
+                    .state::<crate::commands::desktop::ResourcePolicyState>()
+                    .inner()
+                    .clone();
                 std::thread::spawn(move || {
                     #[cfg(target_os = "android")]
                     std::thread::sleep(std::time::Duration::from_secs(15));
-                    backfill_artwork_thumbnails(app_handle, &pool_clone);
+                    backfill_artwork_thumbnails(app_handle, &pool_clone, &policy);
                 });
             }
 
@@ -373,6 +408,12 @@ pub fn run() {
                 .unwrap_or(0);
 
             if artwork_id > 0 {
+                // R02 观测（DM-03）：协议请求累计计数，轻量稳定态增量必须为 0
+                if let Some(policy) =
+                    app.try_state::<crate::commands::desktop::ResourcePolicyState>()
+                {
+                    policy.count_artwork_request();
+                }
                 // 限流:最多 4 个封面请求同时处理,其余排队等待。
                 // guard 在作用域结束(含所有 return)时自动释放,不会泄漏。
                 let _guard = ARTWORK_SEMAPHORE.acquire();
@@ -612,6 +653,8 @@ pub fn run() {
             // MA1：应用信息与移动平台桥
             crate::commands::desktop::desktop_get_preferences,
             crate::commands::desktop::desktop_update_preferences,
+            crate::commands::desktop::desktop_set_visual_policy,
+            crate::commands::desktop::desktop_get_resource_stats,
             crate::commands::app::app_get_version,
             crate::commands::app::platform_check_audio_permission,
             crate::commands::app::platform_request_audio_permission,
