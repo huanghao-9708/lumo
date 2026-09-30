@@ -1,4 +1,5 @@
 import { currentMonitor, getCurrentWindow, LogicalSize } from '@tauri-apps/api/window';
+import { probeLog } from '../dev/windowProbe';
 
 /**
  * 桌面窗口尺寸持久化与显示器限幅（LDL v2 空间规范 §9）。
@@ -184,6 +185,7 @@ export async function setupWindowPersistence(): Promise<() => void> {
       // 既打断最大化状态，又会破坏系统记录的还原边界（最大化时窗口本来就
       // 铺满工作区，限幅无事可做）
       if ((await win.isMaximized()) || (await win.isMinimized())) return;
+      probeLog('[clamp] guard 放行（非最大化）');
       const workArea = await getWorkArea();
       await applyWorkAreaConstraints(workArea);
       const scaleFactor = await win.scaleFactor();
@@ -196,6 +198,7 @@ export async function setupWindowPersistence(): Promise<() => void> {
         Math.abs(size.width / scaleFactor - clamped.w) > 1 ||
         Math.abs(size.height / scaleFactor - clamped.h) > 1
       ) {
+        probeLog(`[clamp] setSize ${Math.round(clamped.w)}×${Math.round(clamped.h)}（当前 ${Math.round(size.width / scaleFactor)}×${Math.round(size.height / scaleFactor)}）`);
         await win.setSize(new LogicalSize(clamped.w, clamped.h));
         await win.center();
         lastNormalSize = clamped;

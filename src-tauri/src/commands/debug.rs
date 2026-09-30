@@ -52,3 +52,26 @@ pub fn debug_webdav_probe(
         "sample": files.iter().take(5).map(|f| f.path.clone()).collect::<Vec<_>>(),
     }))
 }
+
+/// [M0 探针] 返回是否布防窗口探针（启动前设置 LUMO_WINDOW_PROBE=1）。
+/// desktop-modes M0 临时能力，DM-07 落地后随 `src/dev/windowProbe.ts` 一起移除。
+#[cfg(debug_assertions)]
+#[tauri::command]
+pub fn dev_window_probe_signal() -> bool {
+    let on = std::env::var("LUMO_WINDOW_PROBE").is_ok_and(|v| v == "1");
+    eprintln!("[WINDOW_PROBE] signal called, armed={on}");
+    on
+}
+
+/// release 构建占位：探针只在 debug 构建执行。
+#[cfg(not(debug_assertions))]
+#[tauri::command]
+pub fn dev_window_probe_signal() -> bool {
+    false
+}
+
+/// [M0 探针] 把探针结果行写入 stderr，供无人值守采集（不落盘、无状态）。
+#[tauri::command]
+pub fn dev_window_probe_log(line: String) {
+    eprintln!("[WINDOW_PROBE] {}", line);
+}

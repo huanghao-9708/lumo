@@ -16,6 +16,7 @@ import { useUiStore } from './stores/ui';
 import { usePlatform } from './composables/usePlatform';
 import { useAutoScrollbar } from './composables/useAutoScrollbar';
 import { setupWindowPersistence } from './composables/useWindowPersistence';
+import { maybeAutoRunProbe } from './dev/windowProbe';
 
 const playerStore = usePlayerStore();
 const uiStore = useUiStore();
@@ -92,6 +93,9 @@ onMounted(async () => {
       if (appUnmounted) dispose();
       else disposeWindowPersistence = dispose;
     }).catch((e) => console.warn('[window] 窗口状态监听失败', e));
+
+    // [M0 探针] LUMO_WINDOW_PROBE=1 时自动执行窗口 API 探针；DM-07 后移除
+    void maybeAutoRunProbe();
   }
 
   // 1. 启动数据包（遗留事项 2）：一次 IPC 拿回 counts/playlists/albums/artists/play_queue，

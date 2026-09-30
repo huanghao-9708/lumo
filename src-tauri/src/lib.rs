@@ -619,6 +619,9 @@ pub fn run() {
             // [MA0 Spike] 技术验证命令，MA1 收尾时移除
             crate::commands::debug::debug_play_tone,
             crate::commands::debug::debug_webdav_probe,
+            // [M0 探针] 窗口 API 临时命令，DM-07 后随 src/dev/windowProbe.ts 移除
+            crate::commands::debug::dev_window_probe_signal,
+            crate::commands::debug::dev_window_probe_log,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
