@@ -234,7 +234,10 @@ fn extract_metadata_inner(tagged_file: lofty::file::TaggedFile) -> Result<AudioM
             .map(|y| y as i64);
 
         // 流派：取原值即可，多流派拆分/归一化由入库侧统一处理
-        metadata.genre = tag.genre().map(|s| s.into_owned()).filter(|s| !s.trim().is_empty());
+        metadata.genre = tag
+            .genre()
+            .map(|s| s.into_owned())
+            .filter(|s| !s.trim().is_empty());
 
         if let Some(pic) = tag.pictures().first() {
             metadata.picture_data = Some(pic.data().to_vec());
@@ -371,7 +374,7 @@ mod tests {
         v.extend_from_slice(&channels.to_le_bytes());
         v.extend_from_slice(&sample_rate.to_le_bytes());
         v.extend_from_slice(&(sample_rate * channels as u32 * bytes_per_sample).to_le_bytes());
-        v.extend_from_slice(&((channels * bits / 8) as u16).to_le_bytes());
+        v.extend_from_slice(&(channels * bits / 8).to_le_bytes());
         v.extend_from_slice(&bits.to_le_bytes());
         // data chunk（静音）
         v.extend_from_slice(b"data");

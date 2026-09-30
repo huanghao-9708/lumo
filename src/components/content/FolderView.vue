@@ -299,7 +299,6 @@ const currentBreadcrumb = computed(() => {
             :batch-mode="batch.isActive"
             :selected="batch.isSelected(track.id)"
             :trailing-width="trailingExtraWidth"
-            :show-more="false"
             @play="playTrack(index)"
             @toggle-select="batch.toggle(track)"
           />

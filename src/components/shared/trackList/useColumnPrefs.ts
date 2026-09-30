@@ -88,6 +88,7 @@ export function resolveTrackColumnsWithPrefs(
   containerWidth: number,
   context: TrackListContext,
   prefs: TrackColumnPrefs,
+  trailingWidth = 0,
 ): TrackColumnDef[] {
   const pinned: TrackColumnId[] = [...(context.pinned ?? [])];
   const hidden: TrackColumnId[] = [...(context.hidden ?? [])];
@@ -101,5 +102,5 @@ export function resolveTrackColumnsWithPrefs(
     pinned,
     hidden,
     detailedView: prefs.detailedView || context.detailedView,
-  });
+  }, trailingWidth);
 }

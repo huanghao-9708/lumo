@@ -285,28 +285,32 @@ fn flush_batch(
 // ===================== 元数据补扫（V13 引入的增量回填路径） =====================
 //
 // 背景：year / genre / bit_depth 是后来才开始入库的字段；存量曲库的文件若从未变化，
-// producer 的增量跳过会让它们永远拿不到新字段。app_meta['tag_parse_version'] < 1
-// 表示仍有存量文件未按新字段解析过——此时禁用跳过优化，让本轮扫描重解析全部文件；
-// 一轮完整（未失败）扫描结束后置 1，之后恢复常规跳过。扫描失败不置位，下轮续扫。
+// producer 的增量跳过会让它们永远拿不到新字段。补扫版本必须按来源记录：
+// 一个来源完成扫描不能使其他来源的旧文件跳过重解析。失败不置位，下轮续扫。
 
-/// 当前是否需要对存量文件做元数据补扫（tag_parse_version 缺失或 < 1）
-pub(crate) fn needs_tag_backfill(conn: &Connection) -> bool {
+fn tag_backfill_key(source_id: i64) -> String {
+    format!("tag_parse_version:source:{source_id}")
+}
+
+/// 当前来源是否需要对存量文件做元数据补扫（版本缺失或 < 1）
+pub(crate) fn needs_tag_backfill(conn: &Connection, source_id: i64) -> bool {
     conn.query_row(
-        "SELECT CAST(value AS INTEGER) FROM app_meta WHERE key = 'tag_parse_version'",
-        [],
+        "SELECT CAST(value AS INTEGER) FROM app_meta WHERE key = ?1",
+        rusqlite::params![tag_backfill_key(source_id)],
         |row| row.get::<_, i64>(0),
     )
     .map(|v| v < 1)
     .unwrap_or(true)
 }
 
-/// 一轮完整扫描成功结束后标记补扫完成
-pub(crate) fn mark_tag_backfill_done(conn: &Connection) {
-    let _ = conn.execute(
-        "INSERT INTO app_meta (key, value) VALUES ('tag_parse_version', '1')
+/// 当前来源完整扫描成功后标记补扫完成
+pub(crate) fn mark_tag_backfill_done(conn: &Connection, source_id: i64) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO app_meta (key, value) VALUES (?1, '1')
          ON CONFLICT(key) DO UPDATE SET value = '1'",
-        [],
-    );
+        rusqlite::params![tag_backfill_key(source_id)],
+    )?;
+    Ok(())
 }
 
 /// 执行本地目录扫描（并行流水线版）：
@@ -345,7 +349,7 @@ pub fn scan_local_directory(app: AppHandle, source_id: i64, path: &Path, app_dat
     if let Some(db_state) = app.try_state::<DbState>() {
         if let Ok(conn) = db_state.db.get() {
             // 元数据补扫期间不跳过未变化文件，让存量曲库也能回填 year/genre/bit_depth
-            tag_backfill_pending = needs_tag_backfill(&conn);
+            tag_backfill_pending = needs_tag_backfill(&conn, source_id);
             if let Ok(mut stmt) = conn.prepare("SELECT normalized_path, modified_at, file_size, availability FROM media_files WHERE source_id = ?1") {
                 if let Ok(rows) = stmt.query_map(rusqlite::params![source_id], |row| {
                     let mtime_str: Option<String> = row.get(1)?;
@@ -545,7 +549,10 @@ pub fn scan_local_directory(app: AppHandle, source_id: i64, path: &Path, app_dat
     if !scan_failed {
         if let Some(db_state) = app.try_state::<DbState>() {
             if let Ok(conn) = db_state.db.get() {
-                mark_tag_backfill_done(&conn);
+                if let Err(e) = mark_tag_backfill_done(&conn, source_id) {
+                    error!("Failed to mark tag backfill complete for source {source_id}: {e}");
+                    scan_failed = true;
+                }
             }
         }
     }
@@ -605,7 +612,7 @@ pub fn scan_webdav_directory(
     let _ = scan_conn.pragma_update(None, "temp_store", "MEMORY");
 
     let mut file_cache: HashMap<String, (i64, i64, String)> = HashMap::new();
-    let tag_backfill_pending = needs_tag_backfill(&scan_conn);
+    let tag_backfill_pending = needs_tag_backfill(&scan_conn, source_id);
     if let Ok(mut stmt) = scan_conn.prepare("SELECT normalized_path, modified_at, file_size, availability FROM media_files WHERE source_id = ?1") {
         if let Ok(rows) = stmt.query_map(rusqlite::params![source_id], |row| {
             let mtime_str: Option<String> = row.get(1)?;
@@ -683,7 +690,9 @@ pub fn scan_webdav_directory(
 
             // 增量判定：元数据补扫期间（tag_parse_version < 1）不跳过未变化文件
             if !tag_backfill_pending {
-                if let Some(&(db_mtime, db_size, ref availability)) = file_cache.get(&normalized_path) {
+                if let Some(&(db_mtime, db_size, ref availability)) =
+                    file_cache.get(&normalized_path)
+                {
                     if db_mtime == fs_mtime && db_size == fs_size && availability == "available" {
                         skipped_count += 1;
                         if skipped_count.is_multiple_of(50) {
@@ -821,7 +830,10 @@ pub fn scan_webdav_directory(
     );
     // 一轮完整（未失败）扫描结束后标记元数据补扫完成（在归还连接前写入）
     if !scan_failed {
-        mark_tag_backfill_done(&scan_conn);
+        if let Err(e) = mark_tag_backfill_done(&scan_conn, source_id) {
+            error!("Failed to mark tag backfill complete for source {source_id}: {e}");
+            scan_failed = true;
+        }
     }
     // 先归还贯穿整轮扫描的连接，再让终止出口自己去取一条：连接池只有 8 条，
     // 扫描期间不额外占第二条，收尾记账也就不会在满载时排队等待。

@@ -48,10 +48,6 @@ export function useTrackColumns(options: {
     return typeof raw === 'function' ? raw() : raw.value;
   });
 
-  const resolvedColumns = computed(() =>
-    resolveTrackColumnsWithPrefs(containerWidth.value, context.value, prefsApi.prefs.value)
-  );
-
   /** 「显示列」菜单里可操作的列（有定义的 optional 列） */
   const menuColumns = computed(() =>
     resolveTrackColumns(Number.MAX_SAFE_INTEGER, context.value)
@@ -64,6 +60,15 @@ export function useTrackColumns(options: {
    */
   const trailingExtraWidth = computed(() =>
     computeTrailingExtraWidth(context.value.batchEntry === true, menuColumns.value.length > 0),
+  );
+
+  const resolvedColumns = computed(() =>
+    resolveTrackColumnsWithPrefs(
+      containerWidth.value,
+      context.value,
+      prefsApi.prefs.value,
+      trailingExtraWidth.value,
+    )
   );
 
   return {

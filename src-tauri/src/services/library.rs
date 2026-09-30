@@ -392,7 +392,11 @@ impl LibraryService {
         out
     }
 
-    fn flush_genre(out: &mut Vec<String>, seen: &mut std::collections::HashSet<String>, buf: &mut String) {
+    fn flush_genre(
+        out: &mut Vec<String>,
+        seen: &mut std::collections::HashSet<String>,
+        buf: &mut String,
+    ) {
         let name = buf.trim();
         if !name.is_empty() {
             let key = name.to_lowercase();
@@ -405,7 +409,11 @@ impl LibraryService {
 
     /// 把标签流派写入 genres / track_genres：有流派时整体替换该曲目的关联；
     /// 标签为空时不动旧数据（增量补扫不应清空已有值）。
-    fn sync_track_genres(conn: &Connection, track_id: i64, raw_genre: Option<&str>) -> rusqlite::Result<()> {
+    fn sync_track_genres(
+        conn: &Connection,
+        track_id: i64,
+        raw_genre: Option<&str>,
+    ) -> rusqlite::Result<()> {
         let Some(raw) = raw_genre else {
             return Ok(());
         };
@@ -414,7 +422,10 @@ impl LibraryService {
             return Ok(());
         }
 
-        conn.execute("DELETE FROM track_genres WHERE track_id = ?1", params![track_id])?;
+        conn.execute(
+            "DELETE FROM track_genres WHERE track_id = ?1",
+            params![track_id],
+        )?;
         for name in genres {
             let normalized = name.to_lowercase();
             conn.execute(
@@ -629,7 +640,11 @@ mod rich_metadata_tests {
 
         // tracks.year / albums.release_year / media_files.bit_depth 落库
         let year: i64 = conn
-            .query_row("SELECT year FROM tracks WHERE title = '丰富的歌'", [], |r| r.get(0))
+            .query_row(
+                "SELECT year FROM tracks WHERE title = '丰富的歌'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(year, 2020);
         let album_year: i64 = conn
@@ -679,20 +694,40 @@ mod rich_metadata_tests {
         // 第二次入库（模拟补扫重解析到年份）：只补空，不覆盖
         let mut meta = base_meta("补扫之歌");
         meta.year = Some(2001);
-        LibraryService::index_file(&conn, source_id, &root, &prepared(&root, "a.flac", meta), &root)
-            .unwrap();
+        LibraryService::index_file(
+            &conn,
+            source_id,
+            &root,
+            &prepared(&root, "a.flac", meta),
+            &root,
+        )
+        .unwrap();
         let year: i64 = conn
-            .query_row("SELECT year FROM tracks WHERE title = '补扫之歌'", [], |r| r.get(0))
+            .query_row(
+                "SELECT year FROM tracks WHERE title = '补扫之歌'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(year, 2001);
 
         // 第三次入库：文件改了标签说 1999 —— 已有有效值不被扫描覆盖
         let mut meta = base_meta("补扫之歌");
         meta.year = Some(1999);
-        LibraryService::index_file(&conn, source_id, &root, &prepared(&root, "a.flac", meta), &root)
-            .unwrap();
+        LibraryService::index_file(
+            &conn,
+            source_id,
+            &root,
+            &prepared(&root, "a.flac", meta),
+            &root,
+        )
+        .unwrap();
         let year: i64 = conn
-            .query_row("SELECT year FROM tracks WHERE title = '补扫之歌'", [], |r| r.get(0))
+            .query_row(
+                "SELECT year FROM tracks WHERE title = '补扫之歌'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(year, 2001, "已有年份不得被重新扫描覆盖");
     }
@@ -713,15 +748,27 @@ mod rich_metadata_tests {
 
         let mut meta = base_meta("流派之歌");
         meta.genre = Some("Pop; Rock".to_string());
-        LibraryService::index_file(&conn, source_id, &root, &prepared(&root, "g.flac", meta), &root)
-            .unwrap();
+        LibraryService::index_file(
+            &conn,
+            source_id,
+            &root,
+            &prepared(&root, "g.flac", meta),
+            &root,
+        )
+        .unwrap();
         assert_eq!(genres_of(&conn, "流派之歌"), "Pop; Rock");
 
         // 重扫到不同流派：整体替换（扫描数据是权威来源）
         let mut meta = base_meta("流派之歌");
         meta.genre = Some("Jazz".to_string());
-        LibraryService::index_file(&conn, source_id, &root, &prepared(&root, "g.flac", meta), &root)
-            .unwrap();
+        LibraryService::index_file(
+            &conn,
+            source_id,
+            &root,
+            &prepared(&root, "g.flac", meta),
+            &root,
+        )
+        .unwrap();
         assert_eq!(genres_of(&conn, "流派之歌"), "Jazz");
 
         // 再扫时标签丢了流派：保留旧关联，不清空（增量补扫安全性）
@@ -739,10 +786,28 @@ mod rich_metadata_tests {
     /// V13 迁移：app_meta 表 + 流派索引就位，且 tag_parse_version 默认视为「待补扫」
     #[test]
     fn v13_provides_backfill_infrastructure() {
-        let (_dir, conn, _source_id, _root) = db_with_source("v13");
-        assert!(crate::services::scanner::needs_tag_backfill(&conn));
-        crate::services::scanner::mark_tag_backfill_done(&conn);
-        assert!(!crate::services::scanner::needs_tag_backfill(&conn));
+        let (_dir, conn, source_id, _root) = db_with_source("v13");
+        let other_source_id = source_id + 1;
+        assert!(crate::services::scanner::needs_tag_backfill(
+            &conn, source_id
+        ));
+        assert!(crate::services::scanner::needs_tag_backfill(
+            &conn,
+            other_source_id
+        ));
+        crate::services::scanner::mark_tag_backfill_done(&conn, source_id).unwrap();
+        assert!(!crate::services::scanner::needs_tag_backfill(
+            &conn, source_id
+        ));
+        assert!(crate::services::scanner::needs_tag_backfill(
+            &conn,
+            other_source_id
+        ));
+        crate::services::scanner::mark_tag_backfill_done(&conn, other_source_id).unwrap();
+        assert!(!crate::services::scanner::needs_tag_backfill(
+            &conn,
+            other_source_id
+        ));
 
         let idx: i64 = conn
             .query_row(
@@ -754,4 +819,3 @@ mod rich_metadata_tests {
         assert_eq!(idx, 2);
     }
 }
-

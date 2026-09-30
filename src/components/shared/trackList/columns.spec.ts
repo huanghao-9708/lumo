@@ -68,6 +68,23 @@ describe('resolveTrackColumns', () => {
     expect(ids(cols)).toContain('playedAt');
   });
 
+  it('窄窗口扣除页面专属列与表头按钮后才收纳普通列', () => {
+    const width = 740; // 1024 窗口扣除侧栏与列表内边距后的近似内容宽度
+    const trailing = 76; // 批量入口 40 + 显示列菜单 36
+    const cols = resolveTrackColumns(width, { extra: ['playedAt'], detailedView: true, batchEntry: true }, trailing);
+    const minContentWidth = cols.reduce((sum, col) => sum + (col.width ?? col.minWidth ?? 0), trailing);
+    expect(ids(cols)).toContain('playedAt');
+    expect(minContentWidth).toBeLessThanOrEqual(width);
+  });
+
+  it('钉住的列占用宽度后收纳其余列', () => {
+    const width = 500;
+    const cols = resolveTrackColumns(width, { pinned: ['genre'] }, 36);
+    const minContentWidth = cols.reduce((sum, col) => sum + (col.width ?? col.minWidth ?? 0), 36);
+    expect(ids(cols)).toContain('genre');
+    expect(minContentWidth).toBeLessThanOrEqual(width);
+  });
+
   it('列顺序与标准定义顺序一致（不因收纳打乱 DOM 顺序）', () => {
     const cols = resolveTrackColumns(979, { detailedView: true });
     const expectedOrder = TRACK_COLUMNS.filter(c => ids(cols).includes(c.id)).map(c => c.id);

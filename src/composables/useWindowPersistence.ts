@@ -76,18 +76,31 @@ export async function setupWindowPersistence(): Promise<() => void> {
 
   const win = getCurrentWindow();
 
+  async function getWorkArea(): Promise<{ w: number; h: number } | null> {
+    const monitor = await currentMonitor();
+    if (!monitor) return null;
+    const scaleFactor = await win.scaleFactor();
+    return {
+      w: Math.round(monitor.workArea.size.width / scaleFactor),
+      h: Math.round(monitor.workArea.size.height / scaleFactor),
+    };
+  }
+
+  async function applyWorkAreaConstraints(workArea: { w: number; h: number } | null) {
+    // 静态配置的最小尺寸在小屏/高缩放下可能大于工作区，先调低原生约束。
+    await win.setSizeConstraints({
+      minWidth: workArea ? Math.min(WINDOW_MIN_WIDTH, workArea.w) : WINDOW_MIN_WIDTH,
+      minHeight: workArea ? Math.min(WINDOW_MIN_HEIGHT, workArea.h) : WINDOW_MIN_HEIGHT,
+    });
+  }
+
   // 1. 启动限幅与恢复：以当前显示器工作区为上界
   try {
-    const scaleFactor = await win.scaleFactor();
-    const monitor = await currentMonitor();
-    const workArea = monitor
-      ? {
-        w: Math.round(monitor.workArea.size.width / scaleFactor),
-        h: Math.round(monitor.workArea.size.height / scaleFactor),
-      }
-      : null;
+    const workArea = await getWorkArea();
+    await applyWorkAreaConstraints(workArea);
 
     const target = clampToWorkArea(loadSavedSize() ?? { w: WINDOW_DEFAULT_WIDTH, h: WINDOW_DEFAULT_HEIGHT }, workArea);
+    const scaleFactor = await win.scaleFactor();
     const inner = await win.innerSize();
     const currentLogical = { w: inner.width / scaleFactor, h: inner.height / scaleFactor };
     // 与目标差异超过 1px 才调整，避免启动时无谓的抖动
@@ -117,17 +130,12 @@ export async function setupWindowPersistence(): Promise<() => void> {
     }, 400);
   });
 
-  // 3. 显示器/缩放变化时重新约束（换屏、DPI 变更都会触发 scale-changed 或 resize）
-  const unlistenScale = await win.onScaleChanged(async () => {
+  // 3. 换屏或 DPI 变化时重新约束；同缩放比例的两台显示器之间移动只触发 moved。
+  async function clampCurrentWindow() {
     try {
+      const workArea = await getWorkArea();
+      await applyWorkAreaConstraints(workArea);
       const scaleFactor = await win.scaleFactor();
-      const monitor = await currentMonitor();
-      const workArea = monitor
-        ? {
-          w: Math.round(monitor.workArea.size.width / scaleFactor),
-          h: Math.round(monitor.workArea.size.height / scaleFactor),
-        }
-        : null;
       const size = await win.innerSize();
       const clamped = clampToWorkArea(
         { w: size.width / scaleFactor, h: size.height / scaleFactor },
@@ -138,15 +146,24 @@ export async function setupWindowPersistence(): Promise<() => void> {
         Math.abs(size.height / scaleFactor - clamped.h) > 1
       ) {
         await win.setSize(new LogicalSize(clamped.w, clamped.h));
+        await win.center();
       }
     } catch {
       // 忽略瞬时错误
     }
+  }
+  const unlistenScale = await win.onScaleChanged(clampCurrentWindow);
+  let moveTimer: ReturnType<typeof setTimeout> | null = null;
+  const unlistenMoved = await win.onMoved(() => {
+    if (moveTimer) clearTimeout(moveTimer);
+    moveTimer = setTimeout(() => { void clampCurrentWindow(); }, 200);
   });
 
   return () => {
     if (saveTimer) clearTimeout(saveTimer);
+    if (moveTimer) clearTimeout(moveTimer);
     unlistenResized();
     unlistenScale();
+    unlistenMoved();
   };
 }
