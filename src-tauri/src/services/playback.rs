@@ -73,6 +73,9 @@ pub struct PlaybackManager {
     /// `Sink::empty()` 只能说明当前没有音频，无法区分「自然播完」「用户主动停止」和
     /// 「应用刚启动尚未播放」。队列观察器需要这个状态，才能只消费一次自然结束事件。
     active: AtomicBool,
+    /// 用户是否暂停（DM-02 轻量会话摘要的 is_playing 依据）。
+    /// rodio Sink 没有暴露暂停查询，这里跟随 pause/resume/stop/play 维护。
+    paused: AtomicBool,
     /// 播放速率。写进 rodio 的 `Sink::set_speed`——音频线程每 5ms 读一次该值，
     /// 所以改速率立即生效、不需要重建音源（变速=重采样，会有音高变化，这是无时间拉伸依赖下的取舍）。
     speed: Mutex<f32>,
@@ -93,6 +96,7 @@ impl PlaybackManager {
         Ok(Self {
             sink,
             active: AtomicBool::new(false),
+            paused: AtomicBool::new(false),
             speed: Mutex::new(1.0),
             position: Mutex::new(PositionTracker::default()),
         })
@@ -161,6 +165,7 @@ impl PlaybackManager {
         self.sink.append(decoder);
         self.sink.play();
         self.active.store(true, Ordering::Relaxed);
+        self.paused.store(false, Ordering::Relaxed);
         Ok(())
     }
 
@@ -183,11 +188,13 @@ impl PlaybackManager {
     pub fn pause(&self) {
         info!("Playback paused");
         self.sink.pause();
+        self.paused.store(true, Ordering::Relaxed);
     }
 
     pub fn resume(&self) {
         info!("Playback resumed");
         self.sink.play();
+        self.paused.store(false, Ordering::Relaxed);
     }
 
     pub fn stop(&self) {
@@ -198,6 +205,7 @@ impl PlaybackManager {
         }
         info!("Playback stopped");
         self.sink.stop();
+        self.paused.store(false, Ordering::Relaxed);
         if let Ok(mut tracker) = self.position.lock() {
             tracker.reset();
         }
@@ -244,6 +252,13 @@ impl PlaybackManager {
     /// 是否存在一段尚未被消费掉结束事件的队列播放生命周期。
     pub fn is_active(&self) -> bool {
         self.active.load(Ordering::Relaxed)
+    }
+
+    /// 是否正在播放（DM-02 轻量会话摘要用）：生命周期活跃、未被暂停且解码队列非空。
+    pub fn is_playing(&self) -> bool {
+        self.active.load(Ordering::Relaxed)
+            && !self.paused.load(Ordering::Relaxed)
+            && !self.sink.empty()
     }
 
     /// [MA0 Spike] 播放正弦测试音，验证移动端音频输出链路。

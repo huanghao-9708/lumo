@@ -606,6 +606,7 @@ pub fn run() {
             crate::commands::queue::playback_set_queue,
             crate::commands::queue::playback_play_index,
             crate::commands::queue::playback_queue_state,
+            crate::commands::queue::playback_session_summary,
             crate::commands::queue::playback_advance,
             crate::commands::queue::playback_set_mode,
             // MA1：应用信息与移动平台桥

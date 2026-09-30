@@ -25,7 +25,8 @@ import {
 } from '../api/scanner';
 import {
   playbackSetQueue, playbackPlayIndex, playbackQueueState, playbackAdvance, playbackSetMode,
-  type QueueItemDTO, type BackendPlayMode
+  playbackSessionSummary,
+  type QueueItemDTO, type BackendPlayMode, type PlaybackSessionSummaryDTO
 } from '../api/queue';
 import { libraryGetPlayability, type PlayabilityState } from '../api/library';
 import { useUiStore } from './ui';
@@ -1887,7 +1888,12 @@ const albums = shallowRef<Album[]>([]);
     }
   }
 
+  // 会话恢复只允许一次（DM-02）：模式转换不得重复 restoreSession 或重建解码 sink
+  let sessionRestored = false;
+
   async function restoreSession(bundle?: StartupBundleDTO | null) {
+    if (sessionRestored) return;
+    sessionRestored = true;
     try {
       // 1. 恢复播放队列（启动包已带入 queue；bundle 缺失时兜底单独拉）
       if (!bundle && queue.value.length === 0) {
@@ -2089,44 +2095,68 @@ const albums = shallowRef<Album[]>([]);
   }
 
   // ================= 播放推进事件监听 (MA2: ADR-3) =================
-  listen<{ index: number; track: any }>('playback-track-changed', (event) => {
-    const { index } = event.payload;
-    if (index >= 0 && index < queue.value.length) {
-      currentIndex.value = index;
-      const track = queue.value[index];
-      hasLoadedCurrentFile.value = true;
-      isPlaying.value = true;
-      progressMs.value = 0;
-      durationMs.value = track.durationSec ? track.durationSec * 1000 : 0;
-      updateMediaSessionMetadata(track);
-    }
-  });
+  // ===== 根级会话接线（DM-02）：幂等 =====
+  // 播放事件/MediaSession 只允许初始化一次（desktop-modes 02 DM-02 验收 4）：
+  // 模式转换、迷你/完整互斥挂载都不得重复注册或重建会话。
+  // 迷你/完整转换后如需重新确认，调用 ensureSessionWired()（幂等 no-op）。
+  let sessionWired = false;
+  const sessionWiredCount = ref(0);
+  // initEventListeners 的 unlisten 句柄声明在此（其调用发生在 store 构造早期）
+  let unlistenScanProgress: (() => void) | null = null;
+  let unlistenScanComplete: (() => void) | null = null;
+  let unlistenArtworkBackfill: (() => void) | null = null;
+  let unlistenAlbumCoverFetched: (() => void) | null = null;
+  let unlistenArtistCoverFetched: (() => void) | null = null;
 
-  listen<{ position: number }>('playback-progress', (event) => {
-    progressMs.value = event.payload.position;
-    if (isBuffering.value) {
-      isBuffering.value = false;
-    }
-  });
+  function ensureSessionWired() {
+    if (sessionWired) return;
+    sessionWired = true;
+    sessionWiredCount.value++;
 
-  listen<{ is_playing: boolean }>('playback-status-changed', (event) => {
-    if (event.payload && typeof event.payload.is_playing === 'boolean') {
-      isPlaying.value = event.payload.is_playing;
-      if ('mediaSession' in navigator) {
-        navigator.mediaSession.playbackState = isPlaying.value ? 'playing' : 'paused';
+    listen<{ index: number; track: any }>('playback-track-changed', (event) => {
+      const { index } = event.payload;
+      if (index >= 0 && index < queue.value.length) {
+        currentIndex.value = index;
+        const track = queue.value[index];
+        hasLoadedCurrentFile.value = true;
+        isPlaying.value = true;
+        progressMs.value = 0;
+        durationMs.value = track.durationSec ? track.durationSec * 1000 : 0;
+        updateMediaSessionMetadata(track);
       }
-    }
-  });
+    });
 
-  listen<{ index: number; message: string }>('playback-error', (event) => {
-    console.error('[playback-error] 播放失败:', event.payload);
-    isPlaying.value = false;
-    isBuffering.value = false;
-    uiStore.showToast(event.payload?.message || '播放失败');
-    if ('mediaSession' in navigator) {
-      navigator.mediaSession.playbackState = 'paused';
-    }
-  });
+    listen<{ position: number }>('playback-progress', (event) => {
+      progressMs.value = event.payload.position;
+      if (isBuffering.value) {
+        isBuffering.value = false;
+      }
+    });
+
+    listen<{ is_playing: boolean }>('playback-status-changed', (event) => {
+      if (event.payload && typeof event.payload.is_playing === 'boolean') {
+        isPlaying.value = event.payload.is_playing;
+        if ('mediaSession' in navigator) {
+          navigator.mediaSession.playbackState = isPlaying.value ? 'playing' : 'paused';
+        }
+      }
+    });
+
+    listen<{ index: number; message: string }>('playback-error', (event) => {
+      console.error('[playback-error] 播放失败:', event.payload);
+      isPlaying.value = false;
+      isBuffering.value = false;
+      uiStore.showToast(event.payload?.message || '播放失败');
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.playbackState = 'paused';
+      }
+    });
+
+    void initEventListeners();
+    setupMediaSession();
+  }
+
+  ensureSessionWired();
 
   // 前后台对账：恢复前台时与 Rust 权威队列同步
   async function syncQueueStateFromBackend() {
@@ -2165,10 +2195,45 @@ const albums = shallowRef<Album[]>([]);
     }
   }
 
+  // ===== 轻量会话摘要（DM-02）：镜像已有时只对账标量，不复制队列 =====
+  const lastSessionSummary = ref<PlaybackSessionSummaryDTO | null>(null);
+  let lastAppliedSessionVersion = 0;
+
+  /**
+   * 应用轻量摘要（带版本守卫）：`stateVersion` 落后于已应用版本的响应直接丢弃，
+   * 保证迟到的旧响应不会覆盖更新的会话（DM-02 验收 5）。
+   * 只同步会话标量（index/mode/progress/isPlaying），不触碰浏览数组。
+   */
+  function applySessionSummary(summary: PlaybackSessionSummaryDTO) {
+    if (summary.stateVersion < lastAppliedSessionVersion) return;
+    lastAppliedSessionVersion = summary.stateVersion;
+    lastSessionSummary.value = summary;
+    playMode.value = fromBackendPlayMode(summary.mode);
+    progressMs.value = summary.positionMs;
+    isPlaying.value = summary.isPlaying;
+    if (queue.value.length > 0 && summary.currentIndex < queue.value.length) {
+      currentIndex.value = summary.currentIndex;
+      const t = queue.value[summary.currentIndex];
+      if (t) durationMs.value = t.durationSec ? t.durationSec * 1000 : 0;
+    }
+  }
+
+  async function syncSessionFromBackend() {
+    try {
+      applySessionSummary(await playbackSessionSummary());
+    } catch (e) {
+      console.warn('[session] 轻量摘要对账失败:', e);
+    }
+  }
+
   if (typeof window !== 'undefined') {
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') {
-        syncQueueStateFromBackend();
+        if (queue.value.length > 0) {
+          void syncSessionFromBackend();
+        } else {
+          void syncQueueStateFromBackend();
+        }
       }
     });
   }
@@ -2400,12 +2465,7 @@ const albums = shallowRef<Album[]>([]);
   }
 
   // ===== 全局 Tauri 事件监听器（P1-8: 保存 unlisten 引用，HMR 时清理） =====
-  let unlistenScanProgress: (() => void) | null = null;
-  let unlistenScanComplete: (() => void) | null = null;
-  let unlistenArtworkBackfill: (() => void) | null = null;
-  let unlistenAlbumCoverFetched: (() => void) | null = null;
-  let unlistenArtistCoverFetched: (() => void) | null = null;
-
+  // （unlisten 声明提前到「根级会话接线」处：initEventListeners 在 store 构造早期被调用）
   async function initEventListeners() {
     // 先清理可能残留的旧监听（Vite HMR 场景）
     unlistenScanProgress?.();
@@ -2483,7 +2543,7 @@ const albums = shallowRef<Album[]>([]);
     });
   }
 
-  initEventListeners();
+  // ===== 会话接线由上方 ensureSessionWired() 统一完成（含下方两个注册） =====
 
   // ===== MediaSession API：接管系统媒体键与系统媒体通知 =====
 
@@ -2537,8 +2597,6 @@ const albums = shallowRef<Album[]>([]);
 
     console.log('[MediaSession] 已注册媒体键 handler');
   }
-
-  setupMediaSession();
 
   // 页面关闭前保存播放进度（P0-3 兜底）
   if (typeof window !== 'undefined') {
@@ -2681,6 +2739,12 @@ const albums = shallowRef<Album[]>([]);
     hasMoreTracks,
     restoreSession,
     fetchStartupBundle,
+    // 轻量会话（DM-02）：迷你栏消费；接线幂等供转换事务复用
+    ensureSessionWired,
+    sessionWiredCount,
+    lastSessionSummary,
+    applySessionSummary,
+    syncSessionFromBackend,
     deletePlaylist,
     removeTrackFromPlaylist,
     // 专辑无限滚动

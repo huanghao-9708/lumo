@@ -5,7 +5,10 @@ use crate::db::DbState;
 use crate::error::AppError;
 use crate::ipc_trace;
 use crate::services::cache::AudioCacheState;
-use crate::services::queue::{PlayMode, PlaybackQueueStateDto, QueueItem, QueueState};
+use crate::services::queue::{
+    PlayMode, PlaybackQueueStateDto, PlaybackSessionSummaryDto, QueueItem, QueueState,
+    SessionTrackBrief,
+};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -496,6 +499,44 @@ pub fn playback_queue_state(
     })
 }
 
+/// 轻量会话摘要（DM-02）：O(1) 不复制队列 items，迷你栏与轻量恢复消费。
+/// `stateVersion` 随任何队列/模式/位置变更自增，消费方据此丢弃迟到响应。
+#[tauri::command(async)]
+pub fn playback_session_summary(
+    queue_state: State<'_, QueueState>,
+    playback_state: State<'_, PlaybackState>,
+) -> Result<PlaybackSessionSummaryDto, AppError> {
+    let _trace = ipc_trace!("playback_session_summary");
+    let (position_ms, is_playing) = if let Ok(manager) = playback_state.manager.lock() {
+        (manager.get_pos(), manager.is_playing())
+    } else {
+        (0, false)
+    };
+    let q = queue_state
+        .queue
+        .lock()
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let current_track = q.items.get(q.index).map(|item| SessionTrackBrief {
+        track_id: item.track_id,
+        media_file_id: item.media_file_id,
+        title: item.title.clone(),
+        artist: item.artist.clone(),
+        album: item.album.clone(),
+        artwork_id: item.artwork_id,
+        duration_ms: item.duration_ms,
+    });
+    Ok(PlaybackSessionSummaryDto {
+        state_version: q.state_version,
+        queue_length: q.items.len(),
+        current_index: q.index,
+        mode: q.mode,
+        position_ms,
+        duration_ms: current_track.as_ref().and_then(|t| t.duration_ms),
+        is_playing,
+        current_track,
+    })
+}
+
 #[tauri::command(async)]
 pub fn playback_advance(
     app: AppHandle,
@@ -682,7 +723,7 @@ pub fn queue_watcher_loop(app: AppHandle) {
         if just_finished {
             if let Some((_, next_idx, _)) = next_enqueued_info.take() {
                 // Gapless 无缝切歌成功触发
-                q.index = next_idx;
+                q.advance_index_gapless(next_idx);
                 q.retry.clear();
                 let track = q.items[next_idx].clone();
                 drop(q);

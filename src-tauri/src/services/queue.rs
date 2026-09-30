@@ -51,6 +51,36 @@ pub struct PlaybackQueueStateDto {
     pub position_ms: u64,
 }
 
+/// 轻量会话摘要（DM-02）：迷你栏与冷启动恢复用。
+/// 刻意**不含 items**——完整队列镜像只有完整窗口浏览需要（desktop-modes 01 §7），
+/// 30k 长队列下摘要必须保持 O(1)。
+#[derive(Clone, Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaybackSessionSummaryDto {
+    pub state_version: u64,
+    pub queue_length: usize,
+    pub current_index: usize,
+    pub mode: PlayMode,
+    pub position_ms: u64,
+    pub duration_ms: Option<u64>,
+    pub is_playing: bool,
+    pub current_track: Option<SessionTrackBrief>,
+}
+
+/// 当前曲目文字/ID 概要：不含图片 blob，artwork 仅 ID（迷你栏不展示封面，
+/// 需要时由消费方按既有协议自行取）。
+#[derive(Clone, Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionTrackBrief {
+    pub track_id: i64,
+    pub media_file_id: i64,
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    pub artwork_id: Option<i64>,
+    pub duration_ms: Option<u64>,
+}
+
 pub struct PlaybackQueue {
     pub items: Vec<QueueItem>,
     pub index: usize,
@@ -59,6 +89,9 @@ pub struct PlaybackQueue {
     /// 自动切歌的失败重试状态（CR-002）。放在队列里而不是观察者循环的局部变量里，
     /// 是因为「用户主动切歌 / 换队列」发生在命令侧，必须能就地作废旧的退避。
     pub retry: AdvanceRetry,
+    /// 会话状态版本（DM-02）：任何队列/模式/位置变更自增，随轻量摘要下发。
+    /// 消费方据此丢弃迟到的旧响应（desktop-modes 02 DM-02 验收 5）。
+    pub state_version: u64,
 }
 
 impl Default for PlaybackQueue {
@@ -75,7 +108,12 @@ impl PlaybackQueue {
             mode: PlayMode::Normal,
             shuffle_order: None,
             retry: AdvanceRetry::new(ADVANCE_RETRY_BASE, ADVANCE_RETRY_MAX),
+            state_version: 1,
         }
+    }
+
+    fn bump_version(&mut self) {
+        self.state_version = self.state_version.wrapping_add(1);
     }
 
     pub fn set_queue(&mut self, items: Vec<QueueItem>, index: usize, mode: PlayMode) {
@@ -105,6 +143,7 @@ impl PlaybackQueue {
         } else {
             self.shuffle_order = None;
         }
+        self.bump_version();
     }
 
     pub fn next_index(&self) -> Option<usize> {
@@ -183,6 +222,7 @@ impl PlaybackQueue {
         };
         if let Some(idx) = target {
             self.index = idx;
+            self.bump_version();
             // 用户自己按了上一首/下一首：正在进行的自动重试目标已被取代，连退避一起作废
             self.retry.clear();
         }
@@ -193,6 +233,7 @@ impl PlaybackQueue {
     pub fn select_index(&mut self, index: usize) -> Option<usize> {
         if index < self.items.len() {
             self.index = index;
+            self.bump_version();
             self.retry.clear();
             Some(index)
         } else {
@@ -207,6 +248,17 @@ impl PlaybackQueue {
     pub fn commit_index(&mut self, index: usize) {
         if index < self.items.len() {
             self.index = index;
+            self.bump_version();
+        }
+    }
+
+    /// gapless 自动推进：观察者在预加载成功后直接挪位（不经过解码启动路径）。
+    /// 独立成方法是为了强制 bump 版本——之前这里有裸写 `q.index` 的旁路，
+    /// 会绕过版本号（DM-02）。
+    pub fn advance_index_gapless(&mut self, index: usize) {
+        if index < self.items.len() {
+            self.index = index;
+            self.bump_version();
         }
     }
 
@@ -351,6 +403,54 @@ mod tests {
 
         // Prev index must be order[0] (which is 2)
         assert_eq!(q.prev_index().unwrap(), order[0]);
+    }
+
+    #[test]
+    fn session_summary_is_lightweight_and_versions_bump() {
+        // DM-02 验收 3：摘要不携带完整 items（30k 队列下保持 O(1)）
+        let mut q = PlaybackQueue::new();
+        q.set_queue(mock_items(30_000), 0, PlayMode::Normal);
+        let v_after_queue = q.state_version;
+
+        let summary = PlaybackSessionSummaryDto {
+            state_version: q.state_version,
+            queue_length: q.items.len(),
+            current_index: q.index,
+            mode: q.mode,
+            position_ms: 0,
+            duration_ms: Some(180_000),
+            is_playing: false,
+            current_track: Some(SessionTrackBrief {
+                track_id: 1,
+                media_file_id: 101,
+                title: "T".into(),
+                artist: "A".into(),
+                album: "Al".into(),
+                artwork_id: None,
+                duration_ms: Some(180_000),
+            }),
+        };
+        let json = serde_json::to_string(&summary).unwrap();
+        assert!(!json.contains("items"), "摘要不得包含完整队列");
+        assert!(json.contains("\"queueLength\":30000"));
+        assert!(
+            json.len() < 1_000,
+            "摘要必须保持轻量，实际 {} 字节",
+            json.len()
+        );
+
+        // 任何队列/模式/位置变更都推进版本（消费方据此丢弃迟到响应）
+        assert!(v_after_queue > 1, "set_queue 必须推进版本");
+        let v0 = q.state_version;
+        q.set_mode(PlayMode::Shuffle);
+        assert!(q.state_version > v0);
+        let v1 = q.state_version;
+        q.advance_index_gapless(2);
+        assert_eq!(q.index, 2);
+        assert!(q.state_version > v1);
+        let v2 = q.state_version;
+        q.commit_index(3);
+        assert!(q.state_version > v2);
     }
 
     #[test]
