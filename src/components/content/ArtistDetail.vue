@@ -2,6 +2,7 @@
 import { ref, computed, watch } from 'vue';
 import { Play, Shuffle, User, Loader2, Disc3, Star } from 'lucide-vue-next';
 import { usePlayerStore, type Album, type Track } from '../../stores/player';
+import { useDesktopModeStore } from '../../stores/desktopMode';
 import { getArtworkUrl } from '../../utils';
 import { useScrollRestore } from '../../composables/useScrollRestore';
 import TrackListHeader from '../shared/trackList/TrackListHeader.vue';
@@ -16,6 +17,9 @@ const props = defineProps<{
 }>();
 
 const playerStore = usePlayerStore();
+// 极简模式：头像不挂载（DM-04）
+const desktopMode = useDesktopModeStore();
+const visualAllowed = computed(() => desktopMode.visualAllowed);
 
 const detail = computed(() => playerStore.currentArtistDetails);
 
@@ -181,6 +185,7 @@ function onScroll(e: Event) {
       <div class="px-8 pt-8 pb-4 flex-shrink-0">
         <div class="flex items-start gap-8">
           <div
+            v-if="visualAllowed"
             class="w-[152px] h-[152px] rounded-[10px] overflow-hidden flex-shrink-0 flex items-center justify-center relative"
             :class="!detail.avatar_artwork_id ? `bg-gradient-to-br ${getColorClass(detail.avatarColor)}` : ''"
           >

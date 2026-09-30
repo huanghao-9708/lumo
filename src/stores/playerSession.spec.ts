@@ -155,6 +155,40 @@ describe("DM-02 常驻会话", () => {
     expect(store.playMode).toBe("normal");
   });
 
+  it("DM-04 验收3：极简下切歌不自动加载，显式打开歌词按需加载且去重", async () => {
+    localStorage.setItem("lumo_fetch_lyrics", "1");
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "library_get_lyrics") return Promise.resolve("[00:01.00]测试歌词行");
+      if (cmd === "library_get_track_file_info") return Promise.resolve(null);
+      return Promise.resolve([]);
+    });
+
+    const { useDesktopModeStore } = await import("./desktopMode");
+    const desktopMode = useDesktopModeStore();
+    await desktopMode.init();
+    await desktopMode.setExperienceMode("minimal");
+
+    const store = usePlayerStore();
+    store.queue = [{
+      id: 7, title: "曲目七", artistId: null, artist: "歌手", albumId: null,
+      album: "专辑", duration: "3:00", durationSec: 180, format: "MP3",
+      coverColor: "", cover_artwork_id: null, isFavorite: false,
+      primary_file_id: 107, fileSize: null, sourceKind: "local",
+    }] as never;
+    store.currentIndex = 0;
+    await new Promise((r) => setTimeout(r, 250));
+    expect(invokeMock.mock.calls.filter(([cmd]) => cmd === "library_get_lyrics")).toHaveLength(0);
+
+    // 显式打开（LyricsView 挂载）：按授权加载，歌词写入
+    await store.ensureLyricsLoaded();
+    expect(invokeMock.mock.calls.filter(([cmd]) => cmd === "library_get_lyrics")).toHaveLength(1);
+    expect(store.lyrics.length).toBeGreaterThan(0);
+
+    // 再次调用（视图重挂载等）幂等：同一首歌不重复请求
+    await store.ensureLyricsLoaded();
+    expect(invokeMock.mock.calls.filter(([cmd]) => cmd === "library_get_lyrics")).toHaveLength(1);
+  });
+
   it("DM-03：极简体验下切歌不加载歌词，正常体验恢复自动加载", async () => {
     localStorage.setItem("lumo_fetch_lyrics", "1"); // 联网歌词授权开启（偏好不变性由 DM-01 验收覆盖）
     invokeMock.mockImplementation((cmd: string) => {

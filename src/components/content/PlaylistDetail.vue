@@ -3,6 +3,7 @@ import { computed, ref } from 'vue';
 import { Play, Shuffle, Loader2, ListMusic, CheckSquare, Trash2 } from 'lucide-vue-next';
 import { usePlayerStore, type Track } from '../../stores/player';
 import { useUiStore } from '../../stores/ui';
+import { useDesktopModeStore } from '../../stores/desktopMode';
 import { useBatchSelect } from '../../composables/useBatchSelect';
 import { useScrollRestore } from '../../composables/useScrollRestore';
 import { useArtworkSrc } from '../../composables/useArtworkSrc';
@@ -28,6 +29,10 @@ function onToggleSelectAll() {
 }
 
 const detail = computed(() => playerStore.currentPlaylistDetails);
+
+// 极简模式：封面头图不挂载（DM-04）
+const desktopMode = useDesktopModeStore();
+const visualAllowed = computed(() => desktopMode.visualAllowed);
 
 /**
  * 歌单封面 = 歌单内第一首歌曲所属专辑的封面（后端已解析好 artwork id）。
@@ -117,8 +122,8 @@ function playTrack(index: number) {
       <!-- 歌单头部 -->
       <div class="px-8 pt-8 pb-4 flex-shrink-0">
         <div class="flex items-start gap-8">
-          <!-- 封面：歌单内第一首歌曲的专辑封面（无封面时退回图标占位）；1200 基线 152px -->
-          <div class="w-[152px] h-[152px] rounded-[10px] overflow-hidden flex-shrink-0 bg-bg-hover flex items-center justify-center">
+          <!-- 封面：歌单内第一首歌曲的专辑封面（无封面时退回图标占位）；1200 基线 152px；极简模式不挂载 -->
+          <div v-if="visualAllowed" class="w-[152px] h-[152px] rounded-[10px] overflow-hidden flex-shrink-0 bg-bg-hover flex items-center justify-center">
             <img v-if="coverSrc" :src="coverSrc" class="w-full h-full object-cover" alt="cover" />
             <ListMusic v-else class="w-12 h-12 text-text-disabled" />
           </div>

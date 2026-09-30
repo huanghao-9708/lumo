@@ -2,6 +2,7 @@
 import { computed, watch } from 'vue';
 import { Play, Shuffle, Loader2, Disc3, Heart, CheckSquare } from 'lucide-vue-next';
 import { usePlayerStore, type Track } from '../../stores/player';
+import { useDesktopModeStore } from '../../stores/desktopMode';
 import { useArtworkSrc } from '../../composables/useArtworkSrc';
 import { useBatchSelect } from '../../composables/useBatchSelect';
 import { useScrollRestore } from '../../composables/useScrollRestore';
@@ -16,6 +17,9 @@ const props = defineProps<{
 }>();
 
 const playerStore = usePlayerStore();
+// 极简模式：封面头图不挂载（DM-04）
+const desktopMode = useDesktopModeStore();
+const visualAllowed = computed(() => desktopMode.visualAllowed);
 
 /** 曲目列表滚动位置记忆（同一专辑返回时还原） */
 const listScrollEl = useScrollRestore(() => `album-detail:${props.albumId ?? 0}`);
@@ -121,8 +125,8 @@ function shufflePlay() {
       <!-- 专辑头部 -->
       <div class="px-8 pt-8 pb-4 flex-shrink-0">
         <div class="flex items-start gap-8">
-          <!-- 封面（1200 基线 152px） -->
-          <div class="w-[152px] h-[152px] rounded-[12px] overflow-hidden flex-shrink-0 bg-bg-hover flex items-center justify-center shadow-lg ring-1 ring-black/5 dark:ring-white/10">
+          <!-- 封面（1200 基线 152px）；极简模式不挂载（DM-04） -->
+          <div v-if="visualAllowed" class="w-[152px] h-[152px] rounded-[12px] overflow-hidden flex-shrink-0 bg-bg-hover flex items-center justify-center shadow-lg ring-1 ring-black/5 dark:ring-white/10">
             <img v-if="coverSrc" :src="coverSrc" class="w-full h-full object-cover" alt="cover" />
             <Disc3 v-else class="w-10 h-10 text-text-disabled" />
           </div>

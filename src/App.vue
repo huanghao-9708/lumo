@@ -171,9 +171,9 @@ onUnmounted(() => {
       <!-- Region 05: Playback Bar (h: var(--height-playback-bar) = 92px) -->
       <BottomPlayer />
 
-      <!-- 沉浸式播放页（覆盖整窗，z-[200]；进/出为抽屉式上下滑动） -->
+      <!-- 沉浸式播放页（覆盖整窗，z-[200]；进/出为抽屉式上下滑动）；极简模式禁入（DM-04） -->
       <Transition name="np-drawer">
-        <NowPlayingImmersive v-if="uiStore.isImmersiveView" />
+        <NowPlayingImmersive v-if="uiStore.isImmersiveView && desktopModeStore.visualAllowed" />
       </Transition>
 
       <CreatePlaylistModal v-if="playerStore.isCreatePlaylistModalOpen" />

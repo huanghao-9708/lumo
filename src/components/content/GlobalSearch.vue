@@ -4,6 +4,7 @@ import {
   Loader2, Music, Search, Disc3, User,
 } from 'lucide-vue-next';
 import { usePlayerStore, mapTrackDTO } from '../../stores/player';
+import { useDesktopModeStore } from '../../stores/desktopMode';
 import { getArtworkUrl } from '../../utils';
 import { libraryGetTracks, libraryGetAlbums, libraryGetArtists } from '../../api/library';
 import { useScrollRestore } from '../../composables/useScrollRestore';
@@ -14,6 +15,9 @@ import type { TrackListContext } from '../shared/trackList/columns';
 import type { TrackDTO, AlbumDTO, ArtistDTO } from '../../api/types';
 
 const playerStore = usePlayerStore();
+// 极简模式：搜索结果卡片封面不挂载（DM-04）
+const desktopMode = useDesktopModeStore();
+const visualAllowed = computed(() => desktopMode.visualAllowed);
 
 const activeTab = ref<'tracks' | 'albums' | 'artists'>('tracks');
 const isSearching = ref(false);
@@ -284,7 +288,7 @@ function selectArtist(artist: ArtistDTO) {
               class="group cursor-pointer"
               @click="selectAlbum(album)"
             >
-              <div class="w-full aspect-square rounded-[10px] mb-3 overflow-hidden bg-bg-hover flex items-center justify-center">
+              <div v-if="visualAllowed" class="w-full aspect-square rounded-[10px] mb-3 overflow-hidden bg-bg-hover flex items-center justify-center">
                 <img
                   v-if="getCoverSrc(album)"
                   :src="getCoverSrc(album)"
@@ -313,7 +317,7 @@ function selectArtist(artist: ArtistDTO) {
               class="group cursor-pointer"
               @click="selectArtist(artist)"
             >
-              <div class="w-full aspect-square rounded-[10px] mb-3 overflow-hidden bg-bg-hover flex items-center justify-center">
+              <div v-if="visualAllowed" class="w-full aspect-square rounded-[10px] mb-3 overflow-hidden bg-bg-hover flex items-center justify-center">
                 <img
                   v-if="artist.avatar_artwork_id"
                   :src="getArtworkUrl(artist.avatar_artwork_id)"

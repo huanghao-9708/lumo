@@ -6,13 +6,23 @@ import {
 } from 'lucide-vue-next';
 import { usePlayerStore } from '../../stores/player';
 import { useUiStore } from '../../stores/ui';
+import { useDesktopModeStore } from '../../stores/desktopMode';
 import { useArtworkSrc } from '../../composables/useArtworkSrc';
 import { libraryAddToPlaylist } from '../../api/library';
 import PlaybackRateButton from '../shared/PlaybackRateButton.vue';
 
 const playerStore = usePlayerStore();
 const uiStore = useUiStore();
+// 极简模式：封面不挂载、沉浸页入口禁用（DM-04，文字播放页走右栏）
+const desktopMode = useDesktopModeStore();
+const visualAllowed = computed(() => desktopMode.visualAllowed);
 const coverSrc = useArtworkSrc(() => playerStore.currentTrack?.cover_artwork_id ?? null);
+
+/** 极简下沉浸页入口禁用：点击无效而非打开后不可见（避免切回正常时突然弹出） */
+function tryOpenImmersive() {
+  if (!visualAllowed.value) return;
+  uiStore.openImmersiveView();
+}
 
 /* ============ 进度条 ============ */
 /** 拖拽中的本地预览位置：拖动期间不动后端，松手才 seek 一次（见下方注释） */
@@ -239,15 +249,15 @@ async function addCurrentToPlaylist(playlistId: number) {
 
     <!-- Left: Track Info & Actions (左侧自适应，设置最大宽度，不越界挤压中控) -->
     <div class="flex items-center min-w-0 max-w-[32vw] flex-shrink-0 z-10">
-      <!-- 封面（悬浮有微质感与展开沉浸提示） -->
+      <!-- 封面（悬浮有微质感与展开沉浸提示）；极简模式不挂载图片、入口禁用 -->
       <div
         class="group relative w-(--size-play-cover) h-(--size-play-cover) bg-bg-hover rounded-[8px] overflow-hidden flex-shrink-0 mr-3.5 flex items-center justify-center cursor-pointer shadow-sm ring-1 ring-black/5 dark:ring-white/10 transition-transform duration-200 hover:scale-[1.02]"
-        title="进入沉浸式播放"
-        @click="uiStore.openImmersiveView()"
+        :title="visualAllowed ? '进入沉浸式播放' : '极简模式下沉浸页不可用'"
+        @click="tryOpenImmersive()"
       >
-        <img v-if="coverSrc" :src="coverSrc" class="w-full h-full object-cover transition-opacity duration-200 group-hover:opacity-85" alt="cover" />
+        <img v-if="coverSrc && visualAllowed" :src="coverSrc" class="w-full h-full object-cover transition-opacity duration-200 group-hover:opacity-85" alt="cover" />
         <Disc3 v-else class="w-6 h-6 text-text-disabled" />
-        <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white">
+        <div v-if="visualAllowed" class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white">
           <ChevronUp class="w-5 h-5 drop-shadow-sm" />
         </div>
       </div>
@@ -361,11 +371,12 @@ async function addCurrentToPlaylist(playlistId: number) {
           <SkipForward class="w-[18px] h-[18px] fill-current" />
         </button>
 
-        <!-- 展开沉浸式视图（ChevronUp 向上展开，与底栏弹出方向一致） -->
+        <!-- 展开沉浸式视图（ChevronUp 向上展开，与底栏弹出方向一致）；极简模式禁用 -->
         <button
+          v-if="visualAllowed"
           class="w-8 h-8 flex items-center justify-center rounded-full text-text-muted hover:text-text-primary hover:bg-bg-hover active:scale-95 transition-all"
           title="展开沉浸式播放"
-          @click="uiStore.openImmersiveView()"
+          @click="tryOpenImmersive()"
         >
           <ChevronUp class="w-[17px] h-[17px]" />
         </button>

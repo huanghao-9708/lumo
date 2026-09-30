@@ -26,12 +26,59 @@ import FolderView from '../content/FolderView.vue';
 import SmartPlaylistView from '../content/SmartPlaylistView.vue';
 import HomeView from '../content/HomeView.vue';
 import AiPlaylistView from '../content/AiPlaylistView.vue';
+import MinimalEntityList from '../content/MinimalEntityList.vue';
 import TrackListHeader from '../shared/trackList/TrackListHeader.vue';import TrackRow from '../shared/trackList/TrackRow.vue';
 import { useTrackColumns } from '../shared/trackList/useTrackColumns';
 import { TRACK_ROW_HEIGHT, columnCellStyle } from '../shared/trackList/columns';
+import { useDesktopModeStore } from '../../stores/desktopMode';
 
 const playerStore = usePlayerStore();
 const uiStore = useUiStore();
+// 极简体验（DM-04）：false 时封面网格替换为文字列表
+const desktopMode = useDesktopModeStore();
+const visualAllowed = computed(() => desktopMode.visualAllowed);
+
+/* ============ 极简文字列表数据（DM-04：与网格同一份 store 数据，不复制加载逻辑） ============ */
+const minimalAlbumItems = computed(() =>
+  playerStore.albums.map(a => ({
+    id: a.id,
+    primary: a.title,
+    secondary: a.artist,
+    hint: a.track_count != null ? `${a.track_count} 首` : undefined,
+  })),
+);
+const minimalArtistItems = computed(() =>
+  playerStore.artists.map(a => ({
+    id: a.id,
+    primary: a.name,
+    hint: (a.track_count ?? a.trackCount) != null ? `${a.track_count ?? a.trackCount} 首` : undefined,
+  })),
+);
+const minimalFavoriteAlbumItems = computed(() =>
+  playerStore.favoriteAlbums.map(a => ({
+    id: a.id,
+    primary: a.title,
+    secondary: a.artist,
+    hint: a.track_count != null ? `${a.track_count} 首` : undefined,
+  })),
+);
+const minimalFavoriteArtistItems = computed(() =>
+  playerStore.favoriteArtists.map(a => ({
+    id: a.id,
+    primary: a.name,
+    hint: (a.track_count ?? a.trackCount) != null ? `${a.track_count ?? a.trackCount} 首` : undefined,
+  })),
+);
+
+function onMinimalArtistSelect(id: number) {
+  playerStore.activeArtistId = id;
+}
+function onMinimalFavoriteAlbumSelect(id: number) {
+  playerStore.activeAlbumId = id;
+}
+function onMinimalFavoriteArtistSelect(id: number) {
+  playerStore.activeArtistId = id;
+}
 
 /* ============ 统一歌曲列表列配置（容器宽度驱动，见 trackList/columns.ts） ============ */
 const trackColumnsContext = computed(() => ({}));
@@ -418,10 +465,18 @@ onMounted(() => {
         </div>
       </div>
 
-      <!-- ============ 专辑网格视图 ============ -->
+      <!-- ============ 专辑网格视图（极简换文字列表，数据/点击行为不变） ============ -->
       <AlbumGrid
-        v-if="isAlbumGridView"
+        v-if="isAlbumGridView && visualAllowed"
         @select="onAlbumSelect"
+      />
+      <MinimalEntityList
+        v-else-if="isAlbumGridView"
+        kind="album"
+        :items="minimalAlbumItems"
+        :scroll-key="`albums:${playerStore.searchQuery}`"
+        empty-text="没有找到专辑"
+        @select="onMinimalFavoriteAlbumSelect"
       />
 
       <!-- ============ 轨道表格视图 ============ -->
@@ -500,8 +555,16 @@ onMounted(() => {
 
       </template>
 
-      <!-- ============ 艺术家网格视图 ============ -->
-      <ArtistGrid v-if="isArtistGridView" />
+      <!-- ============ 艺术家网格视图（极简换文字列表） ============ -->
+      <ArtistGrid v-if="isArtistGridView && visualAllowed" />
+      <MinimalEntityList
+        v-else-if="isArtistGridView"
+        kind="artist"
+        :items="minimalArtistItems"
+        :scroll-key="`artists:${playerStore.searchQuery}`"
+        empty-text="没有找到艺术家"
+        @select="onMinimalArtistSelect"
+      />
 
       <!-- ============ 艺术家详情视图 ============ -->
       <ArtistDetail v-if="isArtistDetailView" :artist-id="playerStore.activeArtistId" :filter-query="searchInput" />
@@ -515,11 +578,27 @@ onMounted(() => {
       <!-- ============ 喜欢的音乐视图 ============ -->
       <FavoritesView v-if="isFavoriteTracksView" :filter-query="searchInput" />
 
-      <!-- ============ 收藏的专辑视图 ============ -->
-      <FavoriteAlbums v-if="isFavoriteAlbumsView" />
+      <!-- ============ 收藏的专辑视图（极简换文字列表） ============ -->
+      <FavoriteAlbums v-if="isFavoriteAlbumsView && visualAllowed" />
+      <MinimalEntityList
+        v-else-if="isFavoriteAlbumsView"
+        kind="album"
+        :items="minimalFavoriteAlbumItems"
+        scroll-key="favorite-albums"
+        empty-text="还没有收藏的专辑"
+        @select="onMinimalFavoriteAlbumSelect"
+      />
 
-      <!-- ============ 收藏的歌手视图 ============ -->
-      <FavoriteArtists v-if="isFavoriteArtistsView" />
+      <!-- ============ 收藏的歌手视图（极简换文字列表） ============ -->
+      <FavoriteArtists v-if="isFavoriteArtistsView && visualAllowed" />
+      <MinimalEntityList
+        v-else-if="isFavoriteArtistsView"
+        kind="artist"
+        :items="minimalFavoriteArtistItems"
+        scroll-key="favorite-artists"
+        empty-text="还没有收藏的歌手"
+        @select="onMinimalFavoriteArtistSelect"
+      />
 
     </template>
   </div>

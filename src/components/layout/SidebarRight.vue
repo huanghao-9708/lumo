@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue';
+import { ref, watch, computed } from 'vue';
 import { Heart, MoreHorizontal, ListMusic, Disc3, Settings2 } from 'lucide-vue-next';
 import { usePlayerStore } from '../../stores/player';
 import { useUiStore } from '../../stores/ui';
+import { useDesktopModeStore } from '../../stores/desktopMode';
 import { useArtworkSrc } from '../../composables/useArtworkSrc';
 import LyricsView from '../shared/LyricsView.vue';
 import { libraryGetTrackVersions, librarySetPrimaryFile } from '../../api/library';
@@ -11,6 +12,9 @@ import EqualizerIndicator from '../shared/EqualizerIndicator.vue';
 
 const playerStore = usePlayerStore();
 const uiStore = useUiStore();
+// 极简模式：右栏封面不挂载（DM-04，歌词文字保留）
+const desktopMode = useDesktopModeStore();
+const visualAllowed = computed(() => desktopMode.visualAllowed);
 
 /* ============ Tab：正在播放 / 播放队列 ============ */
 const tab = ref<'now-playing' | 'queue'>('now-playing');
@@ -110,8 +114,8 @@ async function switchVersion(fileId: number) {
 
       <template v-else>
         <div class="flex-1 overflow-y-auto px-6 pt-4 pb-4 flex flex-col min-h-0">
-          <!-- Album Cover：限高正方形并居中（占满整宽会把歌词挤出可视区） -->
-          <div class="h-[28vh] max-h-[220px] aspect-square mx-auto bg-bg-hover rounded-[12px] mb-4 overflow-hidden flex-shrink-0 flex items-center justify-center shadow-lg ring-1 ring-black/5 dark:ring-white/10">
+          <!-- Album Cover：限高正方形并居中（占满整宽会把歌词挤出可视区）；极简模式不挂载 -->
+          <div v-if="visualAllowed" class="h-[28vh] max-h-[220px] aspect-square mx-auto bg-bg-hover rounded-[12px] mb-4 overflow-hidden flex-shrink-0 flex items-center justify-center shadow-lg ring-1 ring-black/5 dark:ring-white/10">
             <img v-if="coverSrc" :src="coverSrc" class="w-full h-full object-cover" alt="cover" />
             <Disc3 v-else class="w-10 h-10 text-text-disabled" />
           </div>

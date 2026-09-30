@@ -128,6 +128,13 @@ onMounted(() => {
   sc?.addEventListener('wheel', onUserScrollIntent, { passive: true });
   sc?.addEventListener('touchstart', onUserScrollIntent, { passive: true });
   sc?.addEventListener('pointerdown', onUserScrollIntent, { passive: true });
+  // DM-04 验收 3：歌词视图挂载 = 显式打开——极简/迷你下按需加载（正常模式已由
+  // store 的 watch 预载，这里幂等）；打开期间切歌仅因可见而刷新。
+  void playerStore.ensureLyricsLoaded();
+});
+
+watch(() => playerStore.currentTrack?.id, () => {
+  void playerStore.ensureLyricsLoaded();
 });
 
 onBeforeUnmount(() => {

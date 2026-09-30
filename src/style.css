@@ -309,3 +309,30 @@ input:focus, textarea:focus, select:focus {
     scroll-behavior: auto !important;
   }
 }
+
+/* ===== 极简体验模式（desktop-modes DM-04） =====
+   data-experience="minimal" 由 desktopMode store 写到 <html>。
+   目标：实色背景、关闭背景模糊与非必要动画（呼吸/光晕/抽屉），
+   保留选中、禁用、加载、错误和焦点反馈（Loader 旋转、颜色过渡）。
+   与 prefers-reduced-motion 同策略：Loader2 的 animate-spin 走
+   animation-duration 缩到 0.01ms 会失去"加载中"信号，例外保留。 */
+[data-experience="minimal"] *,
+[data-experience="minimal"] *::before,
+[data-experience="minimal"] *::after {
+  backdrop-filter: none !important;
+}
+[data-experience="minimal"] *,
+[data-experience="minimal"] *::before,
+[data-experience="minimal"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+}
+[data-experience="minimal"] [class*="animate-"] {
+  animation: none !important;
+}
+/* Loader 旋转是"加载中"的唯一视觉信号，极简下保留 */
+[data-experience="minimal"] .animate-spin,
+[data-experience="minimal"] svg.animate-spin,
+[data-experience="minimal"] *[class*="animate-spin"] {
+  animation: spin 1s linear infinite !important;
+}

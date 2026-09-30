@@ -1369,6 +1369,52 @@ const albums = shallowRef<Album[]>([]);
   // 监听当前播放曲目，自动加载对应歌词与文件元数据（解耦并行加载，防止慢速网络歌词阻塞元数据展示）
   let currentTrackRequestId = 0;
   let trackInfoDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /**
+   * 拉取并写入歌词（按既有联网授权，门禁由调用方决定）。
+   * 自动加载（正常完整）与显式打开加载（DM-04 极简验收 3）共用此实现。
+   */
+  async function loadLyricsForTrack(track: Track, reqId: number) {
+    try {
+      const lrcText = uiStore.fetchLyricsOnline
+        ? await libraryGetLyrics(track.id, true)
+        : null;
+      if (reqId !== currentTrackRequestId) return;
+      loadedLyricsTrackId = track.id;
+      if (lrcText) {
+        lyrics.value = parseLrc(lrcText);
+      } else {
+        lyrics.value = [
+          { text: track.title, time: 0 },
+          { text: track.artist, time: 3 },
+          { text: "— 暂无歌词 —", time: 6 }
+        ];
+      }
+    } catch (e) {
+      console.error("Failed to load lyrics:", e);
+      if (reqId !== currentTrackRequestId) return;
+      loadedLyricsTrackId = track.id;
+      lyrics.value = [
+        { text: track.title, time: 0 },
+        { text: "— 暂无歌词 —", time: 3 }
+      ];
+    }
+  }
+
+  /** 最近一次成功写入歌词的曲目 id（显式加载的去重依据） */
+  let loadedLyricsTrackId: number | null = null;
+
+  /**
+   * 显式打开歌词时按需加载（DM-04 验收 3）：极简/迷你下切歌不自动加载，
+   * 歌词视图挂载（= 显式打开）或打开期间切歌时调用；仍受联网授权约束。
+   */
+  async function ensureLyricsLoaded() {
+    const track = currentTrack.value;
+    if (!track) return;
+    if (loadedLyricsTrackId === track.id && lyrics.value.length > 0) return;
+    await loadLyricsForTrack(track, currentTrackRequestId);
+  }
+
   watch(currentTrack, (newTrack) => {
     const reqId = ++currentTrackRequestId;
     if (trackInfoDebounceTimer) {
@@ -1396,35 +1442,11 @@ const albums = shallowRef<Album[]>([]);
             }
           });
 
-        // 2. 独立异步加载歌词（网络请求与本地查询独立，不拖垮主 UI）。
-        // DM-03 门禁：极简/迷你（visualAllowed=false）不自动加载歌词，
-        // 显式打开歌词入口时才按既有授权加载（M2 接入口）；偏好不变。
-        const lyricsPromise = desktopMode.visualAllowed && uiStore.fetchLyricsOnline
-          ? libraryGetLyrics(trackId, true)
-          : Promise.resolve(null);
-
-        lyricsPromise
-          .then(lrcText => {
-            if (reqId !== currentTrackRequestId) return;
-            if (lrcText) {
-              lyrics.value = parseLrc(lrcText);
-            } else {
-              lyrics.value = [
-                { text: newTrack.title, time: 0 },
-                { text: newTrack.artist, time: 3 },
-                { text: "— 暂无歌词 —", time: 6 }
-              ];
-            }
-          })
-          .catch(e => {
-            console.error("Failed to load lyrics:", e);
-            if (reqId === currentTrackRequestId) {
-              lyrics.value = [
-                { text: newTrack.title, time: 0 },
-                { text: "— 暂无歌词 —", time: 3 }
-              ];
-            }
-          });
+        // 2. 歌词：正常完整自动加载；极简/迷你不自动（显式打开才经 ensureLyricsLoaded 加载，
+        //    DM-03/DM-04 验收 3），联网授权偏好不受模式影响
+        if (desktopMode.visualAllowed) {
+          void loadLyricsForTrack(newTrack, reqId);
+        }
       }, 100);
     } else {
       lyrics.value = [];
@@ -2754,6 +2776,8 @@ const albums = shallowRef<Album[]>([]);
     lastSessionSummary,
     applySessionSummary,
     syncSessionFromBackend,
+    // 显式歌词加载（DM-04 验收 3）
+    ensureLyricsLoaded,
     deletePlaylist,
     removeTrackFromPlaylist,
     // 专辑无限滚动

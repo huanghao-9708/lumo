@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { invoke } from "../utils/tauriInvoke";
 import { useUiStore } from "./ui";
 
@@ -105,6 +105,15 @@ export const useDesktopModeStore = defineStore("desktopMode", () => {
    * 版本不一致即丢弃——保证「有效策略先于异步响应」。
    */
   const strategyVersion = ref(1);
+
+  // 体验标记写到 <html>（与 data-theme 同模式）：极简下 CSS 关闭背景模糊
+  // 与非必要动画（style.css 的 [data-experience="minimal"] 规则）
+  if (typeof document !== 'undefined') {
+    document.documentElement.setAttribute('data-experience', visualAllowed.value ? 'full' : 'minimal');
+    watch(visualAllowed, (allowed) => {
+      document.documentElement.setAttribute('data-experience', allowed ? 'full' : 'minimal');
+    });
+  }
 
   /** 把视觉策略下发给后端（回填批次门禁）。advisory：失败只影响可选任务时序 */
   function pushVisualPolicy() {
