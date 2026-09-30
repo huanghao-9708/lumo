@@ -31,6 +31,7 @@ import TrackListHeader from '../shared/trackList/TrackListHeader.vue';import Tra
 import { useTrackColumns } from '../shared/trackList/useTrackColumns';
 import { TRACK_ROW_HEIGHT, columnCellStyle } from '../shared/trackList/columns';
 import { useDesktopModeStore } from '../../stores/desktopMode';
+import { libraryGetTrackIds } from '../../api/library';
 
 const playerStore = usePlayerStore();
 const uiStore = useUiStore();
@@ -257,11 +258,34 @@ function playSong(index: number) {
   playerStore.playTrack(index);
 }
 
-/* ============ 批量选择（全选以已加载列表为准） ============ */
-const isAllSelected = computed(() => batch.count > 0 && batch.count === displayTracks.value.length);
-function onToggleSelectAll() {
-  if (isAllSelected.value) batch.selectNone();
-  else batch.selectAll(displayTracks.value);
+/* ============ 批量选择（全选以已加载列表为准；筛选后=完整结果集，DM-05 验收 4） ============ */
+const isAllSelected = computed(() => {
+  if (batch.resultWide) return true;
+  return batch.count > 0 && batch.count === displayTracks.value.length;
+});
+const isSelectAllBusy = ref(false);
+async function onToggleSelectAll() {
+  if (isAllSelected.value) {
+    batch.selectNone();
+    return;
+  }
+  const q = playerStore.searchQuery.trim();
+  if (q && !isQueueView.value) {
+    // 筛选后全选：从后端拉取完整结果集 ID（低频显式动作），不缩为已加载窗口
+    if (isSelectAllBusy.value) return;
+    isSelectAllBusy.value = true;
+    try {
+      batch.selectAllIds(await libraryGetTrackIds(q));
+    } catch {
+      // 可理解回退（验收 5）：完整结果集获取失败时退回已加载窗口并提示
+      batch.selectAll(displayTracks.value);
+      uiStore.showToast('完整结果集获取失败，已选中已加载部分', 'error');
+    } finally {
+      isSelectAllBusy.value = false;
+    }
+    return;
+  }
+  batch.selectAll(displayTracks.value);
 }
 
 /* ============ 虚拟列表 ============ */
@@ -336,10 +360,15 @@ watch(() => playerStore.activeLibraryTab, () => {
 watch(() => playerStore.activePlaylistId, () => batch.exit());
 
 onMounted(() => {
-  // 仅在还没有数据时首次拉取，避免覆盖 restoreSession 的状态
-  if (playerStore.tracks.length === 0 && playerStore.albums.length === 0) {
+  // 迷你返回后的浏览恢复（DM-05）：锚点窗口播种替代默认加载
+  if (playerStore.pendingBrowseRestore) {
+    void playerStore.applyBrowseRestore();
+  } else if (playerStore.tracks.length === 0 && playerStore.albums.length === 0) {
+    // 仅在还没有数据时首次拉取，避免覆盖 restoreSession 的状态
     loadForCurrentTab();
   }
+  // 恢复搜索框文本（快照恢复把 searchQuery 写回了 store）
+  if (playerStore.searchQuery) searchInput.value = playerStore.searchQuery;
   // 拉取收藏列表，用于详情页收藏按钮状态
   playerStore.fetchFavoriteAlbums();
   playerStore.fetchFavoriteArtists();
@@ -549,6 +578,7 @@ onMounted(() => {
           v-if="batch.isActive"
           :selected-ids="[...batch.selectedIds]"
           :all-selected="isAllSelected"
+          :busy="isSelectAllBusy"
           @exit="batch.exit()"
           @toggle-select-all="onToggleSelectAll"
         />

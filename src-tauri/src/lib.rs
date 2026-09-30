@@ -565,6 +565,7 @@ pub fn run() {
             crate::commands::scanner::source_list,
             crate::commands::scanner::source_remove,
             crate::commands::library::library_get_tracks,
+            crate::commands::library::library_get_track_ids,
             crate::commands::library::library_get_albums,
             crate::commands::library::library_get_album_by_id,
             crate::commands::library::library_get_album_count,

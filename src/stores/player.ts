@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { ref, computed, watch, shallowRef, reactive } from "vue";
+import { ref, computed, watch, shallowRef, reactive, nextTick } from "vue";
 import { listen } from '@tauri-apps/api/event';
 
 import {
@@ -868,6 +868,32 @@ const albums = shallowRef<Album[]>([]);
       tracksTotalCount.value = c.tracks;
     } catch (e) {
       console.error("Failed to fetch library counts:", e);
+    }
+  }
+
+  /**
+   * 锚点窗口播种（DM-05 验收 3）：以指定偏移为窗口起点**整体替换** tracks，
+   * 不从第一页逐页回放。用于迷你返回后的恢复；后续 fetchTracks 追加从窗口末端续接。
+   */
+  async function seedTracksWindow(windowOffset: number, limit = 200) {
+    const gen = ++fetchTracksGeneration; // 使在途 append 请求过期
+    isLoadingTracks.value = true;
+    try {
+      isErrorTracks.value = false;
+      const result: TrackDTO[] = await libraryGetTracks(
+        limit,
+        Math.max(0, windowOffset),
+        searchQuery.value || undefined
+      );
+      if (gen !== fetchTracksGeneration) return;
+      hasMoreTracks.value = result.length >= limit;
+      tracks.value = mapTrackList(result);
+      tracksOffset = Math.max(0, windowOffset) + result.length;
+    } catch (e) {
+      console.error("Failed to seed tracks window:", e);
+      isErrorTracks.value = true;
+    } finally {
+      isLoadingTracks.value = false;
     }
   }
 
@@ -2268,6 +2294,131 @@ const albums = shallowRef<Album[]>([]);
     });
   }
 
+  // ===== 浏览上下文快照与释放（DM-05）=====
+  // 进入迷你（窗口形态）：快照导航上下文 → 释放浏览大数组/详情/缓存；
+  // 返回完整：MainContent 挂载时调用 applyBrowseRestore()，按锚点窗口恢复，
+  // 不从第一页逐页回放（验收 1/3）。播放会话（queue/index/进度）全程不动。
+  interface BrowseSnapshot {
+    activeLibraryTab: string;
+    activeAlbumId: number | null;
+    activeArtistId: number | null;
+    activePlaylistId: number | null;
+    searchQuery: string;
+    tracksAnchorOffset: number;
+    tracksAnchorId: number | null;
+  }
+  let browseSnapshot: BrowseSnapshot | null = null;
+  /** 非视觉态期间发生过扫描/回填，待恢复后合并刷新一次（验收 2） */
+  const browseDirty = ref(false);
+  /** 迷你返回后的恢复待办；由 MainContent onMounted 消费（组件挂载后 watcher 才有效） */
+  const pendingBrowseRestore = ref(false);
+
+  function snapshotBrowseContext() {
+    const anchorOffset = Math.max(0, tracksOffset - tracksLimit);
+    browseSnapshot = {
+      activeLibraryTab: activeLibraryTab.value,
+      activeAlbumId: activeAlbumId.value,
+      activeArtistId: activeArtistId.value,
+      activePlaylistId: activePlaylistId.value,
+      searchQuery: searchQuery.value,
+      tracksAnchorOffset: anchorOffset,
+      tracksAnchorId: tracks.value[anchorOffset]?.id ?? null,
+    };
+  }
+
+  function releaseBrowseData() {
+    tracks.value = [];
+    albums.value = [];
+    artists.value = [];
+    favoriteAlbums.value = [];
+    favoriteArtists.value = [];
+    playlists.value = []; // 含 base64 缩略图（M0 清单的大头）
+    smartPlaylistTracks.value = [];
+    currentAlbumDetailsData.value = null;
+    currentArtistDetailsData.value = null;
+    currentPlaylistDetailsData.value = null;
+    currentFolderContents.value = [];
+    folderTracks.value = [];
+    artistDetailsCache.clear();
+    invalidatePlayability();
+    insights.value = null;
+    stats.value = null;
+    lyrics.value = []; // 歌词浏览对象；显式打开按需重载（DM-04 ensureLyricsLoaded）
+    tracksOffset = 0;
+    hasMoreTracks.value = true;
+  }
+
+  watch(() => desktopMode.windowForm, (form, prev) => {
+    if (form === 'mini' && prev !== 'mini') {
+      snapshotBrowseContext();
+      releaseBrowseData();
+    } else if (form === 'full' && prev === 'mini') {
+      pendingBrowseRestore.value = true;
+    }
+  });
+
+  // 极简↔正常（形态保持完整）：策略上升沿合并刷新一次（验收 2）
+  watch(() => desktopMode.visualAllowed, async (allowed, prev) => {
+    if (allowed && prev === false && browseDirty.value) {
+      await nextTick(); // 与迷你返回的恢复路径让位：恢复路径会顺带合并刷新
+      if (pendingBrowseRestore.value) return;
+      browseDirty.value = false;
+      await fetchSources();
+      await Promise.all([fetchTracks(true), fetchAlbums(true), fetchArtists(true)]);
+      invalidatePlayability();
+    }
+  });
+
+  /**
+   * 迷你返回后的浏览恢复（由 MainContent onMounted 调用，替代默认首页加载）：
+   * 导航上下文落位（id 归 null 再赋值以触发详情 watcher）+ 锚点窗口播种。
+   */
+  async function applyBrowseRestore() {
+    const snap = browseSnapshot;
+    browseSnapshot = null;
+    pendingBrowseRestore.value = false;
+    if (!snap) return;
+    browseDirty.value = false; // 恢复即拿到扫描后最新数据，dirty 合并完成（验收 2）
+    activeAlbumId.value = null;
+    activeArtistId.value = null;
+    activePlaylistId.value = null;
+    activeLibraryTab.value = snap.activeLibraryTab;
+    await nextTick();
+    activeAlbumId.value = snap.activeAlbumId;
+    activeArtistId.value = snap.activeArtistId;
+    activePlaylistId.value = snap.activePlaylistId;
+
+    if (snap.activeAlbumId || snap.activeArtistId || snap.activePlaylistId) return; // 详情 watcher 自行加载
+    switch (snap.activeLibraryTab) {
+      case '全部歌曲':
+        searchQuery.value = snap.searchQuery;
+        // 锚点窗口播种（验收 3）：以快照偏移为中心取一个窗口，不逐页回放
+        await seedTracksWindow(snap.tracksAnchorOffset);
+        break;
+      case '最近播放':
+        await fetchRecentlyPlayed();
+        break;
+      case '喜欢的音乐':
+        await fetchFavoriteTracks();
+        break;
+      case '专辑':
+        await fetchAlbums(true);
+        break;
+      case '艺术家':
+        await fetchArtists(true);
+        break;
+      case '收藏的专辑':
+        await fetchFavoriteAlbums();
+        break;
+      case '收藏的歌手':
+        await fetchFavoriteArtists();
+        break;
+      default:
+        // 播放列表（内存队列，全程保留）/首页/设置等：自管或无需处理
+        break;
+    }
+  }
+
   function isSameTrackList(a: Track[], b: Track[]): boolean {
     if (a === b) return true;
     if (a.length !== b.length) return false;
@@ -2516,6 +2667,21 @@ const albums = shallowRef<Album[]>([]);
     unlistenScanComplete = await listen<ScanCompleteEvent>('scan-complete', async (event) => {
       // 扫描结果一律以重新拉取为准：写死"刚刚扫描"会把失败的扫描报成成功
       // （后端 last_scan_at 只在成功时推进，失败原因在 last_error）。
+      // DM-05 验收 2：非视觉态（极简/迷你）期间不拉完整曲库——只更新计数并标记
+      // browseDirty，恢复视觉态时合并刷新一次；来源列表是轻量表，保持刷新。
+      if (!desktopMode.visualAllowed) {
+        browseDirty.value = true;
+        void fetchCounts();
+        await fetchSources();
+        const payload = event.payload;
+        if (payload && payload.success === false && payload.message && payload.persisted === false) {
+          const source = sources.value.find(s => s.id === payload.source_id);
+          if (source) {
+            source.lastError = payload.message;
+          }
+        }
+        return;
+      }
       await fetchSources();
       await fetchTracks(true);
       await fetchAlbums(true);
@@ -2778,6 +2944,10 @@ const albums = shallowRef<Album[]>([]);
     syncSessionFromBackend,
     // 显式歌词加载（DM-04 验收 3）
     ensureLyricsLoaded,
+    // 浏览上下文释放与恢复（DM-05）：MainContent 挂载时消费恢复待办
+    browseDirty,
+    pendingBrowseRestore,
+    applyBrowseRestore,
     deletePlaylist,
     removeTrackFromPlaylist,
     // 专辑无限滚动

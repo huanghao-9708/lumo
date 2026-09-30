@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { nextTick } from "vue";
+import { flushPromises } from "@vue/test-utils";
 
 /**
  * DM-02 常驻会话验收测试（desktop-modes 02 §4 DM-02）。
@@ -225,5 +226,127 @@ describe("DM-02 常驻会话", () => {
     store.currentIndex = 0;
     await new Promise((r) => setTimeout(r, 250));
     expect(invokeMock.mock.calls.filter(([cmd]) => cmd === "library_get_lyrics").length).toBeGreaterThan(0);
+  });
+
+  it("DM-05 验收1/3：进入迷你释放浏览数组，返回按锚点窗口恢复且不逐页回放", async () => {
+    const trackDto = (i: number) => ({
+      id: i, title: `曲目${i}`, artist: "歌手", artist_id: null, album: "专辑", album_id: null,
+      duration_ms: 180000, file_ext: "MP3", media_file_id: i + 1000, is_favorite: false,
+      cover_artwork_id: null, file_size: null, source_kind: "local", year: null,
+      genres: null, bitrate: null, sample_rate: null, bit_depth: null,
+    });
+    invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "library_get_tracks") {
+        const offset = (args?.offset as number) ?? 0;
+        if ((args?.limit as number) === 200) {
+          // 播种请求（limit=200）：以锚点偏移为起点返回 200 行窗口
+          return Promise.resolve(Array.from({ length: 200 }, (_, k) => trackDto(offset + k)));
+        }
+        if (offset === 0) return Promise.resolve(Array.from({ length: 50 }, (_, k) => trackDto(k)));
+        if (offset === 50) return Promise.resolve(Array.from({ length: 50 }, (_, k) => trackDto(k + 50)));
+        if (offset === 100) return Promise.resolve(Array.from({ length: 50 }, (_, k) => trackDto(k + 100)));
+        return Promise.resolve([]);
+      }
+      if (cmd === "desktop_get_preferences") {
+        return Promise.resolve({
+          preferences: { schemaVersion: 1, experienceMode: "normal", windowForm: "full", fullGeometry: null, miniGeometry: null, miniAlwaysOnTop: false },
+          fileExisted: true,
+        });
+      }
+      return Promise.resolve([]);
+    });
+
+    const { useDesktopModeStore } = await import("./desktopMode");
+    const desktopMode = useDesktopModeStore();
+    await desktopMode.init();
+
+    const store = usePlayerStore();
+    // 模拟核心会话与深页浏览（3 页 → offset=150）
+    store.activeLibraryTab = "全部歌曲";
+    store.queue = [{
+      id: 999, title: "播放中", artistId: null, artist: "歌手", albumId: null,
+      album: "专辑", duration: "3:00", durationSec: 180, format: "MP3",
+      coverColor: "", cover_artwork_id: null, isFavorite: false,
+      primary_file_id: 1, fileSize: null, sourceKind: "local",
+    }] as never;
+    store.currentIndex = 0;
+    await store.fetchTracks();
+    await store.fetchTracks();
+    await store.fetchTracks();
+    expect(store.tracks).toHaveLength(150);
+
+    // 进入迷你：浏览数组释放，核心会话保留
+    expect(await desktopMode.enterMini()).toBe(true);
+    expect(store.tracks).toHaveLength(0);
+    expect(store.albums).toHaveLength(0);
+    expect(store.playlists).toHaveLength(0);
+    expect(store.lyrics).toHaveLength(0);
+    expect(store.queue).toHaveLength(1); // 核心会话不动
+
+    // 返回完整：挂载恢复待办 → 锚点窗口播种（offset=100，不是从 0 逐页）
+    expect(await desktopMode.exitMini()).toBe(true);
+    expect(store.pendingBrowseRestore).toBe(true);
+    await store.applyBrowseRestore();
+    const seedCall = invokeMock.mock.calls.find(([cmd, args]) =>
+      cmd === "library_get_tracks" && (args as Record<string, unknown>)?.offset === 100);
+    expect(seedCall).toBeTruthy();
+    expect(store.tracks).toHaveLength(200); // 窗口整体替换，非 0+50+50+… 回放
+    expect(store.pendingBrowseRestore).toBe(false);
+  });
+
+  it("DM-05 验收2：非视觉态扫描完成不拉完整曲库，恢复视觉态合并刷新一次", async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "library_get_counts") {
+        return Promise.resolve({ tracks: 32000, albums: 3000, artists: 2000, favorites: 0, playlists: 0, sources: 1, favorite_tracks: 0, favorite_albums: 0, favorite_artists: 0, recently_played: 0 });
+      }
+      return Promise.resolve([]);
+    });
+
+    const { useDesktopModeStore } = await import("./desktopMode");
+    const desktopMode = useDesktopModeStore();
+    await desktopMode.init();
+    await desktopMode.setExperienceMode("minimal");
+
+    const store = usePlayerStore();
+    await vi.waitFor(() => expect(eventHandlers.has("scan-complete")).toBe(true));
+
+    const bigFetchesBefore = invokeMock.mock.calls.filter(([cmd]) =>
+      ["library_get_tracks", "library_get_albums", "library_get_artists"].includes(cmd as string)).length;
+    eventHandlers.get("scan-complete")!({ payload: { source_id: 1, success: true } });
+    await flushPromises();
+    eventHandlers.get("scan-complete")!({ payload: { source_id: 1, success: true } });
+    await flushPromises();
+
+    // 两次扫描完成：完整曲库零拉取，仅计数 + dirty
+    const bigFetchesAfter = invokeMock.mock.calls.filter(([cmd]) =>
+      ["library_get_tracks", "library_get_albums", "library_get_artists"].includes(cmd as string)).length;
+    expect(bigFetchesAfter).toBe(bigFetchesBefore);
+    expect(store.browseDirty).toBe(true);
+
+    // 恢复视觉态：合并刷新一次（tracks/albums/artists 各一次 reset 拉取）
+    await desktopMode.setExperienceMode("normal");
+    await flushPromises();
+    const tracksReset = invokeMock.mock.calls.filter(([cmd, args]) =>
+      cmd === "library_get_tracks" && (args as Record<string, unknown>)?.offset === 0);
+    expect(tracksReset.length).toBeGreaterThan(0);
+    expect(store.browseDirty).toBe(false);
+  });
+
+  it("DM-05 验收4：结果集级全选覆盖完整结果集，手工切换退出该语义", async () => {
+    const { useBatchSelect } = await import("../composables/useBatchSelect");
+    const batch = useBatchSelect();
+    batch.enter();
+    batch.selectAllIds([11, 12, 13, 14]);
+    expect(batch.count).toBe(4);
+    expect(batch.resultWide).toBe(true);
+    expect(batch.isSelected(12)).toBe(true);
+    expect(batch.isSelected(99)).toBe(false);
+
+    batch.toggle({ id: 12 } as never);
+    expect(batch.resultWide).toBe(false); // 手工切换退出结果集级语义
+
+    batch.selectAllIds([]);
+    expect(batch.resultWide).toBe(false);
+    expect(batch.count).toBe(0);
   });
 });

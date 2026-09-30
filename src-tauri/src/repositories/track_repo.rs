@@ -915,4 +915,56 @@ impl TrackRepo {
         let ranked = Self::ranked_details(conn, ids, "t.id ASC")?;
         Ok(ranked.into_iter().map(|r| r.track).collect())
     }
+
+    /// 当前查询下的**完整结果集**曲目 ID（DM-05 验收 4：筛选后全选不得缩为已加载窗口）。
+    /// 与 get_tracks_paginated 同源（同一 WHERE/ORDER），只取 id 列，无分页上限；
+    /// 显式全选是低频动作，30k 级结果集的 i64 数组代价可接受。
+    pub fn get_track_ids(
+        conn: &Connection,
+        search_keyword: Option<String>,
+    ) -> rusqlite::Result<Vec<i64>> {
+        let mut sql = "
+                SELECT t.id
+                FROM tracks t
+                LEFT JOIN albums al ON t.album_id = al.id
+                JOIN media_files m ON m.id = COALESCE(t.primary_file_id, (SELECT mf.id FROM media_files mf WHERE mf.track_id = t.id ORDER BY mf.id LIMIT 1))
+                WHERE 1=1
+            ".to_string();
+
+        // 与 get_tracks_paginated 的关键词过滤保持同一匹配面（标题/专辑名/艺人名）。
+        // 艺人名在分页查询里来自 GROUP_CONCAT 子查询；这里用 EXISTS 语义等价（任一艺人命中即算）。
+        let keyword_pattern = if let Some(keyword) = search_keyword {
+            let kw = keyword.trim();
+            if !kw.is_empty() {
+                sql.push_str(
+                    " AND (t.title LIKE ?1 \
+                     OR EXISTS (SELECT 1 FROM albums a2 WHERE a2.id = t.album_id AND a2.title LIKE ?1) \
+                     OR EXISTS (SELECT 1 FROM track_artists ta2 JOIN artists a3 ON ta2.artist_id = a3.id WHERE ta2.track_id = t.id AND a3.name LIKE ?1))",
+                );
+                Some(format!("%{}%", kw))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        sql.push_str(" ORDER BY t.added_at DESC, t.id ASC");
+
+        let mut ids = Vec::new();
+        if let Some(pattern) = keyword_pattern {
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(params![pattern], |row| row.get::<_, i64>(0))?;
+            for id in rows {
+                ids.push(id?);
+            }
+        } else {
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map([], |row| row.get::<_, i64>(0))?;
+            for id in rows {
+                ids.push(id?);
+            }
+        }
+        Ok(ids)
+    }
 }

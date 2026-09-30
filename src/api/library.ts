@@ -23,6 +23,11 @@ export function libraryGetTracks(limit: number, offset: number, searchKeyword?: 
   return invoke('library_get_tracks', { limit, offset, searchKeyword });
 }
 
+/** 当前查询下的完整结果集曲目 ID（DM-05 验收 4：筛选后全选=完整结果集） */
+export function libraryGetTrackIds(searchKeyword?: string): Promise<number[]> {
+  return invoke('library_get_track_ids', { searchKeyword });
+}
+
 export function libraryGetAlbums(limit: number, offset: number, searchKeyword?: string, minTrackCount?: number): Promise<AlbumDTO[]> {
   return invoke('library_get_albums', { limit, offset, searchKeyword, minTrackCount });
 }

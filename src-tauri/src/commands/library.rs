@@ -31,6 +31,18 @@ pub fn library_get_tracks(
     .map_err(|e| e.into())
 }
 
+/// 当前查询下的完整结果集曲目 ID（DM-05 验收 4：筛选后全选=完整结果集，不缩为已加载窗口）。
+#[tauri::command(async)]
+pub fn library_get_track_ids(
+    db_state: State<'_, DbState>,
+    search_keyword: Option<String>,
+) -> Result<Vec<i64>, AppError> {
+    let _trace = ipc_trace!("library_get_track_ids");
+    let conn = db_state.db.get()?;
+    crate::repositories::track_repo::TrackRepo::get_track_ids(&conn, search_keyword)
+        .map_err(|e| e.into())
+}
+
 #[tauri::command(async)]
 pub fn library_get_albums(
     db_state: State<'_, DbState>,
