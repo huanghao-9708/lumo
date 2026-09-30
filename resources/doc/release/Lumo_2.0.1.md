@@ -1,5 +1,7 @@
 # Lumo 2.0.1 发布说明
 
+> Android APK 未经真机矩阵验证，仅供预览；macOS/Linux 安装包为技术预览，Windows 安装包未作 Authenticode 签名。
+
 本次更新聚焦桌面端内存占用与大曲库滚动体验，兼容 2.0.0 的曲库数据。
 
 ## 变化
@@ -13,6 +15,6 @@
 ## 验证
 
 - 前端生产构建、Rust `cargo check` 与 release 编译通过；Clippy、Rust 格式检查和联网登记检查通过。
-- Windows x64 MSI 与 NSIS 安装包已在本机成功构建；GitHub Actions 会在发布门禁通过后上传正式 Release 资产。
-- PR/主干质量门禁负责在发布前运行前端与 Rust 测试。
+- Windows x64 MSI 与 NSIS 安装包已在本机成功构建；GitHub Release 已提供 Windows、macOS 和 Linux 桌面资产。
+- 主干 CI 与发布门禁中的前端/Rust 测试均通过。
 - 尚无本次代码的内存 A/B 实测结果；本版本不承诺固定 MiB 上限。
