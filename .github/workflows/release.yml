@@ -91,8 +91,6 @@ jobs:
             preview_only: false
 
     runs-on: ${{ matrix.platform }}
-    # Stable 发布只包含已列入正式平台的 Windows；macOS/Linux 保留技术预览。
-    if: ${{ !matrix.preview_only || (startsWith(github.ref, 'refs/tags/') && contains(github.ref_name, '-')) }}
     # 预发布 tag（v*-beta.N）判定，供通道隔离与 Windows 打包目标两处复用。
     # env 里的布尔会被转成字符串，比较时写 == 'true'。
     env:
@@ -129,6 +127,8 @@ jobs:
         run: npm install
 
       - name: Build and Publish
+        # Stable 只发布正式支持的 Windows；macOS/Linux 保留技术预览产物，不混入 Stable。
+        if: ${{ !matrix.preview_only || (startsWith(github.ref, 'refs/tags/') && contains(github.ref_name, '-')) }}
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
