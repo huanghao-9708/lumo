@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, onBeforeUnmount } from 'vue';
 import {
   Folder, ChevronRight, ChevronDown, Loader2, Music, Plus
 } from 'lucide-vue-next';
 import { usePlayerStore } from '../../stores/player';
+import { useUiStore } from '../../stores/ui';
 import type { DirectoryNodeDTO } from '../../api/types';
 import { libraryGetFolderChildren } from '../../api/library';
 import { useBatchSelect } from '../../composables/useBatchSelect';
@@ -15,6 +16,7 @@ import { useTrackColumns } from '../shared/trackList/useTrackColumns';
 import type { TrackListContext } from '../shared/trackList/columns';
 
 const playerStore = usePlayerStore();
+const uiStore = useUiStore();
 
 /* ============ 批量选择（本视图一份实例；切换文件夹自动退出） ============ */
 const batch = useBatchSelect();
@@ -25,30 +27,22 @@ function onToggleSelectAll() {
   else batch.selectAll(playerStore.folderTracks);
 }
 
-/**
- * 文件夹浏览状态（当前数据源 / 已展开目录 / 已加载的子节点）挂在模块作用域：
- * 该视图在切到详情页时会被 v-if 销毁，组件局部 ref 会连同「展开的目录树」一起丢失，
- * 返回时树是空的，滚动位置也就无从恢复。曲目列表与选中路径本来就在 store 里，不受影响。
- */
-const browseState = {
-  sourceId: null as number | null,
-  loadedChildren: {} as Record<string, DirectoryNodeDTO[]>,
-  expandedPaths: {} as Record<string, boolean>,
-};
-
-const selectedSourceId = ref<number | null>(browseState.sourceId);
+// Keep navigation in the store, but release loaded directory objects on unmount.
+const selectedSourceId = computed({
+  get: () => playerStore.folderBrowseContext.sourceId,
+  set: (id: number | null) => { playerStore.folderBrowseContext.sourceId = id; },
+});
 watch(selectedSourceId, () => batch.exit());
-const loadedChildren = ref<Record<string, DirectoryNodeDTO[]>>(browseState.loadedChildren);
-const expandedPaths = ref<Record<string, boolean>>(browseState.expandedPaths);
+const loadedChildren = ref<Record<string, DirectoryNodeDTO[]>>({});
+const expandedPaths = computed({
+  get: () => playerStore.folderBrowseContext.expandedPaths,
+  set: (paths: Record<string, boolean>) => { playerStore.folderBrowseContext.expandedPaths = paths; },
+});
 const loadingPaths = ref<Record<string, boolean>>({});
 const pickerDirPath = ref<string | null>(null);
-
-// 任一变更即写回模块态，供下次挂载复用
-watch([selectedSourceId, loadedChildren, expandedPaths], () => {
-  browseState.sourceId = selectedSourceId.value;
-  browseState.loadedChildren = loadedChildren.value;
-  browseState.expandedPaths = expandedPaths.value;
-});
+let treeRevision = 0;
+let disposed = false;
+onBeforeUnmount(() => { disposed = true; treeRevision++; });
 
 /** 滚动位置记忆：目录树 / 曲目列表各记一份（曲目列表按目录分别记） */
 const treeScrollEl = useScrollRestore(() => `folder-tree:${selectedSourceId.value ?? 0}`);
@@ -85,16 +79,23 @@ const visibleTree = computed(() => {
 });
 
 async function loadChildrenForPath(parentPath: string) {
-  if (!selectedSourceId.value) return;
-  if (loadedChildren.value[parentPath]) return;
-    loadingPaths.value = { ...loadingPaths.value, [parentPath]: true };
+  const sourceId = selectedSourceId.value;
+  if (sourceId == null || disposed || playerStore.pendingBrowseRestore) return;
+  if (loadedChildren.value[parentPath] || loadingPaths.value[parentPath]) return;
+  const revision = treeRevision;
+  const isCurrent = () => !disposed && revision === treeRevision && selectedSourceId.value === sourceId;
+  loadingPaths.value = { ...loadingPaths.value, [parentPath]: true };
   try {
-    const res = await libraryGetFolderChildren(selectedSourceId.value, parentPath || undefined);
-    loadedChildren.value = { ...loadedChildren.value, [parentPath]: res.children };
+    const res = await libraryGetFolderChildren(sourceId, parentPath || undefined);
+    if (isCurrent()) loadedChildren.value = { ...loadedChildren.value, [parentPath]: res.children };
+  } catch (error) {
+    if (isCurrent()) uiStore.showToast('目录加载失败，请重新展开目录', 'error');
   } finally {
-    const nextLoading = { ...loadingPaths.value };
-    delete nextLoading[parentPath];
-    loadingPaths.value = nextLoading;
+    if (isCurrent()) {
+      const nextLoading = { ...loadingPaths.value };
+      delete nextLoading[parentPath];
+      loadingPaths.value = nextLoading;
+    }
   }
 }
 
@@ -126,7 +127,7 @@ function breadcrumbClick(parts: string[]) {
 }
 
 /* ============ 统一列解析：文件夹视图钉住「大小」列（文件夹浏览的业务字段） ============ */
-const listContext = computed<TrackListContext>(() => ({ pinned: ['fileSize'] }));
+const listContext = computed<TrackListContext>(() => ({ pinned: ['fileSize'], batchEntry: true }));
 const { resolvedColumns, menuColumns, trailingExtraWidth } = useTrackColumns({
   containerRef: tracksScrollEl,
   context: listContext,
@@ -156,24 +157,27 @@ async function addDirToPlaylist(playlistId: number) {
   }
 }
 
-watch(sources, (list) => {
-  if (list.length > 0 && !selectedSourceId.value) {
-    selectedSourceId.value = list[0].id;
+watch(selectedSourceId, (id, oldId) => {
+  if (id !== oldId) {
+    treeRevision++;
     loadedChildren.value = {};
+    loadingPaths.value = {};
+    if (playerStore.pendingBrowseRestore) return;
     expandedPaths.value = {};
-    loadChildrenForPath('');
+    playerStore.clearFolderTrackSelection();
+    if (id != null) void loadChildrenForPath('');
+  }
+}, { flush: 'sync' });
+
+watch([sources, () => playerStore.pendingBrowseRestore], ([list, pending]) => {
+  if (pending || disposed) return;
+  if (!list.some(source => source.id === selectedSourceId.value)) selectedSourceId.value = list[0]?.id ?? null;
+  if (selectedSourceId.value == null) return;
+  void loadChildrenForPath('');
+  for (const [path, expanded] of Object.entries(expandedPaths.value)) {
+    if (expanded) void loadChildrenForPath(path);
   }
 }, { immediate: true });
-
-watch(selectedSourceId, (id, oldId) => {
-  // 只有「真的换了数据源」才重置树与曲目；挂载时从模块态还原同一个源不动它
-  if (id != null && id !== oldId) {
-    loadedChildren.value = {};
-    expandedPaths.value = {};
-    playerStore.folderTracks = [];
-    loadChildrenForPath('');
-  }
-});
 
 const sourceName = computed(() =>
   sources.value.find(s => s.id === selectedSourceId.value)?.name ?? ''
@@ -273,7 +277,7 @@ const currentBreadcrumb = computed(() => {
         @scroll="(e) => {
           const el = e.target as HTMLElement;
           if (el.scrollTop + el.clientHeight >= el.scrollHeight - 400) {
-            if (selectedSourceId && playerStore.selectedTreePath && !playerStore.isLoadingFolderTracks && playerStore.hasMoreFolderTracks) {
+            if (!playerStore.pendingBrowseRestore && selectedSourceId != null && playerStore.selectedTreePath != null && !playerStore.isLoadingFolderTracks && playerStore.hasMoreFolderTracks) {
               playerStore.fetchMoreFolderTracks(selectedSourceId, playerStore.selectedTreePath);
             }
           }

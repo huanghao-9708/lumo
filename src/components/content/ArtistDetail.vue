@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, toRef, onBeforeUnmount } from 'vue';
 import { Play, Shuffle, User, Loader2, Disc3, Star, Search } from 'lucide-vue-next';
 import { usePlayerStore, type Album, type Track } from '../../stores/player';
 import { useDesktopModeStore } from '../../stores/desktopMode';
@@ -64,8 +64,7 @@ const albumGrid = computed<Album[]>(() => {
 });
 
 // 详情页搜索只属于当前艺术家，不继承列表页筛选词。
-const filterQuery = ref('');
-watch(() => props.artistId, () => { filterQuery.value = ''; });
+const filterQuery = toRef(playerStore, 'artistDetailFilterQuery');
 const filterActive = computed(() => !!filterQuery.value.trim());
 const filterKeyword = computed(() => filterQuery.value.trim().toLowerCase());
 const batch = useBatchSelect();
@@ -91,21 +90,23 @@ function onToggleSelectAll() {
 // 过滤激活时自动把分页剩余拉完，保证过滤覆盖该艺术家的全部歌曲。
 // 需等详情切到当前艺术家且首屏加载完成（组件创建时 detail 可能还是旧艺术家/加载中）。
 const isLoadingAllForFilter = ref(false);
+let disposed = false;
+onBeforeUnmount(() => { disposed = true; });
 async function loadRemainingForFilter() {
   const id = props.artistId;
-  if (!id || !filterActive.value || isLoadingAllForFilter.value) return;
+  if (!id || disposed || playerStore.pendingBrowseRestore || !filterActive.value || isLoadingAllForFilter.value) return;
   isLoadingAllForFilter.value = true;
   try {
     // 等待：详情已切到当前艺术家 && 首屏加载完成
     let guard = 0;
-    while (guard++ < 300) {
+    while (!disposed && props.artistId === id && filterActive.value && guard++ < 300) {
       const d = detail.value;
       if (d && d.id === id && !d.isLoadingTracks) break;
       await new Promise(r => setTimeout(r, 100));
     }
     // 逐页追加直到拉全
     guard = 0;
-    while (detail.value?.id === id && detail.value?.hasMoreTracks && guard++ < 300) {
+    while (!disposed && props.artistId === id && filterActive.value && detail.value?.id === id && detail.value?.hasMoreTracks && guard++ < 300) {
       await playerStore.fetchArtistTracks(id, true);
     }
   } finally {

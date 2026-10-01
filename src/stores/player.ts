@@ -441,6 +441,18 @@ export const usePlayerStore = defineStore("player", () => {
   const isLoadingFolderTracks = ref(false);
   const hasMoreFolderTracks = computed(() => folderTracks.value.length < folderTracksTotal.value);
   const selectedTreePath = ref<string | null>(null);
+  // Only navigation scalars survive a component unmount/mini data release.
+  const folderBrowseContext = ref<{ sourceId: number | null; expandedPaths: Record<string, boolean> }>({ sourceId: null, expandedPaths: {} });
+  let folderTracksRevision = 0;
+
+  function clearFolderTrackSelection() {
+    folderTracksRevision++;
+    folderTracks.value = [];
+    folderTracksTotal.value = 0;
+    folderTracksOffset = 0;
+    selectedTreePath.value = null;
+    isLoadingFolderTracks.value = false;
+  }
 
   /**
    * 拉取文件夹内容。
@@ -540,8 +552,11 @@ export const usePlayerStore = defineStore("player", () => {
   // ===== 新文件浏览器功能 =====
 
   async function fetchFolderTreeChildren(sourceId: number, folderPath?: string) {
+    const version = browseEpoch;
+    if (!browseIsCurrent(version)) return;
     try {
       const res: FolderChildrenResultDTO = await libraryGetFolderChildren(sourceId, folderPath);
+      if (!browseIsCurrent(version)) return;
       folderTreeChildren.value = res.children;
       folderTreeSourceRoot.value = res.source_root;
     } catch (e) {
@@ -554,14 +569,19 @@ export const usePlayerStore = defineStore("player", () => {
     if (!browseIsCurrent(version)) return;
     if (!reset && (isLoadingFolderTracks.value || !hasMoreFolderTracks.value)) return;
     if (reset) {
+      folderBrowseContext.value.sourceId = sourceId;
+      selectedTreePath.value = folderPath;
+      folderTracksRevision++;
       folderTracks.value = [];
       folderTracksTotal.value = 0;
       folderTracksOffset = 0;
     }
+    const revision = folderTracksRevision;
+    const isCurrent = () => browseIsCurrent(version) && revision === folderTracksRevision;
     isLoadingFolderTracks.value = true;
     try {
       const res: FolderTracksResultDTO = await libraryGetFolderTracks(sourceId, folderPath, folderTracksLimit, folderTracksOffset);
-      if (!browseIsCurrent(version)) return;
+      if (!isCurrent()) return;
       folderTracksTotal.value = res.total;
       const mapped = res.tracks.map(mapTrackDTO);
       if (reset) {
@@ -573,9 +593,9 @@ export const usePlayerStore = defineStore("player", () => {
       selectedTreePath.value = folderPath;
     } catch (e) {
       console.error('Failed to fetch folder tracks:', e);
-      if (reset) folderTracks.value = [];
+      if (isCurrent() && reset) folderTracks.value = [];
     } finally {
-      isLoadingFolderTracks.value = false;
+      if (isCurrent()) isLoadingFolderTracks.value = false;
     }
   }
 
@@ -1012,10 +1032,10 @@ const albums = shallowRef<Album[]>([]);
 
   async function fetchPlaylists() {
     const version = browseEpoch;
-    if (!browseIsCurrent(version)) return;
+    if (!browseIsCurrent(version)) return false;
     try {
       const result: PlaylistDTOBackend[] = await libraryGetPlaylists();
-      if (!browseIsCurrent(version)) return;
+      if (!browseIsCurrent(version)) return false;
       playlists.value = result.map(p => ({
         id: p.id,
         name: p.name,
@@ -1024,8 +1044,10 @@ const albums = shallowRef<Album[]>([]);
         cover_artwork_id: p.cover_artwork_id,
         cover_thumb: p.cover_thumbnail_base64
       }));
+      return true;
     } catch (e) {
       console.error(e);
+      return false;
     }
   }
 
@@ -1274,6 +1296,18 @@ const albums = shallowRef<Album[]>([]);
   // ============ 专辑无限滚动（30张/页，IntersectionObserver 触发加载）============
   const albumsPageSize = 30;
   let albumsOffset = 0;
+  const albumsWindowStart = ref(0);
+  const albumsWindowed = ref(false);
+  const artistsWindowStart = ref(0);
+  const artistsWindowed = ref(false);
+  type EntityAnchor = { index: number; id: number | null; rowFraction: number };
+  const entityAnchors: Record<'album' | 'artist', EntityAnchor | null> = { album: null, artist: null };
+  const entityBrowseRestore = ref<{ kind: 'album' | 'artist'; index: number; rowFraction: number } | null>(null);
+  function recordEntityBrowseAnchor(kind: 'album' | 'artist', index: number, rowFraction: number) {
+    const items = kind === 'album' ? albums.value : artists.value;
+    const start = kind === 'album' ? albumsWindowStart.value : artistsWindowStart.value;
+    entityAnchors[kind] = { index, id: items[index - start]?.id ?? null, rowFraction };
+  }
   const albumsTotalCount = ref(0);
   const isLoadingAlbums = ref(false);
   const isErrorAlbums = ref(false);
@@ -1306,14 +1340,22 @@ const albums = shallowRef<Album[]>([]);
   let albumRevision = 0;
   let albumResetPending = false;
   let albumRequest: Promise<void> | null = null;
+  let albumReadLimit = albumsPageSize;
 
-  function fetchAlbums(reset: boolean = false): Promise<void> {
+  function fetchAlbums(reset: boolean = false, window?: { offset: number; limit: number }): Promise<void> {
     if (desktopMode.windowForm === 'mini') return Promise.resolve();
+    if (!reset && albumsWindowed.value) return Promise.resolve();
     if (reset) {
       albumRevision++;
       albumResetPending = true;
-      albums.value = [];
-      albumsOffset = 0;
+      albumsWindowed.value = !!window;
+      if (!window) {
+        albums.value = [];
+        albumsWindowStart.value = 0;
+        entityAnchors.album = null;
+      }
+      albumsOffset = Math.max(0, window?.offset ?? 0);
+      albumReadLimit = window?.limit ?? albumsPageSize;
       hasMoreAlbums.value = true;
     }
     if (albumRequest) return albumRequest;
@@ -1325,18 +1367,24 @@ const albums = shallowRef<Album[]>([]);
         albumResetPending = false;
         const revision = albumRevision;
         const offset = albumsOffset;
+        const limit = albumReadLimit;
         const keyword = searchQuery.value || undefined;
         const minCount = albumMinTrackCount();
         isErrorAlbums.value = false;
         try {
           const [result, count] = await Promise.all([
-            libraryGetAlbums(albumsPageSize, offset, keyword, minCount),
+            libraryGetAlbums(limit, offset, keyword, minCount),
             isReset || albumsTotalCount.value === 0
               ? libraryGetAlbumCount(keyword, minCount) : Promise.resolve(albumsTotalCount.value),
           ]);
           // 快速刷新只保留最新条件。旧请求结果不映射，也不改变分页位置。
           if (revision !== albumRevision) continue;
           albumsTotalCount.value = count;
+          if (isReset && offset >= count && count > 0) {
+            albumsOffset = Math.max(0, count - limit);
+            albumResetPending = true;
+            continue;
+          }
           const page: Album[] = result.map((a) => ({
             id: a.id, title: a.title, artist: a.artist_name || '未知艺人',
             year: a.release_year || 0, coverColor: getDeterministicColor(a.title || 'Unknown'),
@@ -1344,8 +1392,9 @@ const albums = shallowRef<Album[]>([]);
             artist_name: a.artist_name, track_count: a.track_count,
           }));
           albums.value = isReset ? page : [...albums.value, ...page];
+          if (isReset) albumsWindowStart.value = offset;
           albumsOffset = offset + result.length;
-          hasMoreAlbums.value = result.length >= albumsPageSize && albumsOffset < count;
+          hasMoreAlbums.value = result.length >= limit && albumsOffset < count;
         } catch (e) {
           if (revision === albumRevision) {
             console.error(e);
@@ -1368,13 +1417,21 @@ const albums = shallowRef<Album[]>([]);
   let artistRevision = 0;
   let artistResetPending = false;
   let artistRequest: Promise<void> | null = null;
-  function fetchArtists(reset: boolean = false): Promise<void> {
+  let artistReadLimit = artistsLimit;
+  function fetchArtists(reset: boolean = false, window?: { offset: number; limit: number }): Promise<void> {
     if (desktopMode.windowForm === 'mini') return Promise.resolve();
+    if (!reset && artistsWindowed.value) return Promise.resolve();
     if (reset) {
       artistRevision++;
       artistResetPending = true;
-      artists.value = [];
-      artistsOffset = 0;
+      artistsWindowed.value = !!window;
+      if (!window) {
+        artists.value = [];
+        artistsWindowStart.value = 0;
+        entityAnchors.artist = null;
+      }
+      artistsOffset = Math.max(0, window?.offset ?? 0);
+      artistReadLimit = window?.limit ?? artistsLimit;
       hasMoreArtists.value = true;
     }
     if (artistRequest) return artistRequest;
@@ -1386,21 +1443,28 @@ const albums = shallowRef<Album[]>([]);
         artistResetPending = false;
         const revision = artistRevision;
         const offset = artistsOffset;
+        const limit = artistReadLimit;
         isErrorArtists.value = false;
         try {
           const { artists: result, total } = await libraryGetArtists(
-            artistsLimit, offset, searchQuery.value || undefined, artistMinTrackCount(),
+            limit, offset, searchQuery.value || undefined, artistMinTrackCount(),
           );
           if (revision !== artistRevision) continue;
           artistsTotalCount.value = total;
+          if (isReset && offset >= total && total > 0) {
+            artistsOffset = Math.max(0, total - limit);
+            artistResetPending = true;
+            continue;
+          }
           const page: Artist[] = result.map((a) => ({
             id: a.id, name: a.name, trackCount: a.track_count,
             avatarColor: getDeterministicColor(a.name || 'Unknown'),
             track_count: a.track_count, avatar_artwork_id: a.avatar_artwork_id,
           }));
           artists.value = isReset ? page : [...artists.value, ...page];
+          if (isReset) artistsWindowStart.value = offset;
           artistsOffset = offset + result.length;
-          hasMoreArtists.value = result.length >= artistsLimit && artistsOffset < total;
+          hasMoreArtists.value = result.length >= limit && artistsOffset < total;
         } catch (e) {
           if (revision === artistRevision) {
             console.error(e);
@@ -1413,6 +1477,23 @@ const albums = shallowRef<Album[]>([]);
       isLoadingArtists.value = false;
     });
     return artistRequest;
+  }
+
+  /** 移动滚动窗口，保持结果集的全局滚动范围而不累计历史页对象。 */
+  async function ensureEntityBrowseWindow(kind: 'album' | 'artist', first: number, end: number, columns = 1, retry = false) {
+    if (pendingBrowseRestore.value || desktopMode.windowForm === 'mini') return;
+    const windowed = kind === 'album' ? albumsWindowed.value : artistsWindowed.value;
+    const loading = kind === 'album' ? isLoadingAlbums.value : isLoadingArtists.value;
+    const error = kind === 'album' ? isErrorAlbums.value : isErrorArtists.value;
+    if (!windowed || loading || (error && !retry)) return;
+    const start = kind === 'album' ? albumsWindowStart.value : artistsWindowStart.value;
+    const items = kind === 'album' ? albums.value : artists.value;
+    const total = kind === 'album' ? albumsTotalCount.value : artistsTotalCount.value;
+    if (!retry && first >= start && Math.min(total, end) <= start + items.length) return;
+    const index = Math.max(0, Math.min(first, Math.max(0, total - 1)));
+    const offset = Math.floor(Math.max(0, index - 30) / columns) * columns;
+    const window = { offset, limit: Math.max(120, end - first + 60) };
+    await (kind === 'album' ? fetchAlbums(true, window) : fetchArtists(true, window));
   }
 
   const currentTrack = computed(() => {
@@ -1552,6 +1633,9 @@ const albums = shallowRef<Album[]>([]);
 
   const currentAlbumDetailsData = ref<AlbumDetails | null>(null);
   const currentArtistDetailsData = ref<ArtistDetails | null>(null);
+  const artistDetailFilterQuery = ref('');
+  type ArtistBrowseContext = { id: number; subTab: 'tracks' | 'albums'; page: number; filter: string };
+  let pendingArtistBrowseRestore: ArtistBrowseContext | null = null;
   const currentPlaylistDetailsData = ref<PlaylistDetails | null>(null);
   const isCreatePlaylistModalOpen = ref(false);
 
@@ -1730,8 +1814,15 @@ const albums = shallowRef<Album[]>([]);
       const fetchList = libraryGetArtistAlbums(artistId, ARTIST_ALBUMS_PAGE_SIZE, offset);
       const fetchCount = needCount ? libraryGetArtistAlbumCount(artistId) : Promise.resolve(currentArtistDetailsData.value.albumsTotalCount || 0);
 
-      const [albumsResult, count] = await Promise.all([fetchList, fetchCount]);
+      let [albumsResult, count] = await Promise.all([fetchList, fetchCount]);
       if (!browseIsCurrent(version) || currentArtistDetailsData.value !== details) return;
+      const lastPage = Math.max(1, Math.ceil(count / ARTIST_ALBUMS_PAGE_SIZE));
+      if (page > lastPage) {
+        details.albumsCurrentPage = lastPage;
+        albumsResult = await libraryGetArtistAlbums(artistId, ARTIST_ALBUMS_PAGE_SIZE, (lastPage - 1) * ARTIST_ALBUMS_PAGE_SIZE);
+        if (!browseIsCurrent(version) || currentArtistDetailsData.value !== details) return;
+        uiStore.showToast('专辑数量已有变化，已恢复到最后一页', 'info');
+      }
       currentArtistDetailsData.value.albumsTotalCount = count;
 
       const artistAlbums: Album[] = albumsResult.map(a => ({
@@ -1758,6 +1849,7 @@ const albums = shallowRef<Album[]>([]);
 
   async function goToArtistAlbumsPage(page: number) {
     if (!currentArtistDetailsData.value || !activeArtistId.value) return;
+    if (currentArtistDetailsData.value.isLoadingAlbums) return;
     if (page < 1 || page > (currentArtistDetailsData.value.albumsTotalPages || 1)) return;
     currentArtistDetailsData.value.albumsCurrentPage = page;
     await fetchArtistAlbums(activeArtistId.value, false);
@@ -1801,6 +1893,9 @@ const albums = shallowRef<Album[]>([]);
   watch(activeArtistId, async (newId, oldId) => {
     const version = browseEpoch;
     if (!browseIsCurrent(version)) return;
+    const restoration = pendingArtistBrowseRestore?.id === newId ? pendingArtistBrowseRestore : null;
+    pendingArtistBrowseRestore = null;
+    if (newId) artistDetailFilterQuery.value = restoration?.filter ?? '';
     // 1. 离开上一位艺人：留下详情（保留分页与子标签），供返回时复用
     if (oldId) {
       const prev = currentArtistDetailsData.value;
@@ -1858,10 +1953,10 @@ const albums = shallowRef<Album[]>([]);
         albums: [],
         tracks: [],
         stats: { track_count: 0, album_count: 0 },
-        subTab: 'tracks',
+        subTab: restoration?.subTab ?? 'tracks',
         tracksOffset: 0,
         albumsOffset: 0,
-        albumsCurrentPage: 1,
+        albumsCurrentPage: restoration?.page ?? 1,
         albumsTotalCount: 0,
         albumsTotalPages: 1,
         hasMoreTracks: true,
@@ -1880,7 +1975,7 @@ const albums = shallowRef<Album[]>([]);
         
         // 并行加载统计信息，不阻塞轨道和专辑
         libraryGetArtistStats(newId).then(stats => {
-          if (currentArtistDetailsData.value?.id === newId) {
+          if (browseIsCurrent(version) && currentArtistDetailsData.value?.id === newId) {
              currentArtistDetailsData.value.stats = stats;
              currentArtistDetailsData.value.trackCount = stats.track_count;
           }
@@ -1890,6 +1985,7 @@ const albums = shallowRef<Album[]>([]);
       }
 
       await fetchArtistTracks(newId, false);
+      if (!browseIsCurrent(version) || activeArtistId.value !== newId) return;
       await fetchArtistAlbums(newId, false);
     } else {
       currentArtistDetailsData.value = null;
@@ -1948,6 +2044,9 @@ const albums = shallowRef<Album[]>([]);
   function saveProgressToStorage() {
     const index = lightweightSession.value ? lastSessionSummary.value?.currentIndex : currentIndex.value;
     if (index != null && index >= 0) localStorage.setItem('lumo_current_index', String(index));
+    const trackId = currentTrack.value?.id;
+    if (trackId != null) localStorage.setItem('lumo_current_track_id', String(trackId));
+    else localStorage.removeItem('lumo_current_track_id');
     localStorage.setItem('lumo_progress_ms', String(progressMs.value));
   }
 
@@ -2049,6 +2148,9 @@ const albums = shallowRef<Album[]>([]);
   async function restoreSession(bundle?: StartupBundleDTO | null) {
     if (sessionRestored) return;
     sessionRestored = true;
+    const resumeIndex = Number(localStorage.getItem('lumo_current_index') ?? -1);
+    const resumePosition = Number(localStorage.getItem('lumo_progress_ms') ?? 0);
+    const resumeTrackId = localStorage.getItem('lumo_current_track_id');
     try {
       // 1. 恢复播放队列（启动包已带入 queue；bundle 缺失时兜底单独拉）
       if (!bundle && queue.value.length === 0) {
@@ -2059,9 +2161,21 @@ const albums = shallowRef<Album[]>([]);
         }
       }
 
-      // 2. 恢复播放模式
+      // The Rust queue can advance while mini keeps no library queue mirror.
+      // The legacy startup bundle supplies metadata, never the selected queue.
+      const backendRestored = await syncQueueStateFromBackend();
+      if (backendRestored) {
+        hasLoadedCurrentFile.value = false;
+        if (currentTrack.value && currentIndex.value === resumeIndex &&
+          (resumeTrackId === null || Number(resumeTrackId) === currentTrack.value.id) &&
+          Number.isFinite(resumePosition) && resumePosition >= 0) {
+          progressMs.value = Math.min(durationMs.value || resumePosition, resumePosition);
+        }
+      }
+
+      // 2. 恢复播放模式（权威队列成功时不使用旧本地模式）
       const savedMode = localStorage.getItem('lumo_play_mode');
-      if (savedMode && ['normal', 'repeat', 'repeat-one', 'shuffle'].includes(savedMode)) {
+      if (!backendRestored && savedMode && ['normal', 'repeat', 'repeat-one', 'shuffle'].includes(savedMode)) {
         playMode.value = savedMode as 'normal' | 'repeat' | 'repeat-one' | 'shuffle';
       }
 
@@ -2086,7 +2200,7 @@ const albums = shallowRef<Album[]>([]);
 
       // 4. 恢复当前曲目索引（处于暂停/载入锁状态）
       const savedIdx = localStorage.getItem('lumo_current_index');
-      if (savedIdx !== null) {
+      if (!backendRestored && savedIdx !== null) {
         const idx = parseInt(savedIdx, 10);
         if (!isNaN(idx) && idx >= 0 && idx < queue.value.length) {
           currentIndex.value = idx;
@@ -2115,6 +2229,7 @@ const albums = shallowRef<Album[]>([]);
     lightweightSession.value = true;
     const savedIndex = Number(localStorage.getItem('lumo_current_index') ?? -1);
     const savedProgress = Number(localStorage.getItem('lumo_progress_ms') ?? 0);
+    const savedTrackId = localStorage.getItem('lumo_current_track_id');
     const savedVolume = Number(localStorage.getItem('lumo_volume') ?? 80);
     if (Number.isFinite(savedVolume) && savedVolume >= 0 && savedVolume <= 100) {
       volume.value = savedVolume;
@@ -2124,6 +2239,7 @@ const albums = shallowRef<Album[]>([]);
     if (Number.isFinite(savedRate) && savedRate >= 0.5 && savedRate <= 1.5) await setPlaybackRate(savedRate);
     await syncSessionFromBackend();
     if (lastSessionSummary.value?.currentTrack && savedIndex === lastSessionSummary.value.currentIndex
+      && (savedTrackId === null || Number(savedTrackId) === lastSessionSummary.value.currentTrack.trackId)
       && Number.isFinite(savedProgress) && savedProgress >= 0) {
       progressMs.value = Math.min(durationMs.value || savedProgress, savedProgress);
     }
@@ -2169,10 +2285,14 @@ const albums = shallowRef<Album[]>([]);
    * 加载指定类型的智能歌单。
    * @param kind 预设类型，目前支持 "most_played"（播放最多）
    */
+  let smartPlaylistRevision = 0;
   async function loadSmartPlaylist(kind: string) {
     const version = browseEpoch;
     if (!browseIsCurrent(version)) return;
+    const revision = ++smartPlaylistRevision;
+    const isCurrent = () => browseIsCurrent(version) && revision === smartPlaylistRevision;
     activeSmartPlaylistKind.value = kind;
+    smartPlaylistTracks.value = [];
     activeLibraryTab.value = '智能歌单';
     activeAlbumId.value = null;
     activeArtistId.value = null;
@@ -2180,13 +2300,13 @@ const albums = shallowRef<Album[]>([]);
     isLoadingSmartPlaylist.value = true;
     try {
       const dtos = await libraryGetSmartPlaylist(kind, 100);
-      if (!browseIsCurrent(version)) return;
+      if (!isCurrent()) return;
       smartPlaylistTracks.value = mapTrackList(dtos);
     } catch (e) {
       console.error(`[SmartPlaylist] Failed to load kind=${kind}:`, e);
-      smartPlaylistTracks.value = [];
+      if (isCurrent()) smartPlaylistTracks.value = [];
     } finally {
-      isLoadingSmartPlaylist.value = false;
+      if (isCurrent()) isLoadingSmartPlaylist.value = false;
     }
   }
 
@@ -2378,37 +2498,28 @@ const albums = shallowRef<Album[]>([]);
   async function syncQueueStateFromBackend() {
     try {
       const state = await playbackQueueState();
-      if (state && state.items.length > 0) {
-        if (queue.value.length === 0) {
-          queue.value = state.items.map(item => ({
-            id: item.trackId,
-            title: item.title,
-            artistId: null,
-            artist: item.artist,
-            albumId: null,
-            album: item.album,
-            duration: formatTime((item.durationMs ?? 0) / 1000),
-            durationSec: Math.floor((item.durationMs ?? 0) / 1000),
-            format: 'UNKNOWN',
-            coverColor: getDeterministicColor(item.album || item.title || 'Unknown'),
-            cover_artwork_id: item.artworkId,
-            isFavorite: false,
-            primary_file_id: item.mediaFileId,
-            fileSize: null,
-            sourceKind: 'local',
-          }));
-        }
-        currentIndex.value = state.index;
+      if (state && Array.isArray(state.items)) {
+        const metadata = new Map(queue.value.map(track => [track.id, track]));
+        queue.value = state.items.map(item => {
+          const brief = queueItemToTrack(item);
+          const cached = metadata.get(item.trackId);
+          return cached?.primary_file_id === item.mediaFileId ? {
+            ...cached, ...brief, artistId: cached.artistId, albumId: cached.albumId,
+            format: cached.format, isFavorite: cached.isFavorite, fileSize: cached.fileSize,
+            sourceKind: cached.sourceKind, coverColor: cached.coverColor,
+          } : brief;
+        });
+        currentIndex.value = state.items.length ? Math.min(Math.max(0, state.index), state.items.length - 1) : -1;
         progressMs.value = state.positionMs;
         playMode.value = fromBackendPlayMode(state.mode);
-        const currentTrack = queue.value[state.index];
-        if (currentTrack) {
-          durationMs.value = currentTrack.durationSec ? currentTrack.durationSec * 1000 : 0;
-        }
+        durationMs.value = queue.value[currentIndex.value]?.durationSec * 1000 || 0;
+        if (!state.items.length) { sessionTrack.value = null; summaryQueueLength.value = 0; progressMs.value = 0; }
+        return true;
       }
     } catch (e) {
       console.warn('[QueueSync] Failed to sync queue state:', e);
     }
+    return false;
   }
 
   // ===== 轻量会话摘要（DM-02）：镜像已有时只对账标量，不复制队列 =====
@@ -2477,6 +2588,10 @@ const albums = shallowRef<Album[]>([]);
     tracksAnchorOffset: number;
     tracksAnchorId: number | null;
     tracksAnchorRemainder: number;
+    entityAnchor: EntityAnchor | null;
+    folderContext: { sourceId: number | null; path: string | null; expandedPaths: Record<string, boolean> };
+    smartPlaylistKind: string | null;
+    artistContext: ArtistBrowseContext | null;
   }
   let browseSnapshot: BrowseSnapshot | null = null;
   /** 非视觉态期间发生过扫描/回填，待恢复后合并刷新一次（验收 2） */
@@ -2495,6 +2610,13 @@ const albums = shallowRef<Album[]>([]);
       tracksAnchorOffset: anchorOffset,
       tracksAnchorId: visibleBrowseAnchor?.id ?? tracks.value[anchorOffset - tracksWindowStart.value]?.id ?? null,
       tracksAnchorRemainder: visibleBrowseAnchor?.remainder ?? 0,
+      entityAnchor: activeLibraryTab.value === '专辑' ? entityAnchors.album :
+        activeLibraryTab.value === '艺术家' ? entityAnchors.artist : null,
+      folderContext: { sourceId: folderBrowseContext.value.sourceId, path: selectedTreePath.value, expandedPaths: { ...folderBrowseContext.value.expandedPaths } },
+      smartPlaylistKind: activeSmartPlaylistKind.value,
+      artistContext: currentArtistDetailsData.value ? { id: currentArtistDetailsData.value.id,
+        subTab: currentArtistDetailsData.value.subTab ?? 'tracks', page: currentArtistDetailsData.value.albumsCurrentPage ?? 1,
+        filter: artistDetailFilterQuery.value } : null,
     };
     visibleBrowseAnchor = null;
   }
@@ -2511,15 +2633,21 @@ const albums = shallowRef<Album[]>([]);
     tracks.value = [];
     albums.value = [];
     artists.value = [];
+    entityBrowseRestore.value = null;
     favoriteAlbums.value = [];
     favoriteArtists.value = [];
     playlists.value = []; // 含 base64 缩略图（M0 清单的大头）
     smartPlaylistTracks.value = [];
+    smartPlaylistRevision++;
+    isLoadingSmartPlaylist.value = false;
     currentAlbumDetailsData.value = null;
     currentArtistDetailsData.value = null;
     currentPlaylistDetailsData.value = null;
     currentFolderContents.value = [];
     folderTracks.value = [];
+    folderTracksRevision++;
+    isLoadingFolderTracks.value = false;
+    folderTreeChildren.value = [];
     artistDetailsCache.clear();
     invalidatePlayability();
     insights.value = null;
@@ -2572,19 +2700,43 @@ const albums = shallowRef<Album[]>([]);
         lightweightSession.value = false;
         sessionTrack.value = null;
       }
-      await Promise.all([fetchPlaylists(), fetchSources(), fetchCounts()]);
+      const [playlistsLoaded] = await Promise.all([fetchPlaylists(), fetchSources(), fetchCounts()]);
       if (!snap) return;
+      // A missing entity is a navigation fallback, rather than a detail spinner.
+      const restoredIds = { album: snap.activeAlbumId, artist: snap.activeArtistId, playlist: snap.activePlaylistId };
+      for (const kind of ['album', 'artist'] as const) {
+        const id = restoredIds[kind];
+        if (id == null) continue;
+        const name = kind === 'album' ? '专辑' : '艺术家';
+        try {
+          const entity = await (kind === 'album' ? libraryGetAlbumById(id) : libraryGetArtistById(id));
+          if (entity === null) {
+            restoredIds[kind] = null;
+            uiStore.showToast(`原${name}已移除，已返回${name}列表`, 'info');
+          }
+        } catch (error) {
+          console.error(`Failed to restore ${kind}:`, error);
+          restoredIds[kind] = null;
+          uiStore.showToast(`${name}详情恢复失败，已返回列表，请重试`, 'error');
+        }
+      }
+      if (restoredIds.playlist != null && playlistsLoaded && !playlists.value.some(playlist => playlist.id === restoredIds.playlist)) {
+        restoredIds.playlist = null;
+        uiStore.showToast('原歌单已移除，已返回播放队列', 'info');
+      }
       browseDirty.value = false; // 恢复即拿到扫描后最新数据，dirty 合并完成（验收 2）
       activeAlbumId.value = null;
       activeArtistId.value = null;
       activePlaylistId.value = null;
       activeLibraryTab.value = snap.activeLibraryTab;
+      searchQuery.value = snap.searchQuery;
       await nextTick();
-      activeAlbumId.value = snap.activeAlbumId;
-      activeArtistId.value = snap.activeArtistId;
-      activePlaylistId.value = snap.activePlaylistId;
+      pendingArtistBrowseRestore = restoredIds.artist != null ? snap.artistContext : null;
+      activeAlbumId.value = restoredIds.album;
+      activeArtistId.value = restoredIds.artist;
+      activePlaylistId.value = restoredIds.playlist;
 
-      if (snap.activeAlbumId || snap.activeArtistId || snap.activePlaylistId) return; // 详情 watcher 自行加载
+      if (restoredIds.album || restoredIds.artist || restoredIds.playlist) return; // 详情 watcher 自行加载
       switch (snap.activeLibraryTab) {
         case '全部歌曲':
           searchQuery.value = snap.searchQuery;
@@ -2605,16 +2757,42 @@ const albums = shallowRef<Album[]>([]);
           await fetchFavoriteTracks();
           break;
         case '专辑':
-          await fetchAlbums(true);
-          break;
         case '艺术家':
-          await fetchArtists(true);
+          {
+            const kind = snap.activeLibraryTab === '专辑' ? 'album' : 'artist';
+            const anchor = snap.entityAnchor;
+            const window = { offset: Math.max(0, (anchor?.index ?? 0) - 30), limit: 120 };
+            await (kind === 'album' ? fetchAlbums(true, window) : fetchArtists(true, window));
+            const items = kind === 'album' ? albums.value : artists.value;
+            const start = kind === 'album' ? albumsWindowStart.value : artistsWindowStart.value;
+            const found = anchor?.id == null ? -1 : items.findIndex(item => item.id === anchor.id);
+            const index = found >= 0 ? start + found : Math.min(Math.max(start, anchor?.index ?? 0), Math.max(start, start + items.length - 1));
+            entityBrowseRestore.value = { kind, index, rowFraction: anchor?.rowFraction ?? 0 };
+            if (anchor?.id != null && found < 0) uiStore.showToast('曲库已有变化，已恢复到附近位置', 'info');
+          }
           break;
         case '收藏的专辑':
           await fetchFavoriteAlbums();
           break;
         case '收藏的歌手':
           await fetchFavoriteArtists();
+          break;
+        case '文件夹':
+          {
+            const context = snap.folderContext;
+            const sourceExists = localSources.value.some(source => source.id === context.sourceId);
+            folderBrowseContext.value = { sourceId: sourceExists ? context.sourceId : localSources.value[0]?.id ?? null,
+              expandedPaths: sourceExists ? context.expandedPaths : {} };
+            if (sourceExists && context.sourceId != null && context.path != null) {
+              await fetchFolderTracks(context.sourceId, context.path, true);
+            } else {
+              clearFolderTrackSelection();
+              if (context.sourceId != null && !sourceExists) uiStore.showToast('原数据源已移除，请重新选择文件夹', 'info');
+            }
+          }
+          break;
+        case '智能歌单':
+          if (snap.smartPlaylistKind) await loadSmartPlaylist(snap.smartPlaylistKind);
           break;
         default:
           // 播放列表（内存队列，全程保留）/首页/设置等：自管或无需处理
@@ -3053,6 +3231,13 @@ const albums = shallowRef<Album[]>([]);
     fetchTracks,
     fetchAlbums,
     fetchArtists,
+    albumsWindowStart,
+    artistsWindowStart,
+    albumsWindowed,
+    artistsWindowed,
+    entityBrowseRestore,
+    recordEntityBrowseAnchor,
+    ensureEntityBrowseWindow,
     hideSmallAlbums,
     hideMinorArtists,
     toggleHideSmallAlbums,
@@ -3084,6 +3269,8 @@ const albums = shallowRef<Album[]>([]);
     folderTreeChildren,
     folderTreeSourceRoot,
     folderTracks,
+    folderBrowseContext,
+    clearFolderTrackSelection,
     folderTracksTotal,
     selectedTreePath,
     isLoadingFolderTracks,
@@ -3118,6 +3305,7 @@ const albums = shallowRef<Album[]>([]);
     currentTrack,
     currentAlbumDetails,
     currentArtistDetails,
+    artistDetailFilterQuery,
     currentPlaylistDetails,
     formatTime,
     togglePlay,

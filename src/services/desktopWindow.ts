@@ -54,6 +54,7 @@ export async function setupWindowPersistence(): Promise<() => void> {
   let timer: ReturnType<typeof setTimeout> | null = null;
   let fullMaximized = mode.fullGeometry?.maximized ?? false;
   let lastFull = mode.fullGeometry;
+  let maximizedExtent: { width: number; height: number } | null = null;
   let constraintsKey = '';
   const unlisteners: Array<() => void> = [];
   let geometryTask: Promise<void> | null = null;
@@ -69,14 +70,30 @@ export async function setupWindowPersistence(): Promise<() => void> {
     const [size, position, scale, maximized] = await Promise.all([
       win.innerSize(), win.outerPosition(), win.scaleFactor(), win.isMaximized(),
     ]);
-    if (form === 'full' && (fullMaximized || maximized) && lastFull) {
-      return { ...lastFull, maximized: true };
-    }
-    return {
+    const geometry = {
       x: Math.round(position.x / scale), y: Math.round(position.y / scale),
       width: Math.round(size.width / scale), height: Math.round(size.height / scale),
-      maximized: form === 'full' && (fullMaximized || maximized),
+      maximized: false,
     };
+    if (form === 'full') {
+      // Keep the tao workaround only while the observed window is maximized.
+      // OS-menu restore and title-bar double clicks bypass our maximize action.
+      if (fullMaximized && !maximized && maximizedExtent &&
+        (geometry.width !== maximizedExtent.width || geometry.height !== maximizedExtent.height)) {
+        const area = await areaFor(geometry);
+        const fillsWorkArea = area && geometry.width >= area.w - 24 && geometry.height >= area.h - 24;
+        if (!fillsWorkArea) { fullMaximized = false; maximizedExtent = null; }
+      }
+      geometry.maximized = fullMaximized || maximized;
+      if (geometry.maximized) {
+        fullMaximized = true;
+        if (maximized || !lastFull || geometry.width !== lastFull.width || geometry.height !== lastFull.height) {
+          maximizedExtent = { width: geometry.width, height: geometry.height };
+        }
+        if (lastFull) return { ...lastFull, maximized: true };
+      }
+    }
+    return geometry;
   }
 
   async function areaFor(g: WindowGeometry | null): Promise<WorkArea | null> {
@@ -118,7 +135,8 @@ export async function setupWindowPersistence(): Promise<() => void> {
     if (form === 'full') {
       lastFull = target;
       fullMaximized = target.maximized;
-      if (target.maximized) await win.maximize();
+      if (target.maximized) { await win.maximize(); await readGeometry('full'); }
+      else maximizedExtent = null;
     }
     return target;
   }
@@ -209,11 +227,13 @@ export async function setupWindowPersistence(): Promise<() => void> {
         if (fullMaximized || await win.isMaximized()) {
           await win.unmaximize();
           fullMaximized = false;
+          maximizedExtent = null;
           await applyGeometry('full', lastFull ? { ...lastFull, maximized: false } : null, false);
         } else {
           lastFull = await readGeometry('full');
           await win.maximize();
           fullMaximized = true;
+          await readGeometry('full');
         }
       } catch (e) { console.warn('[window] 最大化切换失败', e); }
       finally { locked = false; schedule(); }

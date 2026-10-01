@@ -68,6 +68,54 @@ afterEach(() => {
 });
 
 describe("DM-02 常驻会话", () => {
+  it('完整冷启动以Rust队列、索引和模式为准，旧曲库队列只补元数据', async () => {
+    localStorage.setItem('lumo_current_index', '2');
+    localStorage.setItem('lumo_current_track_id', '3');
+    localStorage.setItem('lumo_progress_ms', '122000');
+    localStorage.setItem('lumo_play_mode', 'shuffle');
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'library_get_play_queue') return [{ id: 99, title: '旧队列', duration_sec: 200 }];
+      if (cmd === 'playback_queue_state') return { items: [1, 2, 3].map(id => ({ trackId: id, mediaFileId: id + 100,
+        title: `曲目${id}`, artist: '艺人', album: '专辑', artworkId: null, durationMs: 262000 })), index: 2, mode: 'repeatAll', positionMs: 0 };
+      return null;
+    });
+    const store = usePlayerStore(); await store.restoreSession();
+    expect(store.queue.map(track => track.id)).toEqual([1, 2, 3]);
+    expect(store.currentTrack?.id).toBe(3);
+    expect(store.currentIndex).toBe(2);
+    expect(store.playMode).toBe('repeat');
+    expect(store.durationMs).toBe(262000);
+    expect(store.progressMs).toBe(122000);
+    expect(store.isPlaying).toBe(false);
+    expect(invokeMock.mock.calls.map(([cmd]) => cmd)).not.toContain('playback_set_queue');
+    expect(invokeMock.mock.calls.map(([cmd]) => cmd)).not.toContain('playback_play_index');
+  });
+
+  it('完整冷启动权威空队列清除旧曲库队列与保存进度', async () => {
+    localStorage.setItem('lumo_current_index', '0'); localStorage.setItem('lumo_progress_ms', '90000');
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'library_get_play_queue') return [{ id: 1, title: '旧队列', duration_sec: 200 }];
+      if (cmd === 'playback_queue_state') return { items: [], index: 0, mode: 'normal', positionMs: 0 };
+      return null;
+    });
+    const store = usePlayerStore(); await store.restoreSession();
+    expect(store.queue).toHaveLength(0); expect(store.currentTrack).toBeNull();
+    expect(store.progressMs).toBe(0); expect(store.durationMs).toBe(0);
+  });
+
+  it.each(['full', 'mini'])('%s冷启动相同索引但不同曲目时不套用旧保存进度', async form => {
+    localStorage.setItem('lumo_current_index', '0'); localStorage.setItem('lumo_current_track_id', '99');
+    localStorage.setItem('lumo_progress_ms', '90000');
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'playback_queue_state') return { items: [summary().currentTrack], index: 0, mode: 'normal', positionMs: 0 };
+      if (cmd === 'playback_session_summary') return summary();
+      return null;
+    });
+    const store = usePlayerStore();
+    if (form === 'mini') await store.restoreLightweightSession(); else await store.restoreSession();
+    expect(store.currentTrack?.id).toBe(1); expect(store.progressMs).toBe(0);
+  });
+
   it('R05：迟到的可播性响应不填回迷你缓存，也不覆盖返回后的新请求', async () => {
     const resolvers: Array<(value: unknown) => void> = [];
     invokeMock.mockImplementation((cmd: string) => {

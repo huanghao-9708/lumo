@@ -308,8 +308,8 @@ if (playerStore.pendingBrowseRestore) {
 const scrollContainer = useScrollRestore(
   () => `tracks:${playerStore.activeLibraryTab}:${playerStore.searchQuery}`
 );
-watch(() => desktopMode.windowForm, (form) => {
-  if (form === 'mini' && playerStore.activeLibraryTab === '全部歌曲' && scrollContainer.value) {
+watch(() => desktopMode.phase, (phase) => {
+  if (phase === 'entering-mini' && playerStore.activeLibraryTab === '全部歌曲' && scrollContainer.value) {
     const top = scrollContainer.value.scrollTop;
     playerStore.recordBrowseAnchor(Math.floor(top / ROW_HEIGHT), top % ROW_HEIGHT);
   }
@@ -350,6 +350,7 @@ function loadForCurrentTab() {
   const tab = playerStore.activeLibraryTab;
   if (tab === '首页') return; // 首页自管数据
   if (tab === 'AI 电台') return; // AI 电台自管数据
+  if (tab === '文件夹' || tab === '智能歌单') return; // 各自按目录/歌单类型加载
   if (tab === '播放列表') return; // 未选歌单时展示播放队列（内存），详情数据由 store watcher 负责
   if (tab === '最近播放') playerStore.fetchRecentlyPlayed();
   else if (tab === '喜欢的音乐') playerStore.fetchFavoriteTracks();
@@ -361,6 +362,7 @@ function loadForCurrentTab() {
   else playerStore.fetchTracks(true);
 }
 watch(() => playerStore.activeLibraryTab, () => {
+  if (playerStore.pendingBrowseRestore) return;
   // 切换视图即切换列表：清掉上个视图的过滤词，避免残留污染（P0 级体验修正）
   if (searchInput.value || playerStore.searchQuery) {
     searchInput.value = '';

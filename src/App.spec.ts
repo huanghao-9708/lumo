@@ -47,6 +47,29 @@ beforeEach(() => {
 afterEach(() => { wrapper?.unmount(); wrapper = undefined; vi.unstubAllGlobals(); });
 
 describe('mini lifecycle and cold startup', () => {
+  it('完整冷启动不把旧startup bundle队列当成当前播放队列', async () => {
+    form = 'full';
+    Object.defineProperty(window, 'innerWidth', { value: 1200, writable: true, configurable: true });
+    localStorage.setItem('lumo_current_index', '1'); localStorage.setItem('lumo_progress_ms', '61000');
+    const implementation = invokeMock.getMockImplementation()!;
+    invokeMock.mockImplementation((cmd: string, ...args: unknown[]) => {
+      if (cmd === 'library_get_startup_bundle') return Promise.resolve({ counts: { tracks: 1 }, playlists: [], albums: [], artists: [],
+        play_queue: [{ id: 99, title: '旧曲目', duration_sec: 200 }], album_total: 0, artist_total: 0 });
+      if (cmd === 'playback_queue_state') return Promise.resolve({ items: [{ ...brief, trackId: 1 }, brief], index: 1, mode: 'repeatAll', positionMs: 0 });
+      return implementation(cmd, ...args);
+    });
+    wrapper = mount(App, { attachTo: document.body }); await flushPromises();
+    const player = usePlayerStore();
+    expect(player.queue.map(track => track.id)).toEqual([1, 7]);
+    expect(player.currentTrack?.id).toBe(7);
+    expect(player.progressMs).toBe(61000);
+    expect(player.durationMs).toBe(180000);
+    expect(player.playMode).toBe('repeat');
+    expect(player.isPlaying).toBe(false); expect(show).toHaveBeenCalledOnce();
+    expect(invokeMock.mock.calls.map(([cmd]) => cmd)).not.toContain('playback_set_queue');
+    expect(invokeMock.mock.calls.map(([cmd]) => cmd)).not.toContain('playback_play_index');
+  });
+
   it('mini shows buffering while first decoding is pending and clears it on progress', async () => {
     const implementation = invokeMock.getMockImplementation()!;
     let finishPlay!: () => void;

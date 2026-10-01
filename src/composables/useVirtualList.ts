@@ -22,7 +22,7 @@ import { ref, computed, type Ref, watch } from 'vue';
 export interface UseVirtualListOptions {
   /** 滚动容器的 ref（必须是 `overflow-y: auto` 的元素） */
   containerRef: Ref<HTMLElement | null>;
-  /** 完整数据数组（响应式） */
+  /** 完整数据数组，或配合 itemOffset/totalItems 使用的已加载窗口（响应式）。 */
   items: Ref<readonly any[]>;
   /** 单行高度（像素）。对于多列网格，传"行高"，并把 `columns` 设为对应列数 */
   itemHeight: number | Ref<number>;
@@ -34,10 +34,13 @@ export interface UseVirtualListOptions {
   columns?: number | Ref<number>;
   /** 列表在滚动容器内容区中的起始位置；用于列表上方有工具栏的页面 */
   scrollOffset?: number | Ref<number>;
+  /** 已加载数据窗口在完整结果集中的偏移；未加载部分只保留滚动占位。 */
+  itemOffset?: Ref<number>;
+  totalItems?: Ref<number | undefined>;
 }
 
 export interface VirtualListItem<T = any> {
-  /** 在原数组中的索引 */
+  /** 在完整结果集中的索引（含数据窗口偏移）。 */
   index: number;
   /** 原始数据 */
   data: T;
@@ -69,7 +72,8 @@ export function useVirtualList<T = any>(options: UseVirtualListOptions): UseVirt
   const endIndex = ref(0);
 
   // 实际行数 = ceil(项数 / 列数)
-  const rowCount = computed(() => Math.ceil(items.value.length / Math.max(1, columnsRef.value)));
+  const loadedOffset = computed(() => Math.max(0, options.itemOffset?.value ?? 0));
+  const rowCount = computed(() => Math.ceil((options.totalItems?.value ?? items.value.length) / Math.max(1, columnsRef.value)));
   const totalHeight = computed(() => rowCount.value * itemHeightRef.value);
 
   // 计算可视项。注意 startIndex/endIndex 是"行"的下标，转成项下标时要乘列数。
@@ -77,17 +81,17 @@ export function useVirtualList<T = any>(options: UseVirtualListOptions): UseVirt
     const cols = Math.max(1, columnsRef.value);
     const startRow = Math.max(0, startIndex.value);
     const endRow = Math.min(rowCount.value, endIndex.value);
-    const startIdx = startRow * cols;
-    const endIdx = Math.min(items.value.length, endRow * cols);
+    const startIdx = Math.max(loadedOffset.value, startRow * cols);
+    const endIdx = Math.min(loadedOffset.value + items.value.length, endRow * cols);
     const out: VirtualListItem<T>[] = [];
     for (let i = startIdx; i < endIdx; i++) {
-      out.push({ index: i, data: items.value[i] });
+      out.push({ index: i, data: items.value[i - loadedOffset.value] });
     }
     return out;
   });
 
   // 可视项容器的 translateY：把渲染出的项整体下推到正确位置
-  const offsetY = computed(() => Math.max(0, startIndex.value) * itemHeightRef.value);
+  const offsetY = computed(() => Math.max(0, startIndex.value, Math.floor(loadedOffset.value / columnsRef.value)) * itemHeightRef.value);
 
   // 根据当前 scrollTop 重新计算窗口范围
   function recalc() {
@@ -141,7 +145,7 @@ export function useVirtualList<T = any>(options: UseVirtualListOptions): UseVirt
   }, { immediate: true, flush: 'post' });
 
   // 数据变化时重算窗口（例如加载更多、切换 tab）
-  watch(() => items.value.length, () => {
+  watch([() => items.value.length, loadedOffset, rowCount], () => {
     recalc();
   });
 

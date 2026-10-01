@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, toRef, watch } fro
 import { Disc3, Mic2 } from 'lucide-vue-next';
 import { useVirtualList } from '../../composables/useVirtualList';
 import { useScrollRestore } from '../../composables/useScrollRestore';
+import { useEntityBrowseWindow } from '../../composables/useEntityBrowseWindow';
 
 /**
  * MinimalEntityList —— 极简体验模式的文字列表（DM-04）。
@@ -34,11 +35,17 @@ const emit = defineEmits<{ select: [id: number] }>();
 
 const ROW_HEIGHT = 44;
 const scrollContainer = useScrollRestore(() => `minimal:${props.scrollKey}`);
+const browseWindow = useEntityBrowseWindow({
+  kind: toRef(props, 'kind'), containerRef: scrollContainer, rowHeight: ROW_HEIGHT,
+  scrollKey: () => `minimal:${props.scrollKey}`, enabled: () => !!props.loadMore,
+});
 const { totalHeight, offsetY, visibleItems } = useVirtualList({
   containerRef: scrollContainer,
   items: toRef(props, 'items'),
   itemHeight: ROW_HEIGHT,
   buffer: 10,
+  itemOffset: browseWindow.itemOffset,
+  totalItems: browseWindow.totalItems,
 });
 
 const iconComponent = computed(() => (props.kind === 'album' ? Disc3 : Mic2));
@@ -50,7 +57,7 @@ let disposed = false;
 let resizeObserver: ResizeObserver | null = null;
 
 async function loadNextPage() {
-  if (disposed || busy.value || !props.hasMore || !props.loadMore) return;
+  if (disposed || browseWindow.restoring.value || busy.value || !props.hasMore || !props.loadMore) return;
   requestPending.value = true;
   requestFailed.value = false;
   const previousLength = props.items.length;
@@ -67,6 +74,8 @@ async function loadNextPage() {
 }
 
 function checkNearBottom() {
+  if (browseWindow.restoring.value) return;
+  if (browseWindow.windowed.value) { void browseWindow.onScroll(); return; }
   const el = scrollContainer.value;
   if (disposed || !el || el.clientHeight <= 0 || failed.value) return;
   if (el.scrollTop + el.clientHeight >= el.scrollHeight - 150) void loadNextPage();
@@ -99,6 +108,10 @@ onBeforeUnmount(() => {
     data-experience-minimal-list
     @scroll.passive="checkNearBottom"
   >
+    <div v-if="failed && browseWindow.windowed.value" role="status" class="sticky top-0 z-10 py-3 text-center text-[12px] bg-bg-content text-text-muted">
+      此处内容加载失败
+      <button class="ml-3 text-brand-orange" @click="browseWindow.retry()">重试加载</button>
+    </div>
     <!-- 空态 -->
     <div
       v-if="items.length === 0 && !busy && !failed"
@@ -127,9 +140,9 @@ onBeforeUnmount(() => {
       </div>
     </div>
     <div v-if="busy" role="status" class="py-4 text-center text-[12px] text-text-muted">加载中…</div>
-    <div v-else-if="loadMore && (hasMore || failed)" class="py-4 text-center">
+    <div v-else-if="loadMore && !browseWindow.windowed.value && (failed || hasMore)" class="py-4 text-center">
       <span v-if="failed" role="status" class="block mb-2 text-[12px] text-text-muted">加载失败，请重试</span>
-      <button class="px-3 py-2 rounded-[8px] text-[12px] text-text-secondary hover:bg-list-hover focus-visible:ring-2 focus-visible:ring-brand-orange/40" @click="loadNextPage">
+      <button class="px-3 py-2 rounded-[8px] text-[12px] text-text-secondary hover:bg-list-hover focus-visible:ring-2 focus-visible:ring-brand-orange/40" @click="browseWindow.windowed.value ? browseWindow.retry() : loadNextPage()">
         {{ failed ? '重试加载' : '加载更多' }}
       </button>
     </div>

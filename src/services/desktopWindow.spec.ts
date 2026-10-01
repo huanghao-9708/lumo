@@ -40,6 +40,7 @@ beforeEach(() => {
   native.scaleFactor.mockResolvedValue(1.5);
   native.isMaximized.mockResolvedValue(false); // Simulate M0 tao false after maximize.
   native.isMinimized.mockResolvedValue(false);
+  native.maximize.mockImplementation(async () => { size = { width: 2560, height: 1440 }; });
   native.setSize.mockImplementation(async (next: { width: number; height: number }) => {
     size = { width: next.width * 1.5, height: next.height * 1.5 };
     callbacks.get('resize')?.();
@@ -58,6 +59,23 @@ beforeEach(() => {
 afterEach(() => { dispose?.(); dispose = undefined; vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('desktop window transactions', () => {
+  it.each([true, false])('OS restore clears the owned maximized fallback, delayed save=%s', async delayedSave => {
+    const mode = useDesktopModeStore(); await mode.init();
+    dispose = await setupWindowPersistence();
+    await toggleWindowMaximize(); await mode.enterMini(); await mode.exitMini();
+    expect(native.maximize).toHaveBeenCalledTimes(2);
+    // Native OS Restore bypasses toggleWindowMaximize; tao still reports false.
+    size = { width: 1800, height: 1080 };
+    position = { x: 150, y: 150 };
+    callbacks.get('resize')?.();
+    if (delayedSave) { await vi.advanceTimersByTimeAsync(500); await flushPromises(); }
+    await mode.enterMini();
+    expect(mode.fullGeometry).toMatchObject({ width: 1200, height: 720, maximized: false });
+    await mode.exitMini();
+    expect(size).toEqual({ width: 1800, height: 1080 });
+    expect(native.maximize).toHaveBeenCalledTimes(2);
+  });
+
   it('maximized full → mini → full restores intent despite stale native flag and cancels old resize saves', async () => {
     const mode = useDesktopModeStore();
     await mode.init();

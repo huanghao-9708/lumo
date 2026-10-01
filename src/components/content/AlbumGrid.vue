@@ -7,6 +7,7 @@ import { libraryGetAlbumTracks, libraryGetAlbumMatchTargets, libraryMatchSingleA
 import type { AlbumMatchTargetDTO } from '../../api/types';
 import { useScrollRestore } from '../../composables/useScrollRestore';
 import { useVirtualList } from '../../composables/useVirtualList';
+import { useEntityBrowseWindow } from '../../composables/useEntityBrowseWindow';
 
 const playerStore = usePlayerStore();
 
@@ -155,12 +156,19 @@ const gridColumns = ref(3);
 const gridRowHeight = ref(300);
 const virtualScrollOffset = ref(0);
 const albumItems = computed(() => playerStore.albums);
+const browseWindow = useEntityBrowseWindow({
+  kind: 'album', containerRef: gridContainer, rowHeight: gridRowHeight, columns: gridColumns,
+  scrollOffset: virtualScrollOffset,
+  scrollKey: () => `album-grid:${playerStore.hideSmallAlbums ? 1 : 0}:${playerStore.searchQuery}`,
+});
 const { totalHeight: virtualHeight, offsetY: virtualOffsetY, visibleItems: visibleAlbums } = useVirtualList({
   containerRef: gridContainer,
   items: albumItems,
   itemHeight: gridRowHeight,
   columns: gridColumns,
   scrollOffset: virtualScrollOffset,
+  itemOffset: browseWindow.itemOffset,
+  totalItems: browseWindow.totalItems,
   buffer: 1,
 });
 const sentinelRef = ref<HTMLElement | null>(null);
@@ -196,7 +204,7 @@ onMounted(() => {
   nextTick(updateGridMetrics);
   observer = new IntersectionObserver(
     (entries) => {
-      if (entries[0]?.isIntersecting && !isLoading.value && hasMoreAlbums.value) {
+      if (entries[0]?.isIntersecting && !playerStore.pendingBrowseRestore && !browseWindow.windowed.value && !isLoading.value && hasMoreAlbums.value) {
         playerStore.fetchAlbums(false);
       }
     },
@@ -227,7 +235,7 @@ watch(() => playerStore.albums.length, () => {
   <div class="flex flex-col h-full overflow-hidden">
 
     <!-- 网格容器 -->
-    <div ref="gridContainer" class="flex-1 overflow-y-auto px-8">
+    <div ref="gridContainer" class="flex-1 overflow-y-auto px-8" @scroll.passive="browseWindow.onScroll()">
 
       <!-- 顶部操作条与匹配控制 -->
       <div ref="toolbarRef" class="mb-5 flex items-center justify-between gap-4 flex-wrap select-none pt-1">
@@ -295,6 +303,11 @@ watch(() => playerStore.albums.length, () => {
         </div>
       </Transition>
 
+      <div v-if="isError && browseWindow.windowed.value" role="status" class="sticky top-0 z-10 py-3 text-center text-[12px] bg-bg-content text-text-muted">
+        此处专辑加载失败
+        <button class="ml-3 text-brand-orange" @click="browseWindow.retry()">重试加载</button>
+      </div>
+
       <!-- 加载态 -->
       <div v-if="isLoading && playerStore.albums.length === 0" class="flex flex-col items-center justify-center py-20 gap-3 text-text-muted">
         <Loader2 class="w-5 h-5 animate-spin text-brand-orange" />
@@ -328,8 +341,9 @@ watch(() => playerStore.albums.length, () => {
           }"
         >
           <div
-            v-for="{ data: album } in visibleAlbums"
+            v-for="{ data: album, index } in visibleAlbums"
             :key="album.id"
+            :style="{ gridColumn: index % gridColumns + 1 }"
             class="group cursor-pointer min-w-0"
             @dblclick="playAlbum(album)"
           >
@@ -381,7 +395,7 @@ watch(() => playerStore.albums.length, () => {
       </div>
 
       <!-- 没有更多了 -->
-      <div v-if="!hasMoreAlbums && playerStore.albums.length > 0" class="flex items-center justify-center py-6 text-text-muted">
+      <div v-if="!browseWindow.windowed.value && !hasMoreAlbums && playerStore.albums.length > 0" class="flex items-center justify-center py-6 text-text-muted">
         <span class="text-[11px]">已显示全部 {{ totalCount.toLocaleString() }} 张专辑</span>
       </div>
 

@@ -48,6 +48,7 @@ describe('歌曲列表统一多选交互', () => {
       currentTrack: null, isPlaying: false, activeLibraryTab: '', activeAlbumId: null,
       activeArtistId: null, activePlaylistId: null, activeSmartPlaylistKind: 'most_played',
       selectedTreePath: 'Music', localSources: [], albums: [], artists: [],
+      folderBrowseContext: { sourceId: null, expandedPaths: {} }, artistDetailFilterQuery: '',
       favoriteAlbums: [], favoriteArtists: [], globalSearchQuery: '', searchQuery: '', playabilityEpoch: 0,
       pendingBrowseRestore: false, isLoadingTracks: false, isErrorTracks: false,
       isLoadingSmartPlaylist: false, isLoadingFolderTracks: false, tracksTotalCount: 2,

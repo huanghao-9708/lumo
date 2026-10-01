@@ -7,6 +7,7 @@ import { libraryGetArtistMatchTargets, libraryMatchSingleArtistCover } from '../
 import type { ArtistMatchTargetDTO } from '../../api/types';
 import { useScrollRestore } from '../../composables/useScrollRestore';
 import { useVirtualList } from '../../composables/useVirtualList';
+import { useEntityBrowseWindow } from '../../composables/useEntityBrowseWindow';
 
 const playerStore = usePlayerStore();
 
@@ -135,12 +136,19 @@ const virtualGridRef = ref<HTMLElement | null>(null);
 const gridColumns = ref(3);
 const gridRowHeight = ref(300);
 const virtualScrollOffset = ref(0);
+const browseWindow = useEntityBrowseWindow({
+  kind: 'artist', containerRef: scrollContainer, rowHeight: gridRowHeight, columns: gridColumns,
+  scrollOffset: virtualScrollOffset,
+  scrollKey: () => `artist-grid:${playerStore.hideMinorArtists ? 1 : 0}:${playerStore.searchQuery}`,
+});
 const { totalHeight: virtualHeight, offsetY: virtualOffsetY, visibleItems: visibleArtists } = useVirtualList({
   containerRef: scrollContainer,
   items: artists,
   itemHeight: gridRowHeight,
   columns: gridColumns,
   scrollOffset: virtualScrollOffset,
+  itemOffset: browseWindow.itemOffset,
+  totalItems: browseWindow.totalItems,
   buffer: 1,
 });
 const sentinelRef = ref<HTMLElement | null>(null);
@@ -171,7 +179,7 @@ onMounted(() => {
   void nextTick(updateGridMetrics);
   observer = new IntersectionObserver(
     (entries) => {
-      if (entries[0]?.isIntersecting && !isLoading.value && hasMore.value) {
+      if (entries[0]?.isIntersecting && !playerStore.pendingBrowseRestore && !browseWindow.windowed.value && !isLoading.value && hasMore.value) {
         playerStore.fetchArtists(false);
       }
     },
@@ -195,7 +203,7 @@ watch([isMatching, matchCompleted, () => artists.value.length], () => {
 </script>
 
 <template>
-  <div ref="scrollContainer" class="flex-1 overflow-y-auto px-8">
+  <div ref="scrollContainer" class="flex-1 overflow-y-auto px-8" @scroll.passive="browseWindow.onScroll()">
     
     <!-- 顶部操作条与匹配控制 -->
     <div ref="toolbarRef" class="mb-5 flex items-center justify-between gap-4 flex-wrap select-none pt-1">
@@ -263,6 +271,11 @@ watch([isMatching, matchCompleted, () => artists.value.length], () => {
       </div>
     </Transition>
 
+    <div v-if="playerStore.isErrorArtists && browseWindow.windowed.value" role="status" class="sticky top-0 z-10 py-3 text-center text-[12px] bg-bg-content text-text-muted">
+      此处艺术家加载失败
+      <button class="ml-3 text-brand-orange" @click="browseWindow.retry()">重试加载</button>
+    </div>
+
     <!-- 艺人网格：统一圆形头像与精美居中排版 -->
     <div ref="virtualGridRef" class="relative" :style="{ height: `${virtualHeight}px` }">
       <div class="absolute inset-x-0 top-0 grid gap-6" :style="{
@@ -271,8 +284,9 @@ watch([isMatching, matchCompleted, () => artists.value.length], () => {
         gridAutoRows: `${gridRowHeight - 24}px`,
       }">
       <div
-        v-for="{ data: artist } in visibleArtists"
+        v-for="{ data: artist, index } in visibleArtists"
         :key="artist.id"
+        :style="{ gridColumn: index % gridColumns + 1 }"
         class="group cursor-pointer flex flex-col items-center text-center"
         @click="selectArtist(artist.id)"
       >
@@ -314,7 +328,7 @@ watch([isMatching, matchCompleted, () => artists.value.length], () => {
     </div>
 
     <!-- 没有更多了 -->
-    <div v-if="!hasMore && artists.length > 0" class="flex items-center justify-center py-6 text-text-muted">
+    <div v-if="!browseWindow.windowed.value && !hasMore && artists.length > 0" class="flex items-center justify-center py-6 text-text-muted">
       <span class="text-[11px]">已显示全部 {{ playerStore.artistsTotalCount.toLocaleString() }} 位艺术家</span>
     </div>
   </div>
