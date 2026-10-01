@@ -924,7 +924,8 @@ impl TrackRepo {
         search_keyword: Option<String>,
     ) -> rusqlite::Result<Vec<i64>> {
         let mut sql = "
-                SELECT t.id
+                SELECT t.id, al.title AS album_title,
+                    (SELECT GROUP_CONCAT(a.name, ', ') FROM track_artists ta JOIN artists a ON ta.artist_id = a.id WHERE ta.track_id = t.id ORDER BY ta.position) AS artist_name
                 FROM tracks t
                 LEFT JOIN albums al ON t.album_id = al.id
                 JOIN media_files m ON m.id = COALESCE(t.primary_file_id, (SELECT mf.id FROM media_files mf WHERE mf.track_id = t.id ORDER BY mf.id LIMIT 1))
@@ -932,14 +933,12 @@ impl TrackRepo {
             ".to_string();
 
         // 与 get_tracks_paginated 的关键词过滤保持同一匹配面（标题/专辑名/艺人名）。
-        // 艺人名在分页查询里来自 GROUP_CONCAT 子查询；这里用 EXISTS 语义等价（任一艺人命中即算）。
+        // 聚合艺人名也必须同源，支持跨合唱者的关键词（例如 "甲, 乙"）。
         let keyword_pattern = if let Some(keyword) = search_keyword {
             let kw = keyword.trim();
             if !kw.is_empty() {
                 sql.push_str(
-                    " AND (t.title LIKE ?1 \
-                     OR EXISTS (SELECT 1 FROM albums a2 WHERE a2.id = t.album_id AND a2.title LIKE ?1) \
-                     OR EXISTS (SELECT 1 FROM track_artists ta2 JOIN artists a3 ON ta2.artist_id = a3.id WHERE ta2.track_id = t.id AND a3.name LIKE ?1))",
+                    " AND (t.title LIKE ?1 OR album_title LIKE ?1 OR artist_name LIKE ?1)",
                 );
                 Some(format!("%{}%", kw))
             } else {

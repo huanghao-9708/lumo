@@ -507,7 +507,7 @@ padding-bottom: env(safe-area-inset-bottom); /* Home indicator */
 <template v-else><!-- DesktopLayout --></template>
 ```
 
-`usePlatform()` composable 基于 `window.innerWidth < 768` 响应式检测。
+`usePlatform()` 对 Android 始终使用移动布局；原生桌面保持桌面身份，不因窗口缩窄而切到移动布局。浏览器预览保留768px断点。桌面迷你形态在根组件优先挂载，完整工作区卸载，详见 [Playback Bar](09-components/playback-bar.md)。
 
 ---
 

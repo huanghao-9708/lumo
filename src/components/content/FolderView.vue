@@ -19,7 +19,7 @@ const playerStore = usePlayerStore();
 /* ============ 批量选择（本视图一份实例；切换文件夹自动退出） ============ */
 const batch = useBatchSelect();
 watch(() => playerStore.selectedTreePath, () => batch.exit());
-const isAllSelected = computed(() => batch.count > 0 && batch.count === playerStore.folderTracks.length);
+const isAllSelected = computed(() => playerStore.folderTracks.length > 0 && playerStore.folderTracks.every(track => batch.isSelected(track.id)));
 function onToggleSelectAll() {
   if (isAllSelected.value) batch.selectNone();
   else batch.selectAll(playerStore.folderTracks);
@@ -37,6 +37,7 @@ const browseState = {
 };
 
 const selectedSourceId = ref<number | null>(browseState.sourceId);
+watch(selectedSourceId, () => batch.exit());
 const loadedChildren = ref<Record<string, DirectoryNodeDTO[]>>(browseState.loadedChildren);
 const expandedPaths = ref<Record<string, boolean>>(browseState.expandedPaths);
 const loadingPaths = ref<Record<string, boolean>>({});
@@ -308,15 +309,16 @@ const currentBreadcrumb = computed(() => {
           </div>
         </div>
 
-        <!-- 批量操作条（多选态） -->
-        <BatchActionBar
-          v-if="batch.isActive"
-          :selected-ids="[...batch.selectedIds]"
-          :all-selected="isAllSelected"
-          @exit="batch.exit()"
-          @toggle-select-all="onToggleSelectAll"
-        />
       </div>
+
+      <!-- 批量操作条独立于滚动区，长列表中始终可见 -->
+      <BatchActionBar
+        v-if="batch.isActive"
+        :selected-ids="[...batch.selectedIds]"
+        :all-selected="isAllSelected"
+        @exit="batch.exit()"
+        @toggle-select-all="onToggleSelectAll"
+      />
     </div>
 
     <!-- Playlist Picker Popup -->

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { Play, Heart, ListPlus, CheckSquare, CloudOff } from 'lucide-vue-next';
+import { Play, Heart, ListPlus, CloudOff } from 'lucide-vue-next';
 import type { Track } from '../../../stores/player';
 import { usePlayerStore } from '../../../stores/player';
 import type { TrackColumnDef } from './columns';
@@ -93,26 +93,25 @@ const playedAtText = computed(() => formatPlayedAt(props.track.playedAt));
     :style="{ height: rowHeight + 'px' }"
     :class="{
       'playing-row bg-list-selected': playing,
-      'bg-list-selected/60': batchMode && selected,
+      'bg-list-selected ring-1 ring-inset ring-brand-orange/40': batchMode && selected,
     }"
+    :data-track-id="track.id"
+    :data-selected="batchMode ? String(selected === true) : undefined"
     @click="onRowClick"
     @dblclick="onRowDblclick"
   >
     <template v-for="col in columns" :key="col.id">
       <!-- 序号 / 复选框 / 播放图标 -->
       <div v-if="col.id === 'index'" :style="columnCellStyle(col)" class="text-center text-[12px] font-mono shrink-0">
-        <span
+        <input
           v-if="batchMode"
-          class="inline-flex items-center justify-center"
-          @click.stop="emit('toggleSelect')"
-        >
-          <span
-            class="w-[14px] h-[14px] rounded-[3px] border flex items-center justify-center transition-colors-smooth"
-            :class="selected ? 'bg-brand-orange border-brand-orange' : 'border-border-solid'"
-          >
-            <CheckSquare v-if="selected" class="w-[10px] h-[10px] text-white" />
-          </span>
-        </span>
+          type="checkbox"
+          :checked="selected"
+          :aria-label="`选择歌曲：${track.title}`"
+          class="w-3.5 h-3.5 accent-brand-orange cursor-pointer"
+          @click.stop
+          @change="emit('toggleSelect')"
+        />
         <template v-else>
           <span v-if="playing" class="inline-flex items-center justify-center">
             <EqualizerIndicator :playing="isPlayingNow" />
@@ -124,18 +123,9 @@ const playedAtText = computed(() => formatPlayedAt(props.track.playedAt));
         </template>
       </div>
 
-      <!-- 收藏（多选态下改为切换选择） -->
+      <!-- 收藏（多选态保留列宽，选择统一放在序号列） -->
       <div v-else-if="col.id === 'favorite'" :style="columnCellStyle(col)" class="flex items-center justify-center shrink-0">
-        <template v-if="batchMode">
-          <span
-            class="w-[14px] h-[14px] rounded-[3px] border flex items-center justify-center transition-colors-smooth"
-            :class="selected ? 'bg-brand-orange border-brand-orange' : 'border-border-solid opacity-0 group-hover:opacity-100'"
-            @click.stop="emit('toggleSelect')"
-          >
-            <CheckSquare v-if="selected" class="w-[10px] h-[10px] text-white" />
-          </span>
-        </template>
-        <template v-else>
+        <template v-if="!batchMode">
           <Heart
             v-if="track.isFavorite"
             class="w-[14px] h-[14px] text-brand-orange fill-current cursor-pointer"
@@ -201,12 +191,12 @@ const playedAtText = computed(() => formatPlayedAt(props.track.playedAt));
       <!-- 添加到歌单 / 不可播状态 -->
       <div v-else-if="col.id === 'more' && showMore" :style="columnCellStyle(col)" class="flex items-center justify-center shrink-0">
         <CloudOff
-          v-if="greyed"
+          v-if="greyed && !batchMode"
           class="w-3.5 h-3.5 text-text-disabled"
           :title="greyTitle"
         />
         <button
-          v-else
+          v-else-if="!batchMode"
           class="w-8 h-8 flex items-center justify-center rounded-[6px] text-text-muted opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:bg-bg-hover transition-opacity"
           title="添加到歌单"
           aria-label="添加到歌单"

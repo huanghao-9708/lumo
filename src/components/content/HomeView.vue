@@ -5,10 +5,12 @@ import {
   ChevronRight, Loader2, Music, Sparkles,
 } from 'lucide-vue-next';
 import { usePlayerStore, type RankedTrack } from '../../stores/player';
+import { useAiStore } from '../../stores/ai';
 import { useScrollRestore } from '../../composables/useScrollRestore';
 import { formatRelativeTime } from '../../utils/datetime';
 
 const playerStore = usePlayerStore();
+const aiStore = useAiStore();
 
 /** 滚动位置记忆：从榜单点进详情再返回时还原（首页数据本身由 store 持有） */
 const scrollEl = useScrollRestore(() => 'home');
@@ -20,6 +22,7 @@ const isLoading = computed(() => playerStore.isLoadingStats || playerStore.isLoa
 onMounted(() => {
   playerStore.fetchStats();
   playerStore.fetchInsights();
+  if (!aiStore.settings && !aiStore.isLoadingSettings) void aiStore.fetchSettings();
 });
 
 /* ============ 数值格式化 ============ */
@@ -145,6 +148,7 @@ const favoriteList = computed(() => insights.value?.favoriteTracks ?? []);
       <template v-else>
         <!-- ===== AI 电台入口（PRD-AI推荐歌单） ===== -->
         <button
+          v-if="aiStore.settings?.enabled === true"
           class="w-full mb-6 md:mb-8 bg-gradient-to-r from-brand-orange/12 to-transparent border border-brand-orange/30 rounded-[10px] px-4 py-3.5 flex items-center gap-3 hover:border-brand-orange/60 transition-colors-smooth text-left"
           @click="playerStore.navigateToTab('AI 电台')"
         >

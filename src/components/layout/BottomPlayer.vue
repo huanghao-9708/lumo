@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, onBeforeUnmount } from 'vue';
 import {
   Shuffle, SkipBack, Play, Pause, SkipForward, Repeat, Repeat1, ChevronUp, ChevronDown, Disc3, Volume, Volume1, Volume2,
   Heart, ListPlus,
@@ -213,16 +213,22 @@ function onKnobWheel(e: WheelEvent) {
 }
 
 // 全局监听拖拽移动/释放（在 window 上，避免移出元素丢失）
-if (typeof window !== 'undefined') {
-  window.addEventListener('mousemove', (e) => {
+const onGlobalMove = (e: MouseEvent) => {
     if (isDraggingKnob.value) onKnobMove(e);
     if (isDraggingProgress.value) onProgressMove(e);
-  });
-  window.addEventListener('mouseup', () => {
+};
+const onGlobalUp = () => {
     if (isDraggingKnob.value) onKnobUp();
     if (isDraggingProgress.value) onProgressUp();
-  });
+};
+if (typeof window !== 'undefined') {
+  window.addEventListener('mousemove', onGlobalMove);
+  window.addEventListener('mouseup', onGlobalUp);
 }
+onBeforeUnmount(() => {
+  window.removeEventListener('mousemove', onGlobalMove);
+  window.removeEventListener('mouseup', onGlobalUp);
+});
 
 const showPlaylistPicker = ref(false);
 const trackIsFav = computed(() => playerStore.currentTrack?.isFavorite ?? false);

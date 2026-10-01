@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
+import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
 import {
-  Search, List, LayoutGrid, Loader2, Music, CheckSquare, Filter,
+  Search, Loader2, Music, Filter,
 } from 'lucide-vue-next';
 
 const SKELETON_ROWS = 8;
@@ -9,7 +9,7 @@ import { usePlayerStore, ALBUM_MIN_TRACK_COUNT, ARTIST_MIN_TRACK_COUNT, type Alb
 import { useUiStore } from '../../stores/ui';
 import { useVirtualList } from '../../composables/useVirtualList';
 import { useBatchSelect } from '../../composables/useBatchSelect';
-import { useScrollRestore } from '../../composables/useScrollRestore';
+import { useScrollRestore, resetScrollPosition } from '../../composables/useScrollRestore';
 import BatchActionBar from '../shared/BatchActionBar.vue';
 import AlbumGrid from '../content/AlbumGrid.vue';
 import AlbumDetail from '../content/AlbumDetail.vue';
@@ -32,8 +32,10 @@ import { useTrackColumns } from '../shared/trackList/useTrackColumns';
 import { TRACK_ROW_HEIGHT, columnCellStyle } from '../shared/trackList/columns';
 import { useDesktopModeStore } from '../../stores/desktopMode';
 import { libraryGetTrackIds } from '../../api/library';
+import { useMiniModeBlocker } from '../../composables/useMiniModeBlocker';
 
 const playerStore = usePlayerStore();
+useMiniModeBlocker(() => playerStore.pendingBrowseRestore ? '正在恢复浏览位置，请稍候' : '');
 const uiStore = useUiStore();
 // 极简体验（DM-04）：false 时封面网格替换为文字列表
 const desktopMode = useDesktopModeStore();
@@ -82,13 +84,10 @@ function onMinimalFavoriteArtistSelect(id: number) {
 }
 
 /* ============ 统一歌曲列表列配置（容器宽度驱动，见 trackList/columns.ts） ============ */
-const trackColumnsContext = computed(() => ({}));
+const trackColumnsContext = computed(() => ({ batchEntry: true }));
 
 /* ============ 批量选择（本视图一份实例） ============ */
 const batch = useBatchSelect();
-
-/* ============ 视图状态 ============ */
-const viewMode = ref<'list' | 'grid'>('list');
 
 /* ============ 搜索 ============ */
 const searchInput = ref('');
@@ -261,9 +260,14 @@ function playSong(index: number) {
 /* ============ 批量选择（全选以已加载列表为准；筛选后=完整结果集，DM-05 验收 4） ============ */
 const isAllSelected = computed(() => {
   if (batch.resultWide) return true;
-  return batch.count > 0 && batch.count === displayTracks.value.length;
+  return displayTracks.value.length > 0 && displayTracks.value.every(track => batch.isSelected(track.id));
 });
 const isSelectAllBusy = ref(false);
+let selectAllSeq = 0;
+watch(() => batch.isActive, () => {
+  selectAllSeq++;
+  isSelectAllBusy.value = false;
+}, { flush: 'sync' });
 async function onToggleSelectAll() {
   if (isAllSelected.value) {
     batch.selectNone();
@@ -274,14 +278,20 @@ async function onToggleSelectAll() {
     // 筛选后全选：从后端拉取完整结果集 ID（低频显式动作），不缩为已加载窗口
     if (isSelectAllBusy.value) return;
     isSelectAllBusy.value = true;
+    const readSeq = ++selectAllSeq;
+    const tab = playerStore.activeLibraryTab;
+    const isCurrent = () => readSeq === selectAllSeq && batch.isActive &&
+      tab === playerStore.activeLibraryTab && q === playerStore.searchQuery.trim();
     try {
-      batch.selectAllIds(await libraryGetTrackIds(q));
+      const ids = await libraryGetTrackIds(q);
+      if (isCurrent()) batch.selectAllIds(ids);
     } catch {
+      if (!isCurrent()) return;
       // 可理解回退（验收 5）：完整结果集获取失败时退回已加载窗口并提示
       batch.selectAll(displayTracks.value);
       uiStore.showToast('完整结果集获取失败，已选中已加载部分', 'error');
     } finally {
-      isSelectAllBusy.value = false;
+      if (readSeq === selectAllSeq) isSelectAllBusy.value = false;
     }
     return;
   }
@@ -291,10 +301,19 @@ async function onToggleSelectAll() {
 /* ============ 虚拟列表 ============ */
 // 行高常量与 TrackRow 共用同一来源（虚拟列表占位高度计算依赖固定行高）
 const ROW_HEIGHT = TRACK_ROW_HEIGHT;
+if (playerStore.pendingBrowseRestore) {
+  resetScrollPosition(`tracks:${playerStore.activeLibraryTab}:${playerStore.searchQuery}`);
+}
 // 滚动位置记忆：全部歌曲 / 播放列表（队列）各记一份
 const scrollContainer = useScrollRestore(
   () => `tracks:${playerStore.activeLibraryTab}:${playerStore.searchQuery}`
 );
+watch(() => desktopMode.windowForm, (form) => {
+  if (form === 'mini' && playerStore.activeLibraryTab === '全部歌曲' && scrollContainer.value) {
+    const top = scrollContainer.value.scrollTop;
+    playerStore.recordBrowseAnchor(Math.floor(top / ROW_HEIGHT), top % ROW_HEIGHT);
+  }
+}, { flush: 'sync' });
 const { totalHeight, offsetY, visibleItems } = useVirtualList({
   containerRef: scrollContainer,
   items: displayTracks as any,
@@ -358,11 +377,18 @@ watch(() => playerStore.activeLibraryTab, () => {
 });
 // 播放列表详情切换也退出多选，避免选择集跨歌单串扰
 watch(() => playerStore.activePlaylistId, () => batch.exit());
+watch([() => playerStore.searchQuery, () => playerStore.globalSearchQuery], () => batch.exit());
 
 onMounted(() => {
   // 迷你返回后的浏览恢复（DM-05）：锚点窗口播种替代默认加载
   if (playerStore.pendingBrowseRestore) {
-    void playerStore.applyBrowseRestore();
+    void playerStore.applyBrowseRestore().then(async () => {
+      searchInput.value = playerStore.searchQuery;
+      await nextTick();
+      if (scrollContainer.value && playerStore.activeLibraryTab === '全部歌曲') {
+        scrollContainer.value.scrollTop = playerStore.browseRestoreScrollIndex * ROW_HEIGHT + playerStore.browseRestoreScrollRemainder;
+      }
+    });
   } else if (playerStore.tracks.length === 0 && playerStore.albums.length === 0) {
     // 仅在还没有数据时首次拉取，避免覆盖 restoreSession 的状态
     loadForCurrentTab();
@@ -389,6 +415,9 @@ onMounted(() => {
         :album-id="playerStore.activeAlbumId"
       />
     </template>
+
+    <!-- ============ 艺术家详情（独占内容区，不沿用列表标题/全库统计） ============ -->
+    <ArtistDetail v-else-if="isArtistDetailView" :artist-id="playerStore.activeArtistId" />
 
     <!-- ============ 歌单详情视图 ============ -->
     <PlaylistDetail v-else-if="isPlaylistDetailView" />
@@ -456,44 +485,6 @@ onMounted(() => {
         </div>
       </div>
 
-      <!-- Page Toolbar（仅轨道视图显示；修复非轨道视图残留一条空 padding 行的旧布局问题） -->
-      <div v-if="isTracksView" class="px-8 py-3 flex items-center justify-end flex-shrink-0">
-        <div class="flex items-center gap-2">
-          <!-- 批量选择入口 -->
-          <button
-            class="h-7 px-3 rounded-[6px] text-[12px] border border-border-color transition-colors-smooth"
-            :class="batch.isActive ? 'bg-list-selected text-text-primary border-transparent' : 'text-text-secondary hover:bg-list-hover'"
-            :title="batch.isActive ? '退出多选' : '多选歌曲'"
-            @click="batch.isActive ? batch.exit() : batch.enter()"
-          >
-            <span class="flex items-center gap-1.5">
-              <CheckSquare class="w-3.5 h-3.5" />
-              {{ batch.isActive ? '取消多选' : '多选' }}
-            </span>
-          </button>
-
-          <!-- 视图切换 -->
-          <div class="flex items-center gap-0 bg-bg-canvas border border-border-color rounded-[8px] p-[2px]">
-            <button
-              class="w-7 h-7 flex items-center justify-center rounded-[6px] transition-colors-smooth"
-              :class="viewMode === 'list' ? 'bg-list-selected text-text-primary' : 'text-text-muted hover:text-text-primary'"
-              @click="viewMode = 'list'"
-              title="列表视图"
-            >
-              <List class="w-[14px] h-[14px]" />
-            </button>
-            <button
-              class="w-7 h-7 flex items-center justify-center rounded-[6px] transition-colors-smooth"
-              :class="viewMode === 'grid' ? 'bg-list-selected text-text-primary' : 'text-text-muted hover:text-text-primary'"
-              @click="viewMode = 'grid'"
-              title="网格视图"
-            >
-              <LayoutGrid class="w-[14px] h-[14px]" />
-            </button>
-          </div>
-        </div>
-      </div>
-
       <!-- ============ 专辑网格视图（极简换文字列表，数据/点击行为不变） ============ -->
       <AlbumGrid
         v-if="isAlbumGridView && visualAllowed"
@@ -503,7 +494,11 @@ onMounted(() => {
         v-else-if="isAlbumGridView"
         kind="album"
         :items="minimalAlbumItems"
-        :scroll-key="`albums:${playerStore.searchQuery}`"
+        :scroll-key="`albums:${playerStore.hideSmallAlbums ? 1 : 0}:${playerStore.searchQuery}`"
+        :has-more="playerStore.hasMoreAlbums"
+        :loading="playerStore.isLoadingAlbums"
+        :load-error="playerStore.isErrorAlbums"
+        :load-more="playerStore.fetchAlbums"
         empty-text="没有找到专辑"
         @select="onMinimalFavoriteAlbumSelect"
       />
@@ -513,7 +508,7 @@ onMounted(() => {
         <div ref="scrollContainer" class="flex-1 overflow-y-auto px-8" @scroll="onListScroll">
 
           <!-- 统一表头（列配置与行共用；右端含显示列菜单） -->
-          <TrackListHeader :columns="resolvedColumns" :menu-columns="menuColumns" />
+          <TrackListHeader :columns="resolvedColumns" :menu-columns="menuColumns" show-batch-entry :batch-active="batch.isActive" @toggle-batch="batch.isActive ? batch.exit() : batch.enter()" />
 
           <!-- 加载态（首次）骨架屏（播放队列是内存数据，不需要骨架屏） -->
           <div v-if="!isQueueView && playerStore.isLoadingTracks && displayTracks.length === 0" class="py-2">
@@ -591,13 +586,14 @@ onMounted(() => {
         v-else-if="isArtistGridView"
         kind="artist"
         :items="minimalArtistItems"
-        :scroll-key="`artists:${playerStore.searchQuery}`"
+        :scroll-key="`artists:${playerStore.hideMinorArtists ? 1 : 0}:${playerStore.searchQuery}`"
+        :has-more="playerStore.hasMoreArtists"
+        :loading="playerStore.isLoadingArtists"
+        :load-error="playerStore.isErrorArtists"
+        :load-more="playerStore.fetchArtists"
         empty-text="没有找到艺术家"
         @select="onMinimalArtistSelect"
       />
-
-      <!-- ============ 艺术家详情视图 ============ -->
-      <ArtistDetail v-if="isArtistDetailView" :artist-id="playerStore.activeArtistId" :filter-query="searchInput" />
 
       <!-- ============ 文件夹视图 ============ -->
       <FolderView v-if="isFolderView" />

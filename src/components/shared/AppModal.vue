@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted } from 'vue';
+import { useMiniModeBlocker } from '../../composables/useMiniModeBlocker';
+useMiniModeBlocker(() => '请先完成或关闭当前对话框');
 
 /**
  * 桌面端通用弹窗底座（LDL：遮罩 bg-black/30 + 居中卡 rounded-[12px]）。

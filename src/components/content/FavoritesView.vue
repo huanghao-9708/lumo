@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, watch } from 'vue';
 import { Loader2, Heart } from 'lucide-vue-next';
 import { usePlayerStore } from '../../stores/player';
 import { useBatchSelect } from '../../composables/useBatchSelect';
@@ -22,7 +22,8 @@ const scrollEl = useScrollRestore(() => `favorites:${props.filterQuery ?? ''}`);
 
 /* ============ 批量选择（本视图一份实例；hide-favorite-action 避免"把喜欢的加进喜欢"） ============ */
 const batch = useBatchSelect();
-const isAllSelected = computed(() => batch.count > 0 && batch.count === visibleTracks.value.length);
+watch(() => props.filterQuery, () => batch.exit());
+const isAllSelected = computed(() => visibleTracks.value.length > 0 && visibleTracks.value.every(track => batch.isSelected(track.id)));
 function onToggleSelectAll() {
   if (isAllSelected.value) batch.selectNone();
   else batch.selectAll(visibleTracks.value);
@@ -100,24 +101,23 @@ function playSong(index: number) {
           :is-playing-now="playerStore.isPlaying"
           :batch-mode="batch.isActive"
           :selected="batch.isSelected(track.id)"
-            :trailing-width="trailingExtraWidth"
+          :trailing-width="trailingExtraWidth"
           @play="playSong(index)"
           @toggle-select="batch.toggle(track)"
         />
       </div>
 
-      <!-- 批量操作条（多选态；hide-favorite-action 避免自我包含） -->
-      <BatchActionBar
-        v-if="batch.isActive"
-        :selected-ids="[...batch.selectedIds]"
-        :all-selected="isAllSelected"
-        hide-favorite-action
-        @exit="batch.exit()"
-        @toggle-select-all="onToggleSelectAll"
-      />
-
-      <!-- Footer -->
     </div>
+
+    <!-- 批量操作条独立于滚动区；hide-favorite-action 避免自我包含 -->
+    <BatchActionBar
+      v-if="batch.isActive"
+      :selected-ids="[...batch.selectedIds]"
+      :all-selected="isAllSelected"
+      hide-favorite-action
+      @exit="batch.exit()"
+      @toggle-select-all="onToggleSelectAll"
+    />
 
   </div>
 </template>

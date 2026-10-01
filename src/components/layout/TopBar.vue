@@ -1,11 +1,12 @@
  <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue';
-import { ChevronLeft, ChevronRight, Home, Search, Sun, Moon, PanelRight, Settings, Minus, Square, X, Sparkles, Check } from 'lucide-vue-next';
+import { ChevronLeft, ChevronRight, Home, Search, Sun, Moon, PanelRight, Settings, Minus, Square, X, Sparkles, Check, PanelBottom } from 'lucide-vue-next';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useUiStore } from '../../stores/ui';
 import { usePlayerStore } from '../../stores/player';
 import { useDesktopModeStore, type ExperienceMode } from '../../stores/desktopMode';
 import { toggleWindowMaximize } from '../../composables/useWindowPersistence';
+import { DESKTOP_MODES_ENABLED } from '../../config/desktopModes';
 
 const appWindow = getCurrentWindow();
 const uiStore = useUiStore();
@@ -13,6 +14,7 @@ const playerStore = usePlayerStore();
 // 体验模式（DM-04）：正常/极简两维之一，独立于窗口形态与主题
 const desktopMode = useDesktopModeStore();
 const experienceMode = computed(() => desktopMode.experienceMode);
+const miniBlockedReason = computed(() => uiStore.miniModeBlockedReason || (playerStore.isCreatePlaylistModalOpen ? '请先完成或关闭新建歌单' : ''));
 
 /* ============ 体验模式菜单（键盘可达：Esc 关闭、↑↓ 移动、Enter 选择、焦点归还） ============ */
 const menuOpen = ref(false);
@@ -70,7 +72,7 @@ const close = () => appWindow.close();
 
 <template>
   <div
-    class="h-(--height-topbar) w-full bg-bg-content/90 backdrop-blur-md flex items-center justify-between px-4 flex-shrink-0 select-none border-b border-border-color/50 transition-colors-smooth"
+    class="relative z-30 h-(--height-topbar) w-full bg-bg-content/90 backdrop-blur-md flex items-center justify-between px-4 flex-shrink-0 select-none border-b border-border-color/50 transition-colors-smooth"
     data-tauri-drag-region
   >
 
@@ -122,7 +124,7 @@ const close = () => appWindow.close();
     <div class="flex items-center gap-1 pointer-events-auto">
       <div class="flex items-center gap-1 mr-3">
         <!-- 体验模式菜单（DM-04）：正常/极简，与主题独立 -->
-        <div ref="menuRoot" class="relative">
+        <div v-if="DESKTOP_MODES_ENABLED" ref="menuRoot" class="relative">
           <button
             ref="menuButton"
             class="w-8 h-8 flex items-center justify-center rounded-[8px] transition-colors-smooth"
@@ -166,6 +168,14 @@ const close = () => appWindow.close();
           </div>
         </div>
 
+        <button
+          v-if="DESKTOP_MODES_ENABLED"
+          class="w-8 h-8 flex items-center justify-center rounded-[8px] text-text-secondary hover:text-text-primary hover:bg-bg-hover disabled:opacity-40 transition-colors-smooth"
+          :title="miniBlockedReason || '进入迷你播放栏'"
+          aria-label="进入迷你播放栏"
+          :disabled="desktopMode.phase !== 'idle' || !!miniBlockedReason"
+          @click="desktopMode.enterMini()"
+        ><PanelBottom class="w-[18px] h-[18px]" /></button>
         <button
           class="w-8 h-8 flex items-center justify-center rounded-[8px] transition-colors-smooth"
           :class="uiStore.isDarkMode ? 'text-brand-orange bg-bg-active' : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover'"

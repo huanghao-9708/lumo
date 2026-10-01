@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { ref, computed, watch, shallowRef, reactive, nextTick } from "vue";
+import { ref, computed, watch, shallowRef, reactive, nextTick, onScopeDispose } from "vue";
 import { listen } from '@tauri-apps/api/event';
 
 import {
@@ -219,6 +219,16 @@ function fromBackendPlayMode(mode: BackendPlayMode): 'normal' | 'repeat' | 'repe
   }
 }
 
+function queueItemToTrack(item: QueueItemDTO): Track {
+  const seconds = Math.floor((item.durationMs ?? 0) / 1000);
+  return {
+    id: item.trackId, title: item.title, artistId: null, artist: item.artist,
+    albumId: null, album: item.album, duration: `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`,
+    durationSec: seconds, format: 'UNKNOWN', coverColor: '', cover_artwork_id: item.artworkId,
+    isFavorite: false, primary_file_id: item.mediaFileId, fileSize: null, sourceKind: 'local',
+  };
+}
+
 // ================= Store 实现 =================
 
 /** 纯函数：确定性封面渐变色（模块级，供 store 与独立映射场景共用） */
@@ -299,6 +309,12 @@ export const usePlayerStore = defineStore("player", () => {
   const playbackRate = ref<number>(1);
 
   const queue = ref<Track[]>([]);
+  const sessionTrack = ref<Track | null>(null);
+  const summaryQueueLength = ref(0);
+  const lightweightSession = ref(false);
+  const sessionQueueLength = computed(() => lightweightSession.value ? summaryQueueLength.value : queue.value.length);
+  const playbackError = ref('');
+  let sessionReadSeq = 0;
   const currentIndex = ref(-1);
   const playMode = ref<'normal'|'repeat'|'repeat-one'|'shuffle'>('normal');
   const progressMs = ref(0);
@@ -318,6 +334,8 @@ export const usePlayerStore = defineStore("player", () => {
   // 视觉资源策略（DM-03）：visualAllowed = 正常 × 完整。Android 端该 store
   // 不初始化、保持默认 normal+full → 所有门禁恒开，行为与既往一致。
   const desktopMode = useDesktopModeStore();
+  let browseEpoch = 0;
+  const browseIsCurrent = (version: number) => version === browseEpoch && desktopMode.windowForm !== 'mini';
 
   // ===== 可播性状态（迭代一：离线降级） =====
   // 每首 track 主文件的播放形态：local 本地 / cached 已缓存 / remote 纯云端未缓存 / unavailable 本地文件丢失。
@@ -325,20 +343,25 @@ export const usePlayerStore = defineStore("player", () => {
   const playability = ref(new Map<number, PlayabilityState>());
   const playabilityEpoch = ref(0);
   let playabilityFetching = false;
+  let playabilityReadSeq = 0;
 
   /**
    * 确保给定 track 的可播性已加载（缺失的按 500/批拉取，已在 Map 中的跳过）。
    * 列表视图在列表变化或 epoch 变化（扫描/恢复后失效）时调用。
    */
   async function ensurePlayability(trackIds: number[]) {
+    if (desktopMode.windowForm === 'mini') return;
     const missing = [...new Set(trackIds)].filter(id => Number.isFinite(id) && !playability.value.has(id));
     if (missing.length === 0 || playabilityFetching) return;
+    const readSeq = ++playabilityReadSeq;
+    const version = browseEpoch;
     playabilityFetching = true;
     try {
       const BATCH = 500;
       for (let i = 0; i < missing.length; i += BATCH) {
         const batch = missing.slice(i, i + BATCH);
         const res = await libraryGetPlayability(batch);
+        if (readSeq !== playabilityReadSeq || !browseIsCurrent(version)) return;
         const next = new Map(playability.value);
         for (const [k, v] of Object.entries(res)) {
           next.set(Number(k), v);
@@ -348,7 +371,7 @@ export const usePlayerStore = defineStore("player", () => {
     } catch (e) {
       console.error('[Playability] Failed to fetch:', e);
     } finally {
-      playabilityFetching = false;
+      if (readSeq === playabilityReadSeq) playabilityFetching = false;
     }
   }
 
@@ -368,6 +391,8 @@ export const usePlayerStore = defineStore("player", () => {
 
   /** 扫描完成 / 同步恢复后可播性可能变化：清空并推进 epoch，让视图重新拉取 */
   function invalidatePlayability() {
+    playabilityReadSeq++;
+    playabilityFetching = false;
     playability.value = new Map();
     playabilityEpoch.value++;
   }
@@ -423,6 +448,8 @@ export const usePlayerStore = defineStore("player", () => {
    * - `append=true`：在当前列表后追加下一页，用于滚动到底部时增量加载
    */
   async function fetchFolderContents(sourceId: number, folderPath?: string, append = false) {
+    const version = browseEpoch;
+    if (!browseIsCurrent(version)) return;
     // 增量加载时如果正在请求或已无更多，直接返回，避免重复请求
     if (append && (isFetchingFolder.value || !hasMoreFolderEntries.value)) return;
 
@@ -441,6 +468,7 @@ export const usePlayerStore = defineStore("player", () => {
           folderPageSize,
           folderOffset
       );
+      if (!browseIsCurrent(version)) return;
 
       const page = res.entries.map(item => ({
         name: item.name,
@@ -522,6 +550,8 @@ export const usePlayerStore = defineStore("player", () => {
   }
 
   async function fetchFolderTracks(sourceId: number, folderPath: string, reset = false) {
+    const version = browseEpoch;
+    if (!browseIsCurrent(version)) return;
     if (!reset && (isLoadingFolderTracks.value || !hasMoreFolderTracks.value)) return;
     if (reset) {
       folderTracks.value = [];
@@ -531,6 +561,7 @@ export const usePlayerStore = defineStore("player", () => {
     isLoadingFolderTracks.value = true;
     try {
       const res: FolderTracksResultDTO = await libraryGetFolderTracks(sourceId, folderPath, folderTracksLimit, folderTracksOffset);
+      if (!browseIsCurrent(version)) return;
       folderTracksTotal.value = res.total;
       const mapped = res.tracks.map(mapTrackDTO);
       if (reset) {
@@ -814,6 +845,13 @@ const albums = shallowRef<Album[]>([]);
   // 分页与加载状态
   const tracksLimit = 50;
   let tracksOffset = 0;
+  const tracksWindowStart = ref(0);
+  let visibleBrowseAnchor: { offset: number; id: number | null; remainder: number } | null = null;
+  const browseRestoreScrollIndex = ref(0);
+  const browseRestoreScrollRemainder = ref(0);
+  function recordBrowseAnchor(index: number, remainder = 0) {
+    visibleBrowseAnchor = { offset: tracksWindowStart.value + index, id: tracks.value[index]?.id ?? null, remainder };
+  }
   const hasMoreTracks = ref(true);
   const isLoadingTracks = ref(false);
   const searchQuery = ref("");
@@ -823,11 +861,13 @@ const albums = shallowRef<Album[]>([]);
 
   // 从后端获取歌曲列表
   async function fetchTracks(reset = false) {
+    if (desktopMode.windowForm === 'mini') return;
     if (reset) {
       fetchTracksGeneration++;
       isLoadingTracks.value = true;
       tracks.value = [];
       tracksOffset = 0;
+      tracksWindowStart.value = 0;
       hasMoreTracks.value = true;
     }
 
@@ -888,6 +928,7 @@ const albums = shallowRef<Album[]>([]);
       if (gen !== fetchTracksGeneration) return;
       hasMoreTracks.value = result.length >= limit;
       tracks.value = mapTrackList(result);
+      tracksWindowStart.value = Math.max(0, windowOffset);
       tracksOffset = Math.max(0, windowOffset) + result.length;
     } catch (e) {
       console.error("Failed to seed tracks window:", e);
@@ -903,9 +944,13 @@ const albums = shallowRef<Album[]>([]);
   const isLoadingStats = ref(false);
 
   async function fetchStats() {
+    const version = browseEpoch;
+    if (!browseIsCurrent(version)) return;
     isLoadingStats.value = true;
     try {
-      stats.value = await libraryGetStats();
+      const result = await libraryGetStats();
+      if (!browseIsCurrent(version)) return;
+      stats.value = result;
     } catch (e) {
       console.error("Failed to fetch library stats:", e);
     } finally {
@@ -942,9 +987,12 @@ const albums = shallowRef<Album[]>([]);
   }
 
   async function fetchInsights() {
+    const version = browseEpoch;
+    if (!browseIsCurrent(version)) return;
     isLoadingInsights.value = true;
     try {
       const dto = await libraryGetInsights();
+      if (!browseIsCurrent(version)) return;
       insights.value = {
         topPlayedTracks: dto.top_played_tracks.map(mapRankedTrack),
         recentPlayedTracks: dto.recent_played_tracks.map(mapRankedTrack),
@@ -963,8 +1011,11 @@ const albums = shallowRef<Album[]>([]);
   }
 
   async function fetchPlaylists() {
+    const version = browseEpoch;
+    if (!browseIsCurrent(version)) return;
     try {
       const result: PlaylistDTOBackend[] = await libraryGetPlaylists();
+      if (!browseIsCurrent(version)) return;
       playlists.value = result.map(p => ({
         id: p.id,
         name: p.name,
@@ -1109,8 +1160,11 @@ const albums = shallowRef<Album[]>([]);
   }
 
   async function fetchPlaylistTracks(playlistId: number) {
+    const version = browseEpoch;
+    if (!browseIsCurrent(version)) return;
     try {
       const result: TrackDTO[] = await libraryGetPlaylistTracks(playlistId);
+      if (!browseIsCurrent(version)) return;
       tracks.value = mapTrackList(result);
       hasMoreTracks.value = false;
       tracksOffset = tracks.value.length;
@@ -1120,8 +1174,11 @@ const albums = shallowRef<Album[]>([]);
   }
 
   async function fetchRecentlyPlayed() {
+    const version = browseEpoch;
+    if (!browseIsCurrent(version)) return;
     try {
       const result: TrackDTO[] = await libraryGetRecentlyPlayed(50);
+      if (!browseIsCurrent(version)) return;
       tracks.value = mapTrackList(result);
       hasMoreTracks.value = false;
     } catch(e) {
@@ -1130,8 +1187,11 @@ const albums = shallowRef<Album[]>([]);
   }
 
   async function fetchFavoriteTracks() {
+    const version = browseEpoch;
+    if (!browseIsCurrent(version)) return;
     try {
       const result: TrackDTO[] = await libraryGetFavoriteTracks();
+      if (!browseIsCurrent(version)) return;
       tracks.value = mapTrackList(result);
       hasMoreTracks.value = false;
     } catch(e) {
@@ -1140,8 +1200,11 @@ const albums = shallowRef<Album[]>([]);
   }
 
   async function fetchFavoriteAlbums() {
+    const version = browseEpoch;
+    if (!browseIsCurrent(version)) return;
     try {
       const result: AlbumDTO[] = await libraryGetFavoriteAlbums();
+      if (!browseIsCurrent(version)) return;
       favoriteAlbums.value = result.map(a => ({
         id: a.id,
         title: a.title,
@@ -1158,8 +1221,11 @@ const albums = shallowRef<Album[]>([]);
   }
 
   async function fetchFavoriteArtists() {
+    const version = browseEpoch;
+    if (!browseIsCurrent(version)) return;
     try {
       const result: ArtistDTO[] = await libraryGetFavoriteArtists();
+      if (!browseIsCurrent(version)) return;
       favoriteArtists.value = result.map(a => ({
         id: a.id,
         name: a.name,
@@ -1242,6 +1308,7 @@ const albums = shallowRef<Album[]>([]);
   let albumRequest: Promise<void> | null = null;
 
   function fetchAlbums(reset: boolean = false): Promise<void> {
+    if (desktopMode.windowForm === 'mini') return Promise.resolve();
     if (reset) {
       albumRevision++;
       albumResetPending = true;
@@ -1302,6 +1369,7 @@ const albums = shallowRef<Album[]>([]);
   let artistResetPending = false;
   let artistRequest: Promise<void> | null = null;
   function fetchArtists(reset: boolean = false): Promise<void> {
+    if (desktopMode.windowForm === 'mini') return Promise.resolve();
     if (reset) {
       artistRevision++;
       artistResetPending = true;
@@ -1348,7 +1416,7 @@ const albums = shallowRef<Album[]>([]);
   }
 
   const currentTrack = computed(() => {
-    return queue.value[currentIndex.value] || null;
+    return queue.value[currentIndex.value] || sessionTrack.value || null;
   });
 
   // 歌词行接口定义
@@ -1401,11 +1469,12 @@ const albums = shallowRef<Album[]>([]);
    * 自动加载（正常完整）与显式打开加载（DM-04 极简验收 3）共用此实现。
    */
   async function loadLyricsForTrack(track: Track, reqId: number) {
+    const policyVersion = desktopMode.strategyVersion;
     try {
       const lrcText = uiStore.fetchLyricsOnline
         ? await libraryGetLyrics(track.id, true)
         : null;
-      if (reqId !== currentTrackRequestId) return;
+      if (reqId !== currentTrackRequestId || policyVersion !== desktopMode.strategyVersion || desktopMode.windowForm === 'mini') return;
       loadedLyricsTrackId = track.id;
       if (lrcText) {
         lyrics.value = parseLrc(lrcText);
@@ -1418,7 +1487,7 @@ const albums = shallowRef<Album[]>([]);
       }
     } catch (e) {
       console.error("Failed to load lyrics:", e);
-      if (reqId !== currentTrackRequestId) return;
+      if (reqId !== currentTrackRequestId || policyVersion !== desktopMode.strategyVersion || desktopMode.windowForm === 'mini') return;
       loadedLyricsTrackId = track.id;
       lyrics.value = [
         { text: track.title, time: 0 },
@@ -1441,7 +1510,7 @@ const albums = shallowRef<Album[]>([]);
     await loadLyricsForTrack(track, currentTrackRequestId);
   }
 
-  watch(currentTrack, (newTrack) => {
+  watch([currentTrack, () => desktopMode.windowForm], ([newTrack]) => {
     const reqId = ++currentTrackRequestId;
     if (trackInfoDebounceTimer) {
       clearTimeout(trackInfoDebounceTimer);
@@ -1453,6 +1522,7 @@ const albums = shallowRef<Album[]>([]);
       // 快速连续切歌时防抖 100ms，避免为飞速掠过的过时曲目发出无谓的元数据和歌词 IPC 请求
       trackInfoDebounceTimer = setTimeout(() => {
         if (reqId !== currentTrackRequestId) return;
+        if (desktopMode.windowForm === 'mini') return;
 
         // 1. 独立异步加载文件元数据（本地查询，零等待）
         libraryGetTrackFileInfo(trackId)
@@ -1497,6 +1567,8 @@ const albums = shallowRef<Album[]>([]);
   };
 
   async function refreshCurrentPlaylistTracks(playlistId: number) {
+    const version = browseEpoch;
+    if (!browseIsCurrent(version)) return;
     const playlist = playlists.value.find(p => p.id === playlistId)
       || { id: playlistId, name: '未知歌单', count: 0, description: '', cover_artwork_id: null, cover_thumb: null };
     if (!currentPlaylistDetailsData.value) {
@@ -1507,6 +1579,7 @@ const albums = shallowRef<Album[]>([]);
 
     try {
       const result: TrackDTO[] = await libraryGetPlaylistTracks(playlistId);
+      if (!browseIsCurrent(version)) return;
       const tracksData = mapTrackList(result);
 
       playlist.count = tracksData.length;
@@ -1517,7 +1590,7 @@ const albums = shallowRef<Album[]>([]);
       };
     } catch(e) {
       console.error(e);
-      currentPlaylistDetailsData.value.isLoadingTracks = false;
+      if (currentPlaylistDetailsData.value?.id === playlistId) currentPlaylistDetailsData.value.isLoadingTracks = false;
     }
   }
 
@@ -1543,6 +1616,8 @@ const albums = shallowRef<Album[]>([]);
   }
 
   watch(activeAlbumId, async (newId) => {
+    const version = browseEpoch;
+    if (!browseIsCurrent(version)) return;
     if (newId) {
       let album = albums.value.find(a => a.id === newId);
       if (!album && currentArtistDetailsData.value?.albums) {
@@ -1553,6 +1628,7 @@ const albums = shallowRef<Album[]>([]);
       if (!album) {
         try {
           const albumDto = await libraryGetAlbumById(newId);
+          if (!browseIsCurrent(version) || activeAlbumId.value !== newId) return;
           if (albumDto) {
             album = {
               id: albumDto.id,
@@ -1595,6 +1671,7 @@ const albums = shallowRef<Album[]>([]);
             libraryFetchMissingAlbumCover(newId, true).catch(console.error);
           }
           const result: TrackDTO[] = await libraryGetAlbumTracks(newId);
+          if (!browseIsCurrent(version) || activeAlbumId.value !== newId) return;
           const tracksData = mapTrackList(result);
           currentAlbumDetailsData.value = { ...album, tracks: tracksData };
         } catch (e) {
@@ -1608,6 +1685,8 @@ const albums = shallowRef<Album[]>([]);
 
   const fetchArtistTracks = async (artistId: number, isLoadMore = false) => {
     if (!currentArtistDetailsData.value) return;
+    const details = currentArtistDetailsData.value;
+    const version = browseEpoch;
     if (isLoadMore && (!currentArtistDetailsData.value.hasMoreTracks || currentArtistDetailsData.value.isLoadingTracks)) return;
 
     currentArtistDetailsData.value.isLoadingTracks = true;
@@ -1615,6 +1694,7 @@ const albums = shallowRef<Album[]>([]);
       const limit = 30;
       const offset = currentArtistDetailsData.value.tracksOffset;
       const tracksResult: TrackDTO[] = await libraryGetArtistTracks(artistId, limit, offset);
+      if (!browseIsCurrent(version) || currentArtistDetailsData.value !== details) return;
 
       const tracksData = mapTrackList(tracksResult);
 
@@ -1628,7 +1708,7 @@ const albums = shallowRef<Album[]>([]);
     } catch(e) {
       console.error(e);
     } finally {
-      currentArtistDetailsData.value.isLoadingTracks = false;
+      if (currentArtistDetailsData.value === details) details.isLoadingTracks = false;
     }
   };
 
@@ -1638,6 +1718,8 @@ const albums = shallowRef<Album[]>([]);
   const fetchArtistAlbums = async (artistId: number, isLoadMore = false) => {
     if (!currentArtistDetailsData.value) return;
     if (currentArtistDetailsData.value.isLoadingAlbums) return;
+    const details = currentArtistDetailsData.value;
+    const version = browseEpoch;
 
     currentArtistDetailsData.value.isLoadingAlbums = true;
     try {
@@ -1649,6 +1731,7 @@ const albums = shallowRef<Album[]>([]);
       const fetchCount = needCount ? libraryGetArtistAlbumCount(artistId) : Promise.resolve(currentArtistDetailsData.value.albumsTotalCount || 0);
 
       const [albumsResult, count] = await Promise.all([fetchList, fetchCount]);
+      if (!browseIsCurrent(version) || currentArtistDetailsData.value !== details) return;
       currentArtistDetailsData.value.albumsTotalCount = count;
 
       const artistAlbums: Album[] = albumsResult.map(a => ({
@@ -1669,7 +1752,7 @@ const albums = shallowRef<Album[]>([]);
     } catch(e) {
       console.error(e);
     } finally {
-      currentArtistDetailsData.value.isLoadingAlbums = false;
+      if (currentArtistDetailsData.value === details) details.isLoadingAlbums = false;
     }
   };
 
@@ -1716,6 +1799,8 @@ const albums = shallowRef<Album[]>([]);
   }
 
   watch(activeArtistId, async (newId, oldId) => {
+    const version = browseEpoch;
+    if (!browseIsCurrent(version)) return;
     // 1. 离开上一位艺人：留下详情（保留分页与子标签），供返回时复用
     if (oldId) {
       const prev = currentArtistDetailsData.value;
@@ -1742,6 +1827,7 @@ const albums = shallowRef<Album[]>([]);
       if (!artist) {
         try {
           const artistDto = await libraryGetArtistById(newId);
+          if (!browseIsCurrent(version) || activeArtistId.value !== newId) return;
           if (artistDto) {
             artist = {
               id: artistDto.id,
@@ -1853,8 +1939,15 @@ const albums = shallowRef<Album[]>([]);
 
   // ===== 进度持久化（事件驱动，避免高频写磁盘） =====
   let progressSaveTimer: ReturnType<typeof setInterval> | null = null;
+  onScopeDispose(() => {
+    if (trackInfoDebounceTimer) clearTimeout(trackInfoDebounceTimer);
+    if (persistQueueTimer) clearTimeout(persistQueueTimer);
+    if (progressSaveTimer) clearInterval(progressSaveTimer);
+  });
 
   function saveProgressToStorage() {
+    const index = lightweightSession.value ? lastSessionSummary.value?.currentIndex : currentIndex.value;
+    if (index != null && index >= 0) localStorage.setItem('lumo_current_index', String(index));
     localStorage.setItem('lumo_progress_ms', String(progressMs.value));
   }
 
@@ -1870,6 +1963,12 @@ const albums = shallowRef<Album[]>([]);
     }
     saveProgressToStorage();
   }
+
+  // The root session owns this timer for full and lightweight playback alike.
+  watch(isPlaying, playing => {
+    if (playing) startProgressAutoSave();
+    else stopProgressAutoSave();
+  }, { flush: 'sync' });
 
   // 监视状态标量并写入 localStorage
   watch(currentIndex, (newIdx) => {
@@ -2009,6 +2108,28 @@ const albums = shallowRef<Album[]>([]);
     if (!bundle) fetchCounts();
   }
 
+  /** Mini cold start: only the current song and queue scalars cross IPC. Never start audio. */
+  async function restoreLightweightSession() {
+    if (sessionRestored) return;
+    sessionRestored = true;
+    lightweightSession.value = true;
+    const savedIndex = Number(localStorage.getItem('lumo_current_index') ?? -1);
+    const savedProgress = Number(localStorage.getItem('lumo_progress_ms') ?? 0);
+    const savedVolume = Number(localStorage.getItem('lumo_volume') ?? 80);
+    if (Number.isFinite(savedVolume) && savedVolume >= 0 && savedVolume <= 100) {
+      volume.value = savedVolume;
+      await playbackSetVolume(savedVolume / 100);
+    }
+    const savedRate = Number(localStorage.getItem('lumo_playback_rate') ?? 1);
+    if (Number.isFinite(savedRate) && savedRate >= 0.5 && savedRate <= 1.5) await setPlaybackRate(savedRate);
+    await syncSessionFromBackend();
+    if (lastSessionSummary.value?.currentTrack && savedIndex === lastSessionSummary.value.currentIndex
+      && Number.isFinite(savedProgress) && savedProgress >= 0) {
+      progressMs.value = Math.min(durationMs.value || savedProgress, savedProgress);
+    }
+    saveProgressToStorage();
+  }
+
   // ================= 歌单操作 Actions =================
 
   // 删除歌单
@@ -2049,6 +2170,8 @@ const albums = shallowRef<Album[]>([]);
    * @param kind 预设类型，目前支持 "most_played"（播放最多）
    */
   async function loadSmartPlaylist(kind: string) {
+    const version = browseEpoch;
+    if (!browseIsCurrent(version)) return;
     activeSmartPlaylistKind.value = kind;
     activeLibraryTab.value = '智能歌单';
     activeAlbumId.value = null;
@@ -2057,6 +2180,7 @@ const albums = shallowRef<Album[]>([]);
     isLoadingSmartPlaylist.value = true;
     try {
       const dtos = await libraryGetSmartPlaylist(kind, 100);
+      if (!browseIsCurrent(version)) return;
       smartPlaylistTracks.value = mapTrackList(dtos);
     } catch (e) {
       console.error(`[SmartPlaylist] Failed to load kind=${kind}:`, e);
@@ -2069,6 +2193,34 @@ const albums = shallowRef<Album[]>([]);
   let isTogglingPlay = false;
   async function togglePlay() {
     if (isTogglingPlay) return;
+    if (lightweightSession.value) {
+      if (!sessionTrack.value || !summaryQueueLength.value) return;
+      isTogglingPlay = true;
+      sessionReadSeq++;
+      playbackError.value = '';
+      try {
+        if (isPlaying.value) {
+          await playbackPause();
+          isPlaying.value = false;
+        } else if (!hasLoadedCurrentFile.value) {
+          isBuffering.value = true;
+          const position = progressMs.value;
+          await playbackPlayIndex(lastSessionSummary.value?.currentIndex ?? 0);
+          hasLoadedCurrentFile.value = true;
+          if (position > 0) await playbackSeek(position);
+          isPlaying.value = true;
+        } else {
+          await playbackResume();
+          isPlaying.value = true;
+        }
+      } catch (e) {
+        isBuffering.value = false;
+        playbackError.value = String(e);
+        uiStore.showToast(playbackError.value, 'error');
+        await syncSessionFromBackend();
+      } finally { sessionReadSeq++; isTogglingPlay = false; }
+      return;
+    }
     if (queue.value.length === 0) return;
     if (currentIndex.value === -1) {
       currentIndex.value = 0;
@@ -2076,6 +2228,9 @@ const albums = shallowRef<Album[]>([]);
 
     const track = queue.value[currentIndex.value];
     if (!track) return;
+    // Restored queues can have no selected track yet; selecting index 0 must also
+    // initialize the seek range before the first backend track-change event.
+    durationMs.value = track.durationSec ? track.durationSec * 1000 : 0;
 
     isTogglingPlay = true;
     try {
@@ -2115,8 +2270,6 @@ const albums = shallowRef<Album[]>([]);
                 progressMs.value = 0;
               }
             }
-            // 同步系统媒体通知
-            updateMediaSessionMetadata(track);
           }
         } else {
           // 乐观恢复
@@ -2171,6 +2324,13 @@ const albums = shallowRef<Album[]>([]);
 
     listen<{ index: number; track: any }>('playback-track-changed', (event) => {
       const { index } = event.payload;
+      playbackError.value = '';
+      if (lightweightSession.value) {
+        // Fetch one authoritative summary, never the full items mirror.
+        hasLoadedCurrentFile.value = true;
+        void syncSessionFromBackend();
+        return;
+      }
       if (index >= 0 && index < queue.value.length) {
         currentIndex.value = index;
         const track = queue.value[index];
@@ -2178,7 +2338,6 @@ const albums = shallowRef<Album[]>([]);
         isPlaying.value = true;
         progressMs.value = 0;
         durationMs.value = track.durationSec ? track.durationSec * 1000 : 0;
-        updateMediaSessionMetadata(track);
       }
     });
 
@@ -2202,6 +2361,7 @@ const albums = shallowRef<Album[]>([]);
       console.error('[playback-error] 播放失败:', event.payload);
       isPlaying.value = false;
       isBuffering.value = false;
+      playbackError.value = event.payload?.message || '播放失败';
       uiStore.showToast(event.payload?.message || '播放失败');
       if ('mediaSession' in navigator) {
         navigator.mediaSession.playbackState = 'paused';
@@ -2262,21 +2422,31 @@ const albums = shallowRef<Album[]>([]);
    */
   function applySessionSummary(summary: PlaybackSessionSummaryDTO) {
     if (summary.stateVersion < lastAppliedSessionVersion) return;
+    const keepResumePosition = !!summary.currentTrack && !hasLoadedCurrentFile.value && !summary.isPlaying && summary.positionMs === 0
+      && summary.currentTrack?.trackId === lastSessionSummary.value?.currentTrack?.trackId;
     lastAppliedSessionVersion = summary.stateVersion;
     lastSessionSummary.value = summary;
     playMode.value = fromBackendPlayMode(summary.mode);
-    progressMs.value = summary.positionMs;
+    if (!keepResumePosition) progressMs.value = summary.positionMs;
     isPlaying.value = summary.isPlaying;
+    summaryQueueLength.value = summary.queueLength;
+    if (queue.value.length === 0) {
+      sessionTrack.value = summary.currentTrack ? queueItemToTrack(summary.currentTrack) : null;
+      durationMs.value = summary.durationMs ?? 0;
+    }
     if (queue.value.length > 0 && summary.currentIndex < queue.value.length) {
       currentIndex.value = summary.currentIndex;
       const t = queue.value[summary.currentIndex];
       if (t) durationMs.value = t.durationSec ? t.durationSec * 1000 : 0;
     }
+    if (lightweightSession.value) saveProgressToStorage();
   }
 
   async function syncSessionFromBackend() {
+    const seq = ++sessionReadSeq;
     try {
-      applySessionSummary(await playbackSessionSummary());
+      const summary = await playbackSessionSummary();
+      if (seq === sessionReadSeq) applySessionSummary(summary);
     } catch (e) {
       console.warn('[session] 轻量摘要对账失败:', e);
     }
@@ -2285,7 +2455,7 @@ const albums = shallowRef<Album[]>([]);
   if (typeof window !== 'undefined') {
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') {
-        if (queue.value.length > 0) {
+        if (queue.value.length > 0 || lightweightSession.value || desktopMode.windowForm === 'mini') {
           void syncSessionFromBackend();
         } else {
           void syncQueueStateFromBackend();
@@ -2306,6 +2476,7 @@ const albums = shallowRef<Album[]>([]);
     searchQuery: string;
     tracksAnchorOffset: number;
     tracksAnchorId: number | null;
+    tracksAnchorRemainder: number;
   }
   let browseSnapshot: BrowseSnapshot | null = null;
   /** 非视觉态期间发生过扫描/回填，待恢复后合并刷新一次（验收 2） */
@@ -2314,7 +2485,7 @@ const albums = shallowRef<Album[]>([]);
   const pendingBrowseRestore = ref(false);
 
   function snapshotBrowseContext() {
-    const anchorOffset = Math.max(0, tracksOffset - tracksLimit);
+    const anchorOffset = visibleBrowseAnchor?.offset ?? Math.max(0, tracksOffset - tracksLimit);
     browseSnapshot = {
       activeLibraryTab: activeLibraryTab.value,
       activeAlbumId: activeAlbumId.value,
@@ -2322,11 +2493,21 @@ const albums = shallowRef<Album[]>([]);
       activePlaylistId: activePlaylistId.value,
       searchQuery: searchQuery.value,
       tracksAnchorOffset: anchorOffset,
-      tracksAnchorId: tracks.value[anchorOffset]?.id ?? null,
+      tracksAnchorId: visibleBrowseAnchor?.id ?? tracks.value[anchorOffset - tracksWindowStart.value]?.id ?? null,
+      tracksAnchorRemainder: visibleBrowseAnchor?.remainder ?? 0,
     };
+    visibleBrowseAnchor = null;
   }
 
   function releaseBrowseData() {
+    browseEpoch++;
+    albumResetPending = false;
+    artistResetPending = false;
+    fetchTracksGeneration++;
+    albumRevision++;
+    artistRevision++;
+    currentTrackRequestId++;
+    if (trackInfoDebounceTimer) clearTimeout(trackInfoDebounceTimer);
     tracks.value = [];
     albums.value = [];
     artists.value = [];
@@ -2344,6 +2525,8 @@ const albums = shallowRef<Album[]>([]);
     insights.value = null;
     stats.value = null;
     lyrics.value = []; // 歌词浏览对象；显式打开按需重载（DM-04 ensureLyricsLoaded）
+    currentTrackFileInfo.value = null;
+    loadedLyricsTrackId = null;
     tracksOffset = 0;
     hasMoreTracks.value = true;
   }
@@ -2376,47 +2559,68 @@ const albums = shallowRef<Album[]>([]);
   async function applyBrowseRestore() {
     const snap = browseSnapshot;
     browseSnapshot = null;
-    pendingBrowseRestore.value = false;
-    if (!snap) return;
-    browseDirty.value = false; // 恢复即拿到扫描后最新数据，dirty 合并完成（验收 2）
-    activeAlbumId.value = null;
-    activeArtistId.value = null;
-    activePlaylistId.value = null;
-    activeLibraryTab.value = snap.activeLibraryTab;
-    await nextTick();
-    activeAlbumId.value = snap.activeAlbumId;
-    activeArtistId.value = snap.activeArtistId;
-    activePlaylistId.value = snap.activePlaylistId;
+    try {
+      if (lightweightSession.value) {
+        const restoredPosition = progressMs.value;
+        const restoredTrackId = sessionTrack.value?.id;
+        await syncQueueStateFromBackend();
+        // A cold-started, paused session has no decoder position yet. Hydrating
+        // its queue must preserve the position to use on the first Play.
+        if (!hasLoadedCurrentFile.value && currentTrack.value?.id === restoredTrackId) {
+          progressMs.value = restoredPosition;
+        }
+        lightweightSession.value = false;
+        sessionTrack.value = null;
+      }
+      await Promise.all([fetchPlaylists(), fetchSources(), fetchCounts()]);
+      if (!snap) return;
+      browseDirty.value = false; // 恢复即拿到扫描后最新数据，dirty 合并完成（验收 2）
+      activeAlbumId.value = null;
+      activeArtistId.value = null;
+      activePlaylistId.value = null;
+      activeLibraryTab.value = snap.activeLibraryTab;
+      await nextTick();
+      activeAlbumId.value = snap.activeAlbumId;
+      activeArtistId.value = snap.activeArtistId;
+      activePlaylistId.value = snap.activePlaylistId;
 
-    if (snap.activeAlbumId || snap.activeArtistId || snap.activePlaylistId) return; // 详情 watcher 自行加载
-    switch (snap.activeLibraryTab) {
-      case '全部歌曲':
-        searchQuery.value = snap.searchQuery;
-        // 锚点窗口播种（验收 3）：以快照偏移为中心取一个窗口，不逐页回放
-        await seedTracksWindow(snap.tracksAnchorOffset);
-        break;
-      case '最近播放':
-        await fetchRecentlyPlayed();
-        break;
-      case '喜欢的音乐':
-        await fetchFavoriteTracks();
-        break;
-      case '专辑':
-        await fetchAlbums(true);
-        break;
-      case '艺术家':
-        await fetchArtists(true);
-        break;
-      case '收藏的专辑':
-        await fetchFavoriteAlbums();
-        break;
-      case '收藏的歌手':
-        await fetchFavoriteArtists();
-        break;
-      default:
-        // 播放列表（内存队列，全程保留）/首页/设置等：自管或无需处理
-        break;
-    }
+      if (snap.activeAlbumId || snap.activeArtistId || snap.activePlaylistId) return; // 详情 watcher 自行加载
+      switch (snap.activeLibraryTab) {
+        case '全部歌曲':
+          searchQuery.value = snap.searchQuery;
+          // 锚点窗口播种（验收 3）：以快照偏移为中心取一个窗口，不逐页回放
+          await seedTracksWindow(snap.tracksAnchorOffset);
+          browseRestoreScrollIndex.value = 0;
+          browseRestoreScrollRemainder.value = snap.tracksAnchorRemainder;
+          if (snap.tracksAnchorId != null && tracks.value[0]?.id !== snap.tracksAnchorId) {
+            const found = tracks.value.findIndex(t => t.id === snap.tracksAnchorId);
+            if (found >= 0) browseRestoreScrollIndex.value = found;
+            else uiStore.showToast('曲库已有变化，已恢复到附近位置', 'info');
+          }
+          break;
+        case '最近播放':
+          await fetchRecentlyPlayed();
+          break;
+        case '喜欢的音乐':
+          await fetchFavoriteTracks();
+          break;
+        case '专辑':
+          await fetchAlbums(true);
+          break;
+        case '艺术家':
+          await fetchArtists(true);
+          break;
+        case '收藏的专辑':
+          await fetchFavoriteAlbums();
+          break;
+        case '收藏的歌手':
+          await fetchFavoriteArtists();
+          break;
+        default:
+          // 播放列表（内存队列，全程保留）/首页/设置等：自管或无需处理
+          break;
+      }
+    } finally { pendingBrowseRestore.value = false; }
   }
 
   function isSameTrackList(a: Track[], b: Track[]): boolean {
@@ -2467,7 +2671,6 @@ const albums = shallowRef<Album[]>([]);
           await playbackSetQueue(items, index, toBackendPlayMode(playMode.value));
           persistPlayQueueIfNeeded();
         }
-        updateMediaSessionMetadata(track);
         if ('mediaSession' in navigator) {
           navigator.mediaSession.playbackState = 'playing';
         }
@@ -2484,7 +2687,7 @@ const albums = shallowRef<Album[]>([]);
 
   let isAdvancing = false;
   async function nextTrack(_isAuto = false) {
-    if (queue.value.length === 0 || isAdvancing) return;
+    if (sessionQueueLength.value === 0 || isAdvancing) return;
     isAdvancing = true;
     try {
       await playbackAdvance(1);
@@ -2496,7 +2699,7 @@ const albums = shallowRef<Album[]>([]);
   }
 
   async function prevTrack() {
-    if (queue.value.length === 0 || isAdvancing) return;
+    if (sessionQueueLength.value === 0 || isAdvancing) return;
     isAdvancing = true;
     try {
       await playbackAdvance(-1);
@@ -2541,6 +2744,7 @@ const albums = shallowRef<Album[]>([]);
   let pendingSeekMs: number | null = null;
 
   async function seek(positionMs: number) {
+    sessionReadSeq++;
     if (seekInFlight) {
       pendingSeekMs = positionMs;
       return;
@@ -2548,7 +2752,9 @@ const albums = shallowRef<Album[]>([]);
     seekInFlight = true;
     try {
       await playbackSeek(positionMs);
+      sessionReadSeq++;
       progressMs.value = positionMs;
+      saveProgressToStorage();
     } catch (e) {
       console.error('Seek failed:', e);
     } finally {
@@ -2766,6 +2972,13 @@ const albums = shallowRef<Album[]>([]);
     });
   }
 
+  // The root owns metadata even when the full player is unmounted. A policy
+  // change must also replace old notification artwork without changing tracks.
+  watch([currentTrack, () => desktopMode.visualAllowed], ([track]) => {
+    if (track) updateMediaSessionMetadata(track);
+    else if ('mediaSession' in navigator) navigator.mediaSession.metadata = null;
+  }, { immediate: true });
+
   /**
    * 初始化 MediaSession action handler。
    * 将键盘多媒体键（播放/暂停/上一首/下一首/快进快退）映射到 store 中的对应操作。
@@ -2935,6 +3148,9 @@ const albums = shallowRef<Album[]>([]);
     isLoadingArtists,
     hasMoreTracks,
     restoreSession,
+    restoreLightweightSession,
+    sessionQueueLength,
+    playbackError,
     fetchStartupBundle,
     // 轻量会话（DM-02）：迷你栏消费；接线幂等供转换事务复用
     ensureSessionWired,
@@ -2948,6 +3164,9 @@ const albums = shallowRef<Album[]>([]);
     browseDirty,
     pendingBrowseRestore,
     applyBrowseRestore,
+    recordBrowseAnchor,
+    browseRestoreScrollIndex,
+    browseRestoreScrollRemainder,
     deletePlaylist,
     removeTrackFromPlaylist,
     // 专辑无限滚动

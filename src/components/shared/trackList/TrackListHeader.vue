@@ -56,9 +56,11 @@ function onToggleDetailed() {
     <!-- 批量选择入口（w-8 + ml-2 = 40px，与行尾占位配对） -->
     <button
       v-if="showBatchEntry"
-      class="ml-2 w-8 shrink-0 flex items-center justify-center text-text-muted hover:text-text-primary transition-colors-smooth"
-      :class="batchActive ? 'text-brand-orange' : ''"
+      class="ml-2 w-8 h-7 rounded-[6px] shrink-0 flex items-center justify-center transition-colors-smooth"
+      :class="batchActive ? 'text-brand-orange bg-list-selected' : 'text-text-muted hover:text-text-primary hover:bg-list-hover'"
       :title="batchActive ? '退出多选' : '多选歌曲'"
+      :aria-label="batchActive ? '退出多选' : '多选歌曲'"
+      :aria-pressed="batchActive === true"
       @click="emit('toggleBatch')"
     >
       <ListChecks class="w-[14px] h-[14px]" />

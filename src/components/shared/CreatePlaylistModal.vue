@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { usePlayerStore } from '../../stores/player';
+import { useMiniModeBlocker } from '../../composables/useMiniModeBlocker';
+useMiniModeBlocker(() => '请先完成或关闭新建歌单');
 
 const playerStore = usePlayerStore();
 

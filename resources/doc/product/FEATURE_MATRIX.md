@@ -2,6 +2,7 @@
 
 > 文档状态：Draft v2（I0 / PC-002）
 > 事实基线：Lumo v1.8.1，commit `ba15a07`，核对日期 2026-09-18
+> 2026-10-01 增量：补充桌面显示模式 2.1.0-beta.1 测试版与歌曲列表修复；其余旧条目未在本轮全量重审。
 > 本文件是 Lumo **唯一**的功能状态事实源。README、VISION、Release Notes、官网文案只允许引用本表，不得复制出一份独立维护的状态列表。
 > 本文所有条目均以**本人逐行核验代码**为准（v1 稿曾采信二手盘点，其中"系统托盘""Windows 媒体键注册""macOS 毛玻璃""11 种格式白名单"四项不实，已删除）。
 
@@ -81,6 +82,9 @@
 | 诊断包导出 📱 | ❌ | ✅ | Beta | `MobileSettings.vue:218-260` share 插件；桌面 `debug.rs` 无导出 |
 | 日志文件落盘 | ❌ | ❌ | **未实现** | `tracing_subscriber::fmt::init()` 仅 stdout（`lib.rs:228`）；Android 走 logcat → 「打开日志目录」在多数平台为空目录，I5 处理 |
 | 深浅色主题 | ✅ | ✅ | Beta | `stores/ui.ts`；Android 另有系统主题色自适应（`platform.rs`） |
+| 桌面正常/极简 × 完整/迷你 | ⚠️ | — | **Experimental（2.1.0-beta.1 启用）** | Stable 构建隐藏入口，Beta 同时启用前后端实验开关。Windows 100% DPI 的窗口转换、置顶、冷启动和回填暂停已部分实测；极简实体分页、艺术家独立详情与文字专辑列表已回归。[M4 执行记录](../desktop-modes/M4_执行记录.md)登记静置对照与未测项，尚未通过全量播放/性能/跨平台门槛。 |
+| 歌曲列表多选 | ✅ | — | 桌面工程已验证 | 九种列表统一表头入口，单复选框、选中高亮、去重数量、全选/取消、批量收藏/加入歌单；长列表底部工具栏可见。12项组件组合回归与Windows全部歌曲/最近播放显示验证见[M4记录](../desktop-modes/M4_执行记录.md)。 |
+| 首页 AI 入口随设置隐藏 | ✅ | ✅ | 共享组件已验证 | HomeView 读取 AI enabled 状态；3项回归覆盖冷启动、已有关闭设置和保存关闭/重新启用，Windows关闭态实机入口隐藏。移动端共用组件，未进行真机验证。 |
 | 移动端本地目录建议 | — | ✅ | Beta | `platform.rs:125-142` 硬编码 9 个候选（含网易云/酷狗/QQ音乐下载目录），仅返回实际存在的目录；属对第三方应用目录结构的隐式依赖 |
 | SAF 持久化 URI 授权 | — | ❌ | **未实现** | 全仓无 `takePersistableUriPermission` / `EXTRA_INITIAL_URI`；Android 走「运行时 `READ_EXTERNAL_STORAGE`(≤32) / `READ_MEDIA_AUDIO`(33+) + 手填绝对路径」，非 SAF |
 | 本地目录候选（移动） | — | ✅ | Beta | `services/platform.rs:125-142` 硬编码 `/storage/emulated/0` + 9 个候选（含网易云/酷狗/QQ 音乐下载目录），仅返回实际存在者；属对第三方目录布局的隐式依赖 |

@@ -92,6 +92,8 @@ jobs:
     # env 里的布尔会被转成字符串，比较时写 == 'true'。
     env:
       IS_PRERELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && contains(github.ref_name, '-') }}
+      # Beta 同时启用前端入口和 Rust 窗口恢复；Stable 保持默认关闭。
+      VITE_LUMO_DESKTOP_MODES: ${{ startsWith(github.ref, 'refs/tags/') && contains(github.ref_name, '-') && '1' || '0' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -129,7 +131,8 @@ jobs:
           tagName: v__VERSION__
           releaseName: Lumo v__VERSION__
           releaseBody: Lumo music player release. Download the installer for your platform below.
-          releaseDraft: false
+          # 所有平台打包完并核对资产后，再公开 Release。
+          releaseDraft: true
           # 通道隔离（VERSION_POLICY §2）：预发布 tag（v*-beta.N）必须在 GitHub 上标成 prerelease，
           # 否则它会成为 /releases/latest 的返回值，被应用内更新检查（MobileSettings.vue 的
           # releases/latest）当成 Stable 推给全部用户。稳定 tag 仍为 false。
@@ -204,7 +207,7 @@ jobs:
         run: npm install
 
       - name: Build Android APK
-        run: npm run tauri android build -- --target aarch64 --apk
+        run: npm run tauri -- android build --target aarch64 --apk
 
       - name: Collect and Rename APKs
         id: collect-apk

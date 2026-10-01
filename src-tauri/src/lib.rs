@@ -94,6 +94,11 @@ fn backfill_artwork_thumbnails(
     use rusqlite::params;
     use tauri::Emitter;
 
+    // Do not even enumerate artwork rows during a mini/minimal cold start.
+    while policy.visual_paused() {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+
     let rows: Vec<(i64, String)> = {
         let conn = match pool.get() {
             Ok(c) => c,
@@ -141,7 +146,7 @@ fn backfill_artwork_thumbnails(
     for chunk in rows.chunks(batch_size) {
         // 视觉策略门禁（DM-03 验收 3）：暂停时挂起在批次边界——
         // 当前安全批次已完成（含事务提交），不启动下一批；恢复后自动继续。
-        if policy.visual_paused() {
+        while policy.visual_paused() {
             if !paused_waited {
                 tracing::info!(
                     "[回填] 视觉任务暂停：已完成 {}，剩余 {} 条等待恢复",
@@ -151,7 +156,6 @@ fn backfill_artwork_thumbnails(
                 paused_waited = true;
             }
             std::thread::sleep(std::time::Duration::from_millis(500));
-            continue;
         }
         paused_waited = false;
 
@@ -317,6 +321,17 @@ pub fn run() {
                 .app_data_dir()
                 .unwrap_or_else(|_| PathBuf::from("."));
             std::fs::create_dir_all(&app_dir).unwrap();
+            #[cfg(not(target_os = "android"))]
+            if let Some(window) = app.get_webview_window("main") {
+                let (preferences, _) = services::desktop_preferences::load(&app_dir);
+                if let Err(error) = services::desktop_window::apply_startup(&window, &preferences) {
+                    tracing::warn!("[desktop_window] 启动几何回退由前端处理: {error}");
+                }
+            }
+            #[cfg(target_os = "android")]
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+            }
             let db_path = app_dir.join("lumo.sqlite");
 
             let pool = init_db(db_path).expect("Failed to initialize database");
@@ -667,8 +682,6 @@ pub fn run() {
             crate::commands::debug::debug_play_tone,
             crate::commands::debug::debug_webdav_probe,
             // [M0 探针] 窗口 API 临时命令，DM-07 后随 src/dev/windowProbe.ts 移除
-            crate::commands::debug::dev_window_probe_signal,
-            crate::commands::debug::dev_window_probe_log,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

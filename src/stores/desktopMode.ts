@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 import { computed, ref, watch } from "vue";
 import { invoke } from "../utils/tauriInvoke";
 import { useUiStore } from "./ui";
+import { DESKTOP_MODES_ENABLED } from '../config/desktopModes';
 
 /**
  * 桌面两维模式控制器（desktop-modes 01 §4，DM-01）。
@@ -15,8 +16,8 @@ import { useUiStore } from "./ui";
  * 每次转换持有递增 transitionId，过期响应一律丢弃。写入失败保留本次切换（内存），
  * 提示「本次有效，未保存」，不循环重试。
  *
- * M0 探针结论（M0_执行记录.md）：窗口几何的读取/应用与最大化状态跟踪在 DM-07
- * 接入；本 store 现阶段只负责状态机与持久化，geometry 字段为 DM-07 预留。
+ * DM-07 窗口驱动负责几何读取、应用与最大化意图跟踪；本 store 负责
+ * 状态机与持久化，窗口事务成功后才更新当前形态。
  */
 
 export type ExperienceMode = 'normal' | 'minimal';
@@ -39,6 +40,14 @@ export interface DesktopPreferences {
   fullGeometry: WindowGeometry | null;
   miniGeometry: WindowGeometry | null;
   miniAlwaysOnTop: boolean;
+}
+
+export interface DesktopWindowDriver {
+  changeForm(from: WindowForm, to: WindowForm, prefs: DesktopPreferences): Promise<{
+    previousGeometry: WindowGeometry;
+    nextGeometry: WindowGeometry;
+  }>;
+  setAlwaysOnTop(on: boolean): Promise<void>;
 }
 
 /** 后端 desktop_get_preferences 返回：fileExisted=false 表示首次运行（需迁移旧尺寸） */
@@ -93,6 +102,21 @@ export const useDesktopModeStore = defineStore("desktopMode", () => {
   let transitionSeq = 0;
   /** 上次写入失败的偏好仍生效（内存），提示条由 UI 依据此标记展示 */
   const prefsDirty = ref(false);
+  let windowDriver: DesktopWindowDriver | null = null;
+  let saveChain: Promise<unknown> = Promise.resolve();
+
+  function attachWindowDriver(driver: DesktopWindowDriver | null) {
+    windowDriver = driver;
+  }
+
+  // 同一临时文件只有一个写入者；等待期间的状态由最新完整快照合并。
+  function persistPreferences(): Promise<unknown> {
+    const write = saveChain.catch(() => {}).then(() =>
+      invoke('desktop_update_preferences', { preferences: snapshot() }),
+    );
+    saveChain = write;
+    return write;
+  }
 
   /** 视觉需求派生（DM-03 资源策略的输入；联网仍需既有隐私授权） */
   const visualAllowed = computed(
@@ -137,6 +161,10 @@ export const useDesktopModeStore = defineStore("desktopMode", () => {
     // 后端已做字段级回退，这里再防御一次（前端是唯一消费方，宽松解析）
     experienceMode.value = isExperienceMode(prefs.experienceMode) ? prefs.experienceMode : 'normal';
     windowForm.value = isWindowForm(prefs.windowForm) ? prefs.windowForm : 'full';
+    if (!DESKTOP_MODES_ENABLED) {
+      experienceMode.value = 'normal';
+      windowForm.value = 'full';
+    }
     fullGeometry.value = sanitizeGeometry(prefs.fullGeometry);
     miniGeometry.value = sanitizeGeometry(prefs.miniGeometry);
     miniAlwaysOnTop.value = prefs.miniAlwaysOnTop === true;
@@ -193,16 +221,22 @@ export const useDesktopModeStore = defineStore("desktopMode", () => {
    */
   async function runTransition(
     next: TransitionPhase,
-    apply: () => void,
+    apply: () => void | Promise<void>,
   ): Promise<boolean> {
     if (phase.value !== 'idle') return false;
     const myId = ++transitionSeq;
     phase.value = next;
     try {
-      apply();
+      try {
+        await apply();
+      } catch (e) {
+        uiStore.showToast(`窗口切换失败，已保留原窗口：${String(e)}`, 'error');
+        return false;
+      }
       // 策略版本先于任何异步消费者写回自增（DM-03 验收 2）
       strategyVersion.value++;
-      await invoke('desktop_update_preferences', { preferences: snapshot() });
+      pushVisualPolicy();
+      await persistPreferences();
       if (myId !== transitionSeq) return true; // 已被更新的事务取代，结果丢弃
       prefsDirty.value = false;
       return true;
@@ -232,26 +266,42 @@ export const useDesktopModeStore = defineStore("desktopMode", () => {
   /** 进入迷你播放栏（DM-06 起才有可见效果；此处只推进状态机与持久化） */
   async function enterMini(): Promise<boolean> {
     if (windowForm.value === 'mini') return true;
-    return runTransition('entering-mini', () => {
+    const blocked = uiStore.miniModeBlockedReason;
+    if (blocked || document.querySelector('[aria-modal="true"]')) {
+      uiStore.showToast(blocked || '请先完成或关闭当前对话框', 'info');
+      return false;
+    }
+    return runTransition('entering-mini', async () => {
+      if (windowDriver) {
+        const result = await windowDriver.changeForm('full', 'mini', snapshot());
+        fullGeometry.value = result.previousGeometry;
+        miniGeometry.value = result.nextGeometry;
+      }
       windowForm.value = 'mini';
+      uiStore.closeImmersiveView();
     });
   }
 
   /** 返回完整窗口，保留原体验模式 */
   async function exitMini(): Promise<boolean> {
     if (windowForm.value === 'full') return true;
-    return runTransition('leaving-mini', () => {
+    return runTransition('leaving-mini', async () => {
+      if (windowDriver) {
+        const result = await windowDriver.changeForm('mini', 'full', snapshot());
+        miniGeometry.value = result.previousGeometry;
+        fullGeometry.value = result.nextGeometry;
+      }
       windowForm.value = 'full';
     });
   }
 
-  /** 几何更新（DM-07 接入窗口事务时调用；转换期间拒绝，避免几何互相覆盖） */
+  /** 几何更新（窗口驱动调用；转换期间拒绝，避免几何互相覆盖） */
   async function updateFullGeometry(g: WindowGeometry): Promise<boolean> {
     const clean = sanitizeGeometry(g);
     if (!clean || phase.value !== 'idle') return false;
     fullGeometry.value = clean;
     try {
-      await invoke('desktop_update_preferences', { preferences: snapshot() });
+      await persistPreferences();
       return true;
     } catch {
       prefsDirty.value = true;
@@ -264,7 +314,7 @@ export const useDesktopModeStore = defineStore("desktopMode", () => {
     if (!clean || phase.value !== 'idle') return false;
     miniGeometry.value = clean;
     try {
-      await invoke('desktop_update_preferences', { preferences: snapshot() });
+      await persistPreferences();
       return true;
     } catch {
       prefsDirty.value = true;
@@ -274,7 +324,8 @@ export const useDesktopModeStore = defineStore("desktopMode", () => {
 
   async function setMiniAlwaysOnTop(on: boolean): Promise<boolean> {
     if (miniAlwaysOnTop.value === on) return true;
-    return runTransition('changing-experience', () => {
+    return runTransition('changing-experience', async () => {
+      if (windowForm.value === 'mini') await windowDriver?.setAlwaysOnTop(on);
       miniAlwaysOnTop.value = on;
     });
   }
@@ -290,6 +341,7 @@ export const useDesktopModeStore = defineStore("desktopMode", () => {
     prefsDirty,
     visualAllowed,
     strategyVersion,
+    attachWindowDriver,
     init,
     setExperienceMode,
     enterMini,
@@ -299,28 +351,3 @@ export const useDesktopModeStore = defineStore("desktopMode", () => {
     setMiniAlwaysOnTop,
   };
 });
-
-// M1 测试入口（计划 02 §4：无正式新入口也能在测试入口验证四组合策略）。
-// DM-06 提供正式入口后移除。用法：
-//   __LUMO_DESKTOP_MODE__.get() / setExperience('minimal') / enterMini() / exitMini()
-if (import.meta.env.DEV && typeof window !== 'undefined') {
-  (window as any).__LUMO_DESKTOP_MODE__ = {
-    get: () => {
-      const s = useDesktopModeStore();
-      return {
-        experienceMode: s.experienceMode,
-        windowForm: s.windowForm,
-        phase: s.phase,
-        visualAllowed: s.visualAllowed,
-        prefsDirty: s.prefsDirty,
-      };
-    },
-    setExperience: (mode: ExperienceMode) => useDesktopModeStore().setExperienceMode(mode),
-    enterMini: () => useDesktopModeStore().enterMini(),
-    exitMini: () => useDesktopModeStore().exitMini(),
-  };
-  console.info(
-    '%c[LUMO] 桌面模式测试入口已启用：__LUMO_DESKTOP_MODE__.get() / setExperience("minimal") / enterMini() / exitMini()',
-    'color:#a6e',
-  );
-}

@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createPinia, setActivePinia } from "pinia";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createPinia, disposePinia, getActivePinia, setActivePinia } from "pinia";
 import { nextTick } from "vue";
 import { flushPromises } from "@vue/test-utils";
 
@@ -61,7 +61,158 @@ beforeEach(() => {
   eventHandlers.clear();
 });
 
+afterEach(() => {
+  const pinia = getActivePinia();
+  if (pinia) disposePinia(pinia);
+  vi.useRealTimers();
+});
+
 describe("DM-02 常驻会话", () => {
+  it('R05：迟到的可播性响应不填回迷你缓存，也不覆盖返回后的新请求', async () => {
+    const resolvers: Array<(value: unknown) => void> = [];
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === 'desktop_get_preferences') return Promise.resolve({ preferences: { schemaVersion: 1, experienceMode: 'normal', windowForm: 'full' }, fileExisted: true });
+      if (cmd === 'library_get_playability') return new Promise(resolve => resolvers.push(resolve));
+      return Promise.resolve([]);
+    });
+    const { useDesktopModeStore } = await import('./desktopMode');
+    const mode = useDesktopModeStore(); await mode.init();
+    const player = usePlayerStore();
+    const oldRead = player.ensurePlayability([1]);
+    await mode.enterMini();
+    await player.ensurePlayability([2]);
+    expect(resolvers).toHaveLength(1);
+    await mode.exitMini();
+    const newRead = player.ensurePlayability([1]);
+    expect(resolvers).toHaveLength(2);
+    resolvers[0]!({ 1: 'unavailable' }); await oldRead;
+    expect(player.getPlayability(1)).toBeUndefined();
+    resolvers[1]!({ 1: 'local' }); await newRead;
+    expect(player.getPlayability(1)).toBe('local');
+  });
+
+  it('R07：同曲目进入迷你清除通知图片，轻量切歌更新文字且不恢复图片', async () => {
+    const original = Object.getOwnPropertyDescriptor(navigator, 'mediaSession');
+    const mediaSession = { metadata: null as any, playbackState: 'none', setActionHandler: vi.fn() };
+    Object.defineProperty(navigator, 'mediaSession', { configurable: true, value: mediaSession });
+    vi.stubGlobal('MediaMetadata', class {
+      constructor(data: Record<string, unknown>) { Object.assign(this, data); }
+    });
+    let snapshot = summary({ currentTrack: { trackId: 1, mediaFileId: 101, title: '曲目一', artist: '歌手', album: '专辑', artworkId: 12, durationMs: 180000 } });
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'desktop_get_preferences') return { preferences: { schemaVersion: 1, experienceMode: 'normal', windowForm: 'full' }, fileExisted: true };
+      if (cmd === 'playback_session_summary') return snapshot;
+      return [];
+    });
+    try {
+      const { useDesktopModeStore } = await import('./desktopMode');
+      const mode = useDesktopModeStore(); await mode.init();
+      const player = usePlayerStore();
+      expect(mediaSession.metadata).toBeNull();
+      await player.syncSessionFromBackend(); await nextTick();
+      expect(mediaSession.metadata.title).toBe('曲目一');
+      expect(mediaSession.metadata.artwork).toHaveLength(1);
+      await mode.enterMini(); await nextTick();
+      expect(mediaSession.metadata.title).toBe('曲目一');
+      expect(mediaSession.metadata.artwork).toEqual([]);
+      const handlers = mediaSession.setActionHandler.mock.calls.length;
+      snapshot = summary({ stateVersion: 2, currentIndex: 1, currentTrack: { trackId: 2, mediaFileId: 102, title: '曲目二', artist: '歌手', album: '专辑', artworkId: 13, durationMs: 180000 } });
+      await player.syncSessionFromBackend(); await nextTick();
+      expect(mediaSession.metadata.title).toBe('曲目二');
+      expect(mediaSession.metadata.artwork).toEqual([]);
+      expect(mediaSession.setActionHandler).toHaveBeenCalledTimes(handlers);
+      await mode.exitMini(); await nextTick();
+      expect(mediaSession.metadata.artwork).toHaveLength(1);
+    } finally {
+      const pinia = getActivePinia(); if (pinia) disposePinia(pinia);
+      if (original) Object.defineProperty(navigator, 'mediaSession', original);
+      else Reflect.deleteProperty(navigator, 'mediaSession');
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('M4：轻量播放定时保存索引与进度，换曲和暂停保存同一会话位置', async () => {
+    vi.useFakeTimers();
+    let snapshot = summary({ currentIndex: 1 });
+    localStorage.setItem('lumo_current_index', '1');
+    localStorage.setItem('lumo_progress_ms', '60000');
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'desktop_get_preferences') return { preferences: { schemaVersion: 1, experienceMode: 'minimal', windowForm: 'mini' }, fileExisted: true };
+      if (cmd === 'playback_session_summary') return snapshot;
+      return [];
+    });
+    const { useDesktopModeStore } = await import('./desktopMode');
+    await useDesktopModeStore().init();
+    const player = usePlayerStore(); await player.restoreLightweightSession();
+    expect(player.progressMs).toBe(60000);
+    await player.togglePlay();
+    eventHandlers.get('playback-progress')?.({ payload: { position: 89000 } });
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(localStorage.getItem('lumo_current_index')).toBe('1');
+    expect(localStorage.getItem('lumo_progress_ms')).toBe('89000');
+    snapshot = summary({ stateVersion: 2, currentIndex: 2, isPlaying: true,
+      currentTrack: { trackId: 2, mediaFileId: 102, title: '曲目二', artist: '歌手', album: '专辑', artworkId: null, durationMs: 180000 } });
+    await player.syncSessionFromBackend();
+    expect(localStorage.getItem('lumo_current_index')).toBe('2');
+    expect(localStorage.getItem('lumo_progress_ms')).toBe('0');
+    eventHandlers.get('playback-progress')?.({ payload: { position: 45000 } });
+    await player.togglePlay();
+    expect(localStorage.getItem('lumo_current_index')).toBe('2');
+    expect(localStorage.getItem('lumo_progress_ms')).toBe('45000');
+    expect(player.queue).toHaveLength(0);
+  });
+
+  it('M4：已恢复队列首次在迷你栏播放时立即初始化 Seek 时长', async () => {
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'desktop_get_preferences') return { preferences: { schemaVersion: 1, experienceMode: 'normal', windowForm: 'full' }, fileExisted: true };
+      if (cmd === 'library_get_play_queue') return [{ id: 1, title: '曲目一', artist_name: '歌手', album_title: '专辑', duration_ms: 180000, media_file_id: 101 }];
+      return [];
+    });
+    const { useDesktopModeStore } = await import('./desktopMode');
+    const mode = useDesktopModeStore(); await mode.init();
+    const store = usePlayerStore(); await store.restoreSession();
+    expect(store.currentIndex).toBe(-1);
+    await mode.enterMini();
+    await store.togglePlay();
+    expect(store.currentTrack?.id).toBe(1);
+    expect(store.durationMs).toBe(180000);
+    expect(store.isPlaying).toBe(true);
+    expect(invokeMock.mock.calls.filter(([cmd]) => cmd === 'library_get_track_file_info')).toHaveLength(0);
+  });
+
+  it('M3：进入迷你后迟到的歌曲和歌单响应不能重新填充浏览数组', async () => {
+    let resolveTracks!: (v: unknown) => void;
+    let resolvePlaylists!: (v: unknown) => void;
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === 'desktop_get_preferences') return Promise.resolve({ preferences: { schemaVersion: 1, experienceMode: 'normal', windowForm: 'full' }, fileExisted: true });
+      if (cmd === 'library_get_tracks') return new Promise(r => { resolveTracks = r; });
+      if (cmd === 'library_get_playlists') return new Promise(r => { resolvePlaylists = r; });
+      return Promise.resolve([]);
+    });
+    const { useDesktopModeStore } = await import('./desktopMode');
+    const mode = useDesktopModeStore(); await mode.init();
+    const player = usePlayerStore();
+    const tracks = player.fetchTracks();
+    const playlists = player.fetchPlaylists();
+    await mode.enterMini();
+    resolveTracks([{ id: 1, title: '迟到歌曲', duration_ms: 1000 }]);
+    resolvePlaylists([{ id: 1, name: '迟到歌单', track_count: 1 }]);
+    await Promise.all([tracks, playlists]);
+    expect(player.tracks).toHaveLength(0);
+    expect(player.playlists).toHaveLength(0);
+  });
+
+  it('M3：后发摘要先返回时，迟到的同版本摘要不能覆盖当前歌曲或进度', async () => {
+    const resolvers: Array<(v: unknown) => void> = [];
+    invokeMock.mockImplementation((cmd: string) => cmd === 'playback_session_summary'
+      ? new Promise(r => resolvers.push(r)) : Promise.resolve([]));
+    const player = usePlayerStore();
+    const older = player.syncSessionFromBackend();
+    const newer = player.syncSessionFromBackend();
+    resolvers[1]!(summary({ stateVersion: 5, positionMs: 99000 })); await newer;
+    resolvers[0]!(summary({ stateVersion: 5, positionMs: 1000 })); await older;
+    expect(player.progressMs).toBe(99000);
+  });
   it("验收4：会话接线幂等，重复调用不新增任何监听", async () => {
     invokeMock.mockImplementation(() => Promise.resolve([]));
     const store = usePlayerStore();

@@ -6,6 +6,7 @@ use crate::error::AppError;
 use crate::ipc_trace;
 use crate::services::desktop_preferences::{self, DesktopPreferences};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use tauri::{AppHandle, Manager, State};
 
 /// 桌面视觉资源策略运行态（DM-03）。
@@ -15,18 +16,18 @@ use tauri::{AppHandle, Manager, State};
 /// `visualAllowed` 下发实际值；Android 初始为 false，且前端不调用策略命令，
 /// 行为与既往完全一致（后端策略只影响桌面）。
 ///
-/// Clone 语义：克隆体与原体各自独立计数（回填线程持有一个克隆，
-/// 与 managed 实例通过策略命令同步暂停标志，计数以 managed 实例为准）。
+/// Clone 共享 Arc 原子状态：回填线程立即看到 managed 实例的暂停/恢复指令。
+#[derive(Clone)]
 pub struct ResourcePolicyState {
-    visual_paused: AtomicBool,
-    artwork_requests: AtomicU64,
+    visual_paused: Arc<AtomicBool>,
+    artwork_requests: Arc<AtomicU64>,
 }
 
 impl ResourcePolicyState {
     pub fn new(visual_paused: bool) -> Self {
         Self {
-            visual_paused: AtomicBool::new(visual_paused),
-            artwork_requests: AtomicU64::new(0),
+            visual_paused: Arc::new(AtomicBool::new(visual_paused)),
+            artwork_requests: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -44,15 +45,6 @@ impl ResourcePolicyState {
 
     pub fn artwork_requests_total(&self) -> u64 {
         self.artwork_requests.load(Ordering::Relaxed)
-    }
-}
-
-impl Clone for ResourcePolicyState {
-    fn clone(&self) -> Self {
-        Self {
-            visual_paused: AtomicBool::new(self.visual_paused()),
-            artwork_requests: AtomicU64::new(0),
-        }
     }
 }
 
@@ -117,4 +109,21 @@ pub fn desktop_update_preferences(
         .app_data_dir()
         .unwrap_or_else(|_| std::path::PathBuf::from("."));
     desktop_preferences::save(&app_dir, &preferences).map_err(AppError::Internal)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn background_policy_clone_observes_pause_resume_and_shared_counters() {
+        let policy = ResourcePolicyState::new(true);
+        let worker = policy.clone();
+        policy.set_visual_paused(false);
+        assert!(!worker.visual_paused());
+        policy.set_visual_paused(true);
+        assert!(worker.visual_paused());
+        worker.count_artwork_request();
+        assert_eq!(policy.artwork_requests_total(), 1);
+    }
 }

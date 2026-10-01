@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import { X, Heart, ListMusic, Plus, Loader2 } from 'lucide-vue-next';
 import { usePlayerStore } from '../../stores/player';
 import { useUiStore } from '../../stores/ui';
@@ -34,6 +34,7 @@ const playlistMenuOpen = ref(false);
 const creatingPlaylist = ref(false);
 const newPlaylistName = ref('');
 const acting = ref(false);
+const controlsBusy = computed(() => acting.value || props.busy);
 
 function togglePlaylistMenu() {
   playlistMenuOpen.value = !playlistMenuOpen.value;
@@ -41,11 +42,12 @@ function togglePlaylistMenu() {
 }
 
 async function addFavorite() {
-  if (acting.value || props.selectedIds.length === 0) return;
+  if (controlsBusy.value || props.selectedIds.length === 0) return;
+  const ids = [...props.selectedIds];
   acting.value = true;
   try {
-    await playerStore.batchSetFavorite(props.selectedIds, true);
-    uiStore.showToast(`已添加 ${props.selectedIds.length} 首歌曲到喜欢的音乐`);
+    await playerStore.batchSetFavorite(ids, true);
+    uiStore.showToast(`已添加 ${ids.length} 首歌曲到喜欢的音乐`);
     emit('exit');
   } catch {
     uiStore.showToast('批量收藏失败，请重试');
@@ -55,10 +57,11 @@ async function addFavorite() {
 }
 
 async function addToPlaylist(playlistId: number, playlistName: string) {
-  if (acting.value || props.selectedIds.length === 0) return;
+  if (controlsBusy.value || props.selectedIds.length === 0) return;
+  const ids = [...props.selectedIds];
   acting.value = true;
   try {
-    const { added, skipped } = await playerStore.batchAddToPlaylist(playlistId, props.selectedIds);
+    const { added, skipped } = await playerStore.batchAddToPlaylist(playlistId, ids);
     uiStore.showToast(
       skipped > 0
         ? `已添加 ${added} 首，跳过 ${skipped} 首重复`
@@ -76,11 +79,12 @@ async function addToPlaylist(playlistId: number, playlistName: string) {
 /** 内联「新建歌单…」：一键创建并把所选歌曲加进去 */
 async function createPlaylistAndAdd() {
   const name = newPlaylistName.value.trim();
-  if (!name || acting.value) return;
+  if (!name || controlsBusy.value || props.selectedIds.length === 0) return;
+  const ids = [...props.selectedIds];
   acting.value = true;
   try {
     const playlistId = await playerStore.createPlaylist(name, '');
-    const { added } = await playerStore.batchAddToPlaylist(playlistId, props.selectedIds);
+    const { added } = await playerStore.batchAddToPlaylist(playlistId, ids);
     uiStore.showToast(`已创建「${name}」并添加 ${added} 首`);
     newPlaylistName.value = '';
     creatingPlaylist.value = false;
@@ -95,18 +99,19 @@ async function createPlaylistAndAdd() {
 </script>
 
 <template>
-  <div class="flex-shrink-0 px-8 py-2.5 border-t border-border-color bg-bg-content flex items-center gap-2 select-none">
+  <div role="toolbar" aria-label="歌曲批量操作" class="flex-shrink-0 px-8 py-2.5 border-t border-border-color bg-bg-content flex flex-wrap items-center gap-2 select-none">
     <!-- 退出多选 -->
     <button
       class="h-7 w-7 flex items-center justify-center rounded-[6px] text-text-muted hover:text-text-primary hover:bg-list-hover transition-colors-smooth"
       title="退出多选"
+      :disabled="controlsBusy"
       @click="emit('exit')"
     >
       <X class="w-4 h-4" />
     </button>
 
     <!-- 已选计数 -->
-    <span class="text-[12px] text-text-secondary">
+    <span role="status" aria-live="polite" class="text-[12px] text-text-secondary whitespace-nowrap">
       已选 <span class="font-mono tabular-nums text-text-primary">{{ selectedIds.length }}</span> 首
     </span>
 
@@ -116,13 +121,14 @@ async function createPlaylistAndAdd() {
     <button
       class="h-7 px-3 rounded-[6px] text-[12px] text-text-secondary hover:bg-list-hover transition-colors-smooth"
       @click="emit('toggle-select-all')"
+      :disabled="controlsBusy"
     >{{ allSelected ? '取消全选' : '全选' }}</button>
 
     <!-- 添加到喜欢的音乐 -->
     <button
       v-if="!hideFavoriteAction"
       class="h-7 px-3 rounded-[6px] text-[12px] flex items-center gap-1.5 text-text-secondary hover:text-text-primary hover:bg-list-hover transition-colors-smooth disabled:opacity-40"
-      :disabled="acting || selectedIds.length === 0"
+      :disabled="controlsBusy || selectedIds.length === 0"
       @click="addFavorite"
     >
       <Loader2 v-if="acting" class="w-3.5 h-3.5 animate-spin" />
@@ -134,6 +140,7 @@ async function createPlaylistAndAdd() {
     <div class="relative">
       <button
         class="h-7 px-3 rounded-[6px] text-[12px] flex items-center gap-1.5 text-text-secondary hover:text-text-primary hover:bg-list-hover transition-colors-smooth"
+        :disabled="controlsBusy || selectedIds.length === 0"
         @click="togglePlaylistMenu"
       >
         <ListMusic class="w-3.5 h-3.5" />
@@ -149,6 +156,7 @@ async function createPlaylistAndAdd() {
         <button
           v-for="pl in playerStore.playlists"
           :key="pl.id"
+          :disabled="controlsBusy || selectedIds.length === 0"
           class="w-full text-left px-3 py-2 text-[13px] text-text-primary hover:bg-list-hover transition-colors-smooth flex items-center justify-between gap-2"
           @click="addToPlaylist(pl.id, pl.name)"
         >
@@ -177,7 +185,7 @@ async function createPlaylistAndAdd() {
               >取消</button>
               <button
                 class="h-[26px] px-2.5 rounded-[6px] text-[11px] bg-text-primary text-bg-canvas hover:opacity-90 transition-opacity flex items-center gap-1 disabled:opacity-40"
-                :disabled="!newPlaylistName.trim() || acting"
+                :disabled="!newPlaylistName.trim() || controlsBusy || selectedIds.length === 0"
                 @click="createPlaylistAndAdd"
               >
                 <Loader2 v-if="acting" class="w-3 h-3 animate-spin" />
@@ -187,6 +195,7 @@ async function createPlaylistAndAdd() {
           </div>
           <button
             v-else
+            :disabled="controlsBusy || selectedIds.length === 0"
             class="w-full text-left px-3 py-2 text-[13px] text-text-secondary hover:bg-list-hover transition-colors-smooth flex items-center gap-1.5"
             @click="creatingPlaylist = true"
           >

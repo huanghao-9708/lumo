@@ -14,6 +14,7 @@ import { APP_NAME, APP_VERSION_LABEL, APP_DESCRIPTION } from '../../config/appIn
 import { useAiStore } from '../../stores/ai';
 import { useUiStore as useUiStore2 } from '../../stores/ui';
 import { useScrollRestore } from '../../composables/useScrollRestore';
+import { useMiniModeBlocker } from '../../composables/useMiniModeBlocker';
 
 const playerStore = usePlayerStore();
 const uiStore = useUiStore();
@@ -57,6 +58,16 @@ const aiTesting = ref(false);
 const aiTestResult = ref<{ ok: boolean; message: string } | null>(null);
 const aiSaveState = ref<'idle' | 'saving' | 'saved'>('idle');
 let aiSaveTimer: ReturnType<typeof setTimeout> | null = null;
+useMiniModeBlocker(() => {
+  if (syncStore.isRestoring || syncStore.isSyncing) return '请等待备份或恢复完成';
+  if (showSourceManager.value || showFolderPicker.value || showRemotePrompt.value) return '请先完成或关闭当前对话框';
+  const s = aiStore.settings;
+  if (s && (aiEnabled.value !== s.enabled || aiBaseUrl.value !== s.base_url || aiModel.value !== s.model || aiApiKey.value !== '')) {
+    return '请先保存 AI 设置';
+  }
+  if (aiTesting.value || isClearingCache.value) return '请等待当前操作完成';
+  return '';
+});
 
 async function loadAiSettings() {
   await aiStore.fetchSettings();

@@ -27,7 +27,7 @@ Lumo 是一款本地优先、零自建服务端、跨平台的高品质桌面音
 | [版本与发布政策 VERSION_POLICY](./resources/doc/release/VERSION_POLICY.md) | 发布通道、SemVer 规则、发布门禁、支持窗口、热修复条件 |
 | [决策日志 DECISION_LOG](./resources/doc/product/DECISION_LOG.md) | 关键取舍及其证据 |
 | [Post-Stable Backlog](./resources/doc/product/POST_STABLE_BACKLOG.md) | 成熟化期间冻结的需求 |
-| [桌面显示模式与迷你播放栏计划](./resources/doc/desktop-modes/README.md) | 正常/极简 × 完整/迷你两维设计、M0–M5 执行任务与性能验收（待实施） |
+| [桌面显示模式与迷你播放栏计划](./resources/doc/desktop-modes/README.md) | 正常/极简 × 完整/迷你已实现，2.1.0-beta.1 测试版启用；完整验收进行中 |
 | [商业成熟化总计划](./resources/doc/commercial-maturity/README.md) | I0–I6 迭代路线与发布门禁 |
 | [移动端迭代文档](./resources/doc/mobile/README.md) | MA0–MA5 执行记录 |
 

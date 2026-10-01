@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted } from 'vue';
+import { ref, nextTick, onMounted, onUnmounted } from 'vue';
 import { usePlayerStore } from './stores/player';
 
 import SidebarLeft from './components/layout/SidebarLeft.vue';
@@ -13,16 +13,18 @@ import AppToast from './components/shared/AppToast.vue';
 import MobileLayout from './components/mobile/MobileLayout.vue';
 import MobileNowPlaying from './components/mobile/MobileNowPlaying.vue';
 import { useUiStore } from './stores/ui';
-import { usePlatform } from './composables/usePlatform';
+import { usePlatform, isAndroid } from './composables/usePlatform';
 import { useAutoScrollbar } from './composables/useAutoScrollbar';
 import { setupWindowPersistence } from './composables/useWindowPersistence';
-import { maybeAutoRunProbe } from './dev/windowProbe';
 import { useDesktopModeStore } from './stores/desktopMode';
+import MiniPlayerBar from './components/layout/MiniPlayerBar.vue';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 
 const playerStore = usePlayerStore();
 const uiStore = useUiStore();
 const desktopModeStore = useDesktopModeStore();
 const { isMobile } = usePlatform();
+const startupReady = ref(false);
 
 // 滚动条 auto-hide：单一全局 scroll 监听，滚动中的容器临时加 .scrolling（第四轮）
 useAutoScrollbar();
@@ -31,11 +33,9 @@ useAutoScrollbar();
 const handleGlobalKeyDown = (e: KeyboardEvent) => {
   // 判断当前焦点是否在输入框
   const activeEl = document.activeElement;
-  if (activeEl && (
-    activeEl.tagName === 'INPUT' || 
-    activeEl.tagName === 'TEXTAREA' || 
-    activeEl.getAttribute('contenteditable') === 'true'
-  )) {
+  if (e.defaultPrevented || (activeEl instanceof HTMLElement && activeEl.closest(
+    'input, textarea, select, button, a, [contenteditable="true"], [role="menu"], [role="slider"], [role="dialog"]',
+  ))) {
     return;
   }
 
@@ -89,27 +89,38 @@ onMounted(async () => {
   window.addEventListener('online', handleOnline);
   window.addEventListener('offline', handleOffline);
 
-  // 桌面窗口尺寸：默认 1200×720、按工作区限幅、记住用户调整（仅 Tauri 桌面生效）
-  if (!isMobile.value) {
-    // 桌面两维偏好（体验模式 × 窗口形态）：启动读取，失败留在默认 normal+full
-    void desktopModeStore.init();
-
-    setupWindowPersistence().then((dispose) => {
-      if (appUnmounted) dispose();
-      else disposeWindowPersistence = dispose;
-    }).catch((e) => console.warn('[window] 窗口状态监听失败', e));
-
-    // [M0 探针] LUMO_WINDOW_PROBE=1 时自动执行窗口 API 探针；DM-07 后移除
-    void maybeAutoRunProbe();
+  try {
+    // Platform identity is independent of viewport width (mini is only 560px wide).
+    if (!isAndroid) {
+      await desktopModeStore.init();
+      try {
+        const dispose = await setupWindowPersistence();
+        if (appUnmounted) dispose();
+        else disposeWindowPersistence = dispose;
+      } catch (e) {
+        console.warn('[window] 窗口初始化失败', e);
+        uiStore.showToast('窗口初始化受限，请返回完整界面后重试', 'error');
+      }
+    }
+    if (!isAndroid && desktopModeStore.windowForm === 'mini') {
+      await playerStore.restoreLightweightSession();
+    } else {
+      const bundle = await playerStore.fetchStartupBundle();
+      await playerStore.restoreSession(bundle);
+      await playerStore.fetchSources();
+    }
+  } catch (e) {
+    console.error('[startup] 启动恢复失败', e);
+    uiStore.showToast('恢复播放会话失败，可返回曲库重新选择音乐', 'error');
+  } finally {
+    if (!appUnmounted) {
+      startupReady.value = true;
+      await nextTick();
+      if (!isAndroid && (window as any).__TAURI_INTERNALS__) {
+        await getCurrentWindow().show().catch(e => console.warn('[window] 显示窗口失败', e));
+      }
+    }
   }
-
-  // 1. 启动数据包（遗留事项 2）：一次 IPC 拿回 counts/playlists/albums/artists/play_queue，
-  //    加上 fetchSources（凭据解析在 scanner 模块）共 2 个启动 IPC（此前 ~7 个）
-  const bundle = await playerStore.fetchStartupBundle();
-  // 2. 恢复播放会话（队列已随启动包就位，这里做播放模式/音量/进度的本地恢复）
-  await playerStore.restoreSession(bundle);
-  // 3. 数据源列表（来源管理与文件夹视图用）
-  await playerStore.fetchSources();
 });
 
 onUnmounted(() => {
@@ -126,7 +137,9 @@ onUnmounted(() => {
   <div class="h-screen w-screen flex flex-col bg-bg-canvas text-text-primary overflow-hidden font-sans">
 
     <!-- ===== 移动端布局（< 768px） ===== -->
-    <template v-if="isMobile">
+    <template v-if="!startupReady"></template>
+    <MiniPlayerBar v-else-if="!isAndroid && desktopModeStore.windowForm === 'mini'" />
+    <template v-else-if="isMobile">
       <MobileLayout />
 
       <!-- 移动端 Now Playing 覆盖层 -->
@@ -181,7 +194,7 @@ onUnmounted(() => {
     </template>
 
     <!-- 全局 Toast（错误/提示，Teleport 到 body，桌面与移动共用） -->
-    <AppToast />
+    <AppToast v-if="isAndroid || desktopModeStore.windowForm !== 'mini'" />
 
   </div>
 </template>

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, watch } from 'vue';
-import { Play, Shuffle, Loader2, Disc3, Heart, CheckSquare } from 'lucide-vue-next';
+import { Play, Shuffle, Loader2, Disc3, Heart } from 'lucide-vue-next';
 import { usePlayerStore, type Track } from '../../stores/player';
 import { useDesktopModeStore } from '../../stores/desktopMode';
 import { useArtworkSrc } from '../../composables/useArtworkSrc';
@@ -27,7 +27,7 @@ const listScrollEl = useScrollRestore(() => `album-detail:${props.albumId ?? 0}`
 /* ============ 批量选择（本视图一份实例；切换专辑自动退出） ============ */
 const batch = useBatchSelect();
 watch(() => props.albumId, () => batch.exit());
-const isAllSelected = computed(() => batch.count > 0 && batch.count === tracks.value.length);
+const isAllSelected = computed(() => tracks.value.length > 0 && tracks.value.every(track => batch.isSelected(track.id)));
 function onToggleSelectAll() {
   if (isAllSelected.value) batch.selectNone();
   else batch.selectAll(tracks.value);
@@ -58,7 +58,7 @@ const isLoadingTracks = computed(() => {
 });
 
 /* ============ 统一列解析：专辑详情隐藏专辑列（本页即上下文） ============ */
-const listContext = computed<TrackListContext>(() => ({ hidden: ['album'] }));
+const listContext = computed<TrackListContext>(() => ({ hidden: ['album'], batchEntry: true }));
 const { resolvedColumns, menuColumns, trailingExtraWidth } = useTrackColumns({
   containerRef: listScrollEl,
   context: listContext,
@@ -165,15 +165,6 @@ function shufflePlay() {
                 <Shuffle class="w-[14px] h-[14px]" />
                 随机播放
               </button>
-              <!-- 批量选择入口 -->
-              <button
-                class="h-[34px] px-4 rounded-full border border-border-solid text-[13px] font-medium flex items-center gap-2 transition-colors-smooth"
-                :class="batch.isActive ? 'bg-list-selected text-text-primary border-transparent' : 'text-text-primary hover:bg-list-hover'"
-                @click="batch.isActive ? batch.exit() : batch.enter()"
-              >
-                <CheckSquare class="w-[14px] h-[14px]" />
-                {{ batch.isActive ? '取消多选' : '多选' }}
-              </button>
             </div>
           </div>
         </div>
@@ -185,7 +176,7 @@ function shufflePlay() {
       <!-- 轨道列表 -->
       <div ref="listScrollEl" class="flex-1 overflow-y-auto px-8">
         <!-- 统一表头（右端含显示列菜单） -->
-        <TrackListHeader :columns="resolvedColumns" :menu-columns="menuColumns" />
+        <TrackListHeader :columns="resolvedColumns" :menu-columns="menuColumns" show-batch-entry :batch-active="batch.isActive" @toggle-batch="batch.isActive ? batch.exit() : batch.enter()" />
 
         <!-- 空列表 -->
         <div v-if="tracks.length === 0" class="flex flex-col items-center justify-center py-16 gap-3 text-text-muted">

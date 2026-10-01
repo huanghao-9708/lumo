@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { ref, watch } from "vue";
+import { ref, watch, reactive, computed } from "vue";
 
 /**
  * 移动端底部 Tab Bar 的 4 个一级导航。
@@ -30,6 +30,12 @@ export interface ToastMessage {
  * 状态持久化到 localStorage。
  */
 export const useUiStore = defineStore("ui", () => {
+  const miniModeBlocks = reactive(new Map<symbol, string>());
+  const miniModeBlockedReason = computed(() => miniModeBlocks.values().next().value ?? '');
+  function setMiniModeBlock(key: symbol, reason: string) {
+    if (reason) miniModeBlocks.set(key, reason);
+    else miniModeBlocks.delete(key);
+  }
   // ===== 夜间模式 =====
   const DARK_KEY = "lumo_dark_mode";
   const FOLLOW_SYSTEM_KEY = "lumo_follow_system";
@@ -164,6 +170,8 @@ export const useUiStore = defineStore("ui", () => {
   }
 
   return {
+    miniModeBlockedReason,
+    setMiniModeBlock,
     isDarkMode,
     toggleDarkMode,
     setDarkMode,

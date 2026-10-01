@@ -28,6 +28,9 @@ param(
   [string]$Scenario = 'S0',
   [string]$Notes = '',
   [string]$LibrarySize = 'unspecified',
+  [ValidateSet('normal', 'minimal', 'unspecified')][string]$ExperienceMode = 'unspecified',
+  [ValidateSet('full', 'mini', 'unspecified')][string]$WindowForm = 'unspecified',
+  [int]$RootPid = 0,
   [ValidateRange(1, 3600)][int]$IntervalSec = 2,
   [int]$DurationSec = 0,       # 0 = 一直采样直到 Ctrl+C（finally 里写汇总）
   [switch]$Once,               # 单次采样后立即退出（工具冒烟用）
@@ -56,6 +59,7 @@ $runningBinaries = @()
 foreach ($rootFile in $RootName) {
   $rootProcesses = Get-Process -Name ([System.IO.Path]::GetFileNameWithoutExtension($rootFile)) -ErrorAction SilentlyContinue
   foreach ($rootProcess in $rootProcesses) {
+    if ($RootPid -gt 0 -and $rootProcess.Id -ne $RootPid) { continue }
     try {
       $binaryPath = $rootProcess.Path
       if ($binaryPath) {
@@ -89,6 +93,9 @@ ram_visible   = $ramMiB MiB
 scale_applied = $scalePct %
 webview2      = $webviewVersion
 library_size  = $LibrarySize
+experience    = $ExperienceMode
+window_form   = $WindowForm
+root_pid      = $RootPid
 interval_sec  = $IntervalSec
 notes         = $Notes
 "@ | Set-Content -Path $EnvPath -Encoding UTF8
@@ -106,14 +113,14 @@ function Get-LumoGroup {
   $all = Get-ProcessTree
   $byId = @{}
   foreach ($p in $all) { $byId[[uint32]$p.ProcessId] = $p }
-  $roots = @($byId.Values | Where-Object { $rootNameSet -contains $_.Name })
+  $roots = @($byId.Values | Where-Object { $rootNameSet -contains $_.Name -and ($RootPid -le 0 -or $_.ProcessId -eq $RootPid) })
   $group = @{}
   $queue = New-Object System.Collections.Queue
   foreach ($r in $roots) { $group[[uint32]$r.ProcessId] = $r; $queue.Enqueue($r.ProcessId) }
   # 交叉归属（方案 §2.1）：WebView2 浏览器进程的父进程可能已退出导致 PPID 断链，
   # 命令行里的 --webview-exe-name=<根进程名> 是第二重证据
   foreach ($p in $byId.Values) {
-    if ($p.Name -ieq 'msedgewebview2.exe' -and $p.CommandLine) {
+    if ($RootPid -le 0 -and $p.Name -ieq 'msedgewebview2.exe' -and $p.CommandLine) {
       foreach ($rn in $rootNameSet) {
         if ($p.CommandLine -match ('--webview-exe-name=' + [regex]::Escape($rn))) {
           if (-not $group.ContainsKey([uint32]$p.ProcessId)) {

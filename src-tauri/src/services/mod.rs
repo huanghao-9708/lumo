@@ -3,6 +3,7 @@ pub mod backoff;
 pub mod cache;
 pub mod cover;
 pub mod desktop_preferences;
+pub mod desktop_window;
 pub mod file_priority;
 pub mod library;
 pub mod metadata;

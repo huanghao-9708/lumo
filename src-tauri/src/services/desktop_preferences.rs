@@ -39,8 +39,8 @@ impl WindowGeometry {
             && self.height > 0
             && self.width <= COORD_LIMIT
             && self.height <= COORD_LIMIT
-            && self.x.abs() <= COORD_LIMIT
-            && self.y.abs() <= COORD_LIMIT
+            && self.x.unsigned_abs() <= COORD_LIMIT as u32
+            && self.y.unsigned_abs() <= COORD_LIMIT as u32
     }
 }
 
@@ -282,6 +282,21 @@ mod tests {
         save(&dir, &prefs).unwrap();
         let (loaded, _) = load(&dir);
         assert_eq!(loaded.full_geometry.unwrap().x, -1920);
+    }
+
+    #[test]
+    fn extreme_negative_coordinates_fall_back_without_overflow() {
+        let dir = temp_dir("mincoord");
+        save_raw(
+            &dir,
+            &serde_json::json!({
+                "schemaVersion": 1, "windowForm": "mini",
+                "miniGeometry": { "x": i32::MIN, "y": i32::MIN, "width": 560, "height": 96 }
+            }),
+        );
+        let (loaded, _) = load(&dir);
+        assert_eq!(loaded.mini_geometry, None);
+        assert_eq!(loaded.window_form, FORM_MINI);
     }
 
     /// 直接写入任意 JSON（绕过 save 的校验，用于构造损坏/未知版本样本）
