@@ -82,12 +82,17 @@ jobs:
         include:
           - platform: macos-latest
             args: '--target universal-apple-darwin'
+            preview_only: true
           - platform: ubuntu-22.04
             args: ''
+            preview_only: true
           - platform: windows-latest
             args: ''
+            preview_only: false
 
     runs-on: ${{ matrix.platform }}
+    # Stable 发布只包含已列入正式平台的 Windows；macOS/Linux 保留技术预览。
+    if: ${{ !matrix.preview_only || (startsWith(github.ref, 'refs/tags/') && contains(github.ref_name, '-')) }}
     # 预发布 tag（v*-beta.N）判定，供通道隔离与 Windows 打包目标两处复用。
     # env 里的布尔会被转成字符串，比较时写 == 'true'。
     env:
@@ -130,7 +135,10 @@ jobs:
         with:
           tagName: v__VERSION__
           releaseName: Lumo v__VERSION__
-          releaseBody: Lumo music player release. Download the installer for your platform below.
+          releaseBody: |-
+            Lumo 2.1.0 正式版本（Windows x64）。此版本未作 Authenticode 签名；Android 真机验收尚未完成；macOS/Linux 为技术预览，此 Stable 版本仅提供 Windows 安装包。
+
+            桌面极简/迷你显示模式仍属 Experimental，Stable 构建默认关闭入口。完整变更、性能测量和未完成验收见 [2.1.0 发布说明](https://github.com/huanghao-9708/lumo/blob/v2.1.0/resources/doc/release/Lumo_2.1.0.md)。
           # 所有平台打包完并核对资产后，再公开 Release。
           releaseDraft: true
           # 通道隔离（VERSION_POLICY §2）：预发布 tag（v*-beta.N）必须在 GitHub 上标成 prerelease，
@@ -143,6 +151,8 @@ jobs:
 
   publish-android:
     needs: publish-tauri
+    # Android 在完成真机冒烟矩阵前不进入 Stable。
+    if: ${{ startsWith(github.ref, 'refs/tags/') && contains(github.ref_name, '-') }}
     permissions:
       contents: write
     runs-on: ubuntu-latest
