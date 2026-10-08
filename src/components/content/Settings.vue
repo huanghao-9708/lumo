@@ -15,13 +15,14 @@ import { useAiStore } from '../../stores/ai';
 import { useUiStore as useUiStore2 } from '../../stores/ui';
 import { useScrollRestore } from '../../composables/useScrollRestore';
 import { useMiniModeBlocker } from '../../composables/useMiniModeBlocker';
+import { downloadLegacyPreferencesExport } from '../../utils/migrationExport';
 
 const playerStore = usePlayerStore();
 const uiStore = useUiStore();
 const syncStore = useSyncStore();
 
 // ===== 左栏分类导航 =====
-type SectionId = 'appearance' | 'privacy' | 'ai' | 'sources' | 'sync' | 'storage' | 'about';
+type SectionId = 'appearance' | 'privacy' | 'ai' | 'sources' | 'sync' | 'migration' | 'storage' | 'about';
 const activeSection = ref<SectionId>('appearance');
 
 /** 滚动位置记忆：切走再回到设置页时还原（每个分区各记一份） */
@@ -33,6 +34,7 @@ const navItems: { id: SectionId; label: string; icon: Component }[] = [
   { id: 'ai', label: 'AI 推荐', icon: Sparkles },
   { id: 'sources', label: '数据源', icon: Database },
   { id: 'sync', label: '备份恢复', icon: RefreshCw },
+  { id: 'migration', label: '数据迁移', icon: Download },
   { id: 'storage', label: '存储', icon: HardDrive },
   { id: 'about', label: '关于', icon: Info },
 ];
@@ -43,6 +45,16 @@ const showSourceManager = ref(false);
 // ===== 缓存 =====
 const cacheSize = ref('—');
 const isClearingCache = ref(false);
+const migrationExportCount = ref<number | null>(null);
+
+function exportLegacyPreferences() {
+  try {
+    migrationExportCount.value = downloadLegacyPreferencesExport();
+  } catch (error) {
+    console.error('[migration] preference export failed:', error);
+    migrationExportCount.value = -1;
+  }
+}
 
 // ===== 数据同步 =====
 const showFolderPicker = ref(false);
@@ -460,6 +472,30 @@ async function clearCache() {
               <!-- 结果/错误提示 -->
               <p v-if="syncStore.lastResult" class="text-[11px] text-status-success mt-1">{{ syncStore.lastResult }}</p>
               <p v-if="syncStore.lastError" class="text-[11px] text-status-error mt-1">{{ syncStore.lastError }}</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- ---- 数据迁移 ---- -->
+        <section v-else-if="activeSection === 'migration'">
+          <h2 class="text-[24px] font-bold text-text-primary tracking-tight leading-none">数据迁移</h2>
+          <p class="text-[12px] text-text-muted mt-1.5 mb-6">导出旧版 Lumo 在此 WebView 中保存的偏好，供 Slint 版导入</p>
+
+          <div class="px-4 py-4 bg-bg-canvas border border-border-color rounded-[8px]">
+            <p class="text-[13px] text-text-primary font-medium">导出本机偏好文件</p>
+            <p class="text-[11px] text-text-muted mt-1.5 leading-relaxed">
+              文件仅包含外观、隐私开关、曲目列、列表筛选和播放位置/模式/音量/速率等白名单字段。不会上传，也不包含数据库、音乐文件、WebDAV 密码或 AI API Key。
+            </p>
+            <div class="flex items-center gap-3 mt-3">
+              <button
+                class="h-[32px] px-4 rounded-full bg-text-primary text-bg-canvas text-[12px] font-medium hover:opacity-90 transition-opacity flex items-center gap-1.5"
+                @click="exportLegacyPreferences"
+              >
+                <Download class="w-3.5 h-3.5" /> 导出 JSON
+              </button>
+              <p v-if="migrationExportCount !== null" class="text-[11px]" :class="migrationExportCount < 0 ? 'text-status-error' : 'text-status-success'">
+                {{ migrationExportCount < 0 ? '导出失败，请查看本地日志' : `已导出 ${migrationExportCount} 个偏好字段` }}
+              </p>
             </div>
           </div>
         </section>
